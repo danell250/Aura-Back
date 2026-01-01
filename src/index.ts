@@ -17,7 +17,14 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://auraradiance.netlify.app',
+    'http://localhost:5000',
+    'http://localhost:5173'
+  ],
+  credentials: true
+}));
 app.use(express.json());
 
 // Serve uploaded files statically
