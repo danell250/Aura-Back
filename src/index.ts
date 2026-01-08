@@ -20,6 +20,7 @@ if (!fs.existsSync(uploadsDir)) {
 app.use(cors({
   origin: [
     'https://auraradiance.netlify.app',
+    'https://auraraidiate.netlify.app/',
     'http://localhost:5000',
     'http://localhost:5173'
   ],
