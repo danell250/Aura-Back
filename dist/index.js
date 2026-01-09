@@ -11,6 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
+var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
@@ -29,13 +30,14 @@ const uploadsDir = path_1.default.join(__dirname, '../uploads');
 if (!fs_1.default.existsSync(uploadsDir)) {
     fs_1.default.mkdirSync(uploadsDir, { recursive: true });
 }
+const allowedOrigins = ((_a = process.env.ALLOWED_ORIGINS) === null || _a === void 0 ? void 0 : _a.split(',')) || [
+    'https://auraradiance.netlify.app',
+    'https://auraraidiate.netlify.app/',
+    'http://localhost:5000',
+    'http://localhost:5173'
+];
 app.use((0, cors_1.default)({
-    origin: [
-        'https://auraradiance.netlify.app',
-        'https://auraraidiate.netlify.app/',
-        'http://localhost:5000',
-        'http://localhost:5173'
-    ],
+    origin: allowedOrigins,
     credentials: true
 }));
 app.use(express_1.default.json());
@@ -64,7 +66,11 @@ function startServer() {
         }
         catch (error) {
             console.error('❌ Failed to start server:', error);
-            process.exit(1);
+            // Don't exit on DB connection failure, continue with server running
+            app.listen(PORT, () => {
+                console.log(`🚀 Server is running on port ${PORT}`);
+                console.log(`⚠️  Warning: Database connection failed. Server running without database.`);
+            });
         }
     });
 }
