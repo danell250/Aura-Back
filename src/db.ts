@@ -3,7 +3,15 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const client = new MongoClient(process.env.MONGO_URI || "mongodb://localhost:27017/aura", {
+const mongoUri = process.env.MONGO_URI;
+
+// Validate that MONGO_URI is set and not the placeholder
+if (!mongoUri || mongoUri.includes('your_') || mongoUri.includes('placeholder')) {
+  console.warn("⚠️  Warning: MONGO_URI is not properly configured. Using fallback local connection.");
+  console.warn("🔧 Please set MONGO_URI in your environment variables with your actual MongoDB Atlas connection string.");
+}
+
+const client = new MongoClient(mongoUri || "mongodb://localhost:27017/aura", {
   maxPoolSize: 10,
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
