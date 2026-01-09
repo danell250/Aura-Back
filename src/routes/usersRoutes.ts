@@ -1,29 +1,31 @@
 import { Router } from 'express';
-import { usersController } from '../controllers/usersController';
 
 const router = Router();
 
 console.log('Users routes loaded successfully');
 
-// GET /api/users - Get all users
-router.get('/', usersController.getAllUsers);
+// Simple test route
+router.get('/test', (req, res) => {
+  res.json({ message: 'Users route test working!' });
+});
 
-// GET /api/users/:id - Get user by ID
-router.get('/:id', usersController.getUserById);
-
-// POST /api/users - Create new user
-router.post('/', usersController.createUser);
-
-// PUT /api/users/:id - Update user
-router.put('/:id', usersController.updateUser);
-
-// DELETE /api/users/:id - Delete user
-router.delete('/:id', usersController.deleteUser);
-
-// POST /api/users/:id/connect - Send connection request
-router.post('/:id/connect', usersController.sendConnectionRequest);
-
-// POST /api/users/:id/block - Block user
-router.post('/:id/block', usersController.blockUser);
+// GET /api/users - Get all users (simple version)
+router.get('/', (req, res) => {
+  res.json({
+    success: true,
+    data: [
+      {
+        id: '1',
+        firstName: 'James',
+        lastName: 'Mitchell',
+        name: 'James Mitchell',
+        handle: '@jamesmitchell',
+        email: 'james@leadership.io',
+        trustScore: 98,
+        auraCredits: 0
+      }
+    ]
+  });
+});
 
 export default router;

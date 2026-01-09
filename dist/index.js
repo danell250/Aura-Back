@@ -48,16 +48,22 @@ app.use(express_1.default.json());
 // Serve uploaded files statically
 app.use('/uploads', express_1.default.static(uploadsDir));
 // Routes
+console.log('Registering routes...');
+app.use('/api/users', usersRoutes_1.default);
 app.use('/api/gemini', geminiRoutes_1.default);
 app.use('/api/upload', uploadRoutes_1.default);
 app.use('/api/posts', postsRoutes_1.default);
-app.use('/api/users', usersRoutes_1.default);
 app.use('/api/ads', adsRoutes_1.default);
 app.use('/api/comments', commentsRoutes_1.default);
 app.use('/api/notifications', notificationsRoutes_1.default);
+console.log('Routes registered successfully');
 // Test route
 app.get('/api/test', (req, res) => {
     res.json({ message: 'API routes are working!', timestamp: new Date() });
+});
+// Direct users test route
+app.get('/api/users-direct', (req, res) => {
+    res.json({ message: 'Direct users route working!' });
 });
 app.get('/', (req, res) => {
     res.send('Aura Social Backend is running with MongoDB connection');

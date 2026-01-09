@@ -41,10 +41,10 @@ app.use('/uploads', express.static(uploadsDir));
 
 // Routes
 console.log('Registering routes...');
+app.use('/api/users', usersRoutes);
 app.use('/api/gemini', geminiRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/posts', postsRoutes);
-app.use('/api/users', usersRoutes);
 app.use('/api/ads', adsRoutes);
 app.use('/api/comments', commentsRoutes);
 app.use('/api/notifications', notificationsRoutes);
@@ -53,6 +53,11 @@ console.log('Routes registered successfully');
 // Test route
 app.get('/api/test', (req, res) => {
   res.json({ message: 'API routes are working!', timestamp: new Date() });
+});
+
+// Direct users test route
+app.get('/api/users-direct', (req, res) => {
+  res.json({ message: 'Direct users route working!' });
 });
 
 app.get('/', (req, res) => {
