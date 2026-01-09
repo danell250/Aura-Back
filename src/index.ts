@@ -4,6 +4,10 @@ import dotenv from 'dotenv';
 import geminiRoutes from './routes/geminiRoutes';
 import uploadRoutes from './routes/uploadRoutes';
 import postsRoutes from './routes/postsRoutes';
+import usersRoutes from './routes/usersRoutes';
+import adsRoutes from './routes/adsRoutes';
+import commentsRoutes from './routes/commentsRoutes';
+import notificationsRoutes from './routes/notificationsRoutes';
 import path from 'path';
 import fs from 'fs';
 import { connectDB } from './db';
@@ -36,9 +40,15 @@ app.use(express.json());
 app.use('/uploads', express.static(uploadsDir));
 
 // Routes
+console.log('Registering routes...');
 app.use('/api/gemini', geminiRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/posts', postsRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/ads', adsRoutes);
+app.use('/api/comments', commentsRoutes);
+app.use('/api/notifications', notificationsRoutes);
+console.log('Routes registered successfully');
 
 // Test route
 app.get('/api/test', (req, res) => {

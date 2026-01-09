@@ -1,22 +1,27 @@
 import { Router } from 'express';
+import { postsController } from '../controllers/postsController';
 
 const router = Router();
 
-// Placeholder for posts routes
-// These will be implemented when database integration is fully ready
+// GET /api/posts - Get all posts
+router.get('/', postsController.getAllPosts);
 
-router.get('/', (req, res) => {
-  // For now, return empty array or mock data since DB might not be connected
-  res.json({ 
-    message: 'Posts endpoint - using mock data since database may not be connected',
-    posts: [] 
-  });
-});
+// GET /api/posts/:id - Get post by ID
+router.get('/:id', postsController.getPostById);
 
-router.post('/', (req, res) => {
-  res.status(400).json({ 
-    error: 'Database not available - posts cannot be created in this deployment' 
-  });
-});
+// POST /api/posts - Create new post
+router.post('/', postsController.createPost);
+
+// PUT /api/posts/:id - Update post
+router.put('/:id', postsController.updatePost);
+
+// DELETE /api/posts/:id - Delete post
+router.delete('/:id', postsController.deletePost);
+
+// POST /api/posts/:id/react - Add reaction to post
+router.post('/:id/react', postsController.reactToPost);
+
+// POST /api/posts/:id/boost - Boost post
+router.post('/:id/boost', postsController.boostPost);
 
 export default router;

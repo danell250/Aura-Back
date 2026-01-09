@@ -19,6 +19,10 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const geminiRoutes_1 = __importDefault(require("./routes/geminiRoutes"));
 const uploadRoutes_1 = __importDefault(require("./routes/uploadRoutes"));
 const postsRoutes_1 = __importDefault(require("./routes/postsRoutes"));
+const usersRoutes_1 = __importDefault(require("./routes/usersRoutes"));
+const adsRoutes_1 = __importDefault(require("./routes/adsRoutes"));
+const commentsRoutes_1 = __importDefault(require("./routes/commentsRoutes"));
+const notificationsRoutes_1 = __importDefault(require("./routes/notificationsRoutes"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const db_1 = require("./db");
@@ -47,6 +51,10 @@ app.use('/uploads', express_1.default.static(uploadsDir));
 app.use('/api/gemini', geminiRoutes_1.default);
 app.use('/api/upload', uploadRoutes_1.default);
 app.use('/api/posts', postsRoutes_1.default);
+app.use('/api/users', usersRoutes_1.default);
+app.use('/api/ads', adsRoutes_1.default);
+app.use('/api/comments', commentsRoutes_1.default);
+app.use('/api/notifications', notificationsRoutes_1.default);
 // Test route
 app.get('/api/test', (req, res) => {
     res.json({ message: 'API routes are working!', timestamp: new Date() });
