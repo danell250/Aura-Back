@@ -19,13 +19,15 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
+  'https://auraradiance.netlify.app',
+  'https://auraraidiate.netlify.app/',
+  'http://localhost:5000',
+  'http://localhost:5173'
+];
+
 app.use(cors({
-  origin: [
-    'https://auraradiance.netlify.app',
-    'https://auraraidiate.netlify.app/',
-    'http://localhost:5000',
-    'http://localhost:5173'
-  ],
+  origin: allowedOrigins,
   credentials: true
 }));
 app.use(express.json());
@@ -57,7 +59,11 @@ async function startServer() {
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error);
-    process.exit(1);
+    // Don't exit on DB connection failure, continue with server running
+    app.listen(PORT, () => {
+      console.log(`🚀 Server is running on port ${PORT}`);
+      console.log(`⚠️  Warning: Database connection failed. Server running without database.`);
+    });
   }
 }
 
