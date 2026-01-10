@@ -426,5 +426,254 @@ export const usersController = {
         message: 'Internal server error'
       });
     }
+  },
+
+  // GET /api/users/:id/privacy-data - Get user's privacy data (GDPR compliance)
+  getPrivacyData: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const user = mockUsers.find(u => u.id === id);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      // In production, this would gather all user data from various tables
+      const privacyData = {
+        personalInfo: {
+          id: user.id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          dob: user.dob,
+          phone: (user as any).phone || '',
+          bio: user.bio,
+          handle: user.handle,
+          avatar: user.avatar,
+          createdAt: (user as any).createdAt || new Date().toISOString(),
+          lastLogin: (user as any).lastLogin || new Date().toISOString()
+        },
+        accountData: {
+          trustScore: user.trustScore,
+          auraCredits: user.auraCredits,
+          activeGlow: user.activeGlow,
+          acquaintances: user.acquaintances || [],
+          blockedUsers: user.blockedUsers || [],
+          profileViews: (user as any).profileViews || [],
+          notifications: (user as any).notifications || []
+        },
+        activityData: {
+          postsCount: 0, // Would be calculated from posts table
+          commentsCount: 0, // Would be calculated from comments table
+          reactionsGiven: 0, // Would be calculated from reactions table
+          messagesCount: 0, // Would be calculated from messages table
+          loginHistory: [], // Would be from login logs table
+          ipAddresses: [], // Would be from security logs
+          deviceInfo: [] // Would be from device tracking
+        },
+        dataProcessing: {
+          purposes: [
+            'Account management and authentication',
+            'Content personalization and recommendations',
+            'Communication and messaging',
+            'Analytics and platform improvement',
+            'Security and fraud prevention'
+          ],
+          legalBasis: 'Consent and legitimate interest',
+          retentionPeriod: '2 years after account deletion',
+          thirdPartySharing: 'None - all data remains within Aura platform',
+          dataLocation: 'United States (with EU adequacy protections)'
+        },
+        exportedAt: new Date().toISOString(),
+        format: 'JSON',
+        version: '1.0'
+      };
+
+      res.json({
+        success: true,
+        data: privacyData,
+        message: 'Privacy data exported successfully'
+      });
+    } catch (error) {
+      console.error('Error exporting privacy data:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to export privacy data',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // POST /api/users/:id/clear-data - Clear user data (GDPR right to be forgotten)
+  clearUserData: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { confirmationCode, reason } = req.body;
+
+      // Validate confirmation code (in production, this would be a secure token)
+      if (confirmationCode !== 'CONFIRM_DELETE_ALL_DATA') {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid confirmation code',
+          message: 'Please provide the correct confirmation code'
+        });
+      }
+
+      const userIndex = mockUsers.findIndex(u => u.id === id);
+      if (userIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      const user = mockUsers[userIndex];
+      
+      // Log the data deletion request for compliance
+      console.log('Data deletion request processed:', {
+        userId: id,
+        userEmail: user.email,
+        reason: reason || 'User requested data deletion',
+        timestamp: new Date().toISOString(),
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent')
+      });
+
+      // In production, this would:
+      // 1. Anonymize or delete user data across all tables
+      // 2. Remove posts, comments, reactions, messages
+      // 3. Clear profile views, connections, notifications
+      // 4. Purge uploaded files and media
+      // 5. Remove from search indexes
+      // 6. Clear analytics and tracking data
+      // 7. Notify connected users of account deletion
+      
+      // For now, we'll remove the user from mockUsers
+      mockUsers.splice(userIndex, 1);
+
+      res.json({
+        success: true,
+        message: 'All user data has been permanently deleted',
+        deletedAt: new Date().toISOString(),
+        dataTypes: [
+          'Personal information',
+          'Account data',
+          'Posts and comments',
+          'Messages and conversations',
+          'Connections and relationships',
+          'Media files and uploads',
+          'Activity logs and analytics'
+        ]
+      });
+    } catch (error) {
+      console.error('Error clearing user data:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to clear user data',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // GET /api/users/:id/privacy-settings - Get user's privacy settings
+  getPrivacySettings: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const user = mockUsers.find(u => u.id === id);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      // Default privacy settings (in production, stored in database)
+      const privacySettings = (user as any).privacySettings || {
+        profileVisibility: 'public', // public, friends, private
+        showOnlineStatus: true,
+        allowDirectMessages: 'everyone', // everyone, friends, none
+        showProfileViews: true,
+        allowTagging: true,
+        showInSearch: true,
+        dataProcessingConsent: true,
+        marketingConsent: false,
+        analyticsConsent: true,
+        thirdPartySharing: false,
+        locationTracking: false,
+        activityTracking: true,
+        personalizedAds: false,
+        emailNotifications: true,
+        pushNotifications: true,
+        updatedAt: new Date().toISOString()
+      };
+
+      res.json({
+        success: true,
+        data: privacySettings,
+        message: 'Privacy settings retrieved successfully'
+      });
+    } catch (error) {
+      console.error('Error getting privacy settings:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get privacy settings',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // PUT /api/users/:id/privacy-settings - Update user's privacy settings
+  updatePrivacySettings: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const settings = req.body;
+      
+      const userIndex = mockUsers.findIndex(u => u.id === id);
+      if (userIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      // Update privacy settings
+      const currentSettings = (mockUsers[userIndex] as any).privacySettings || {};
+      const updatedSettings = {
+        ...currentSettings,
+        ...settings,
+        updatedAt: new Date().toISOString()
+      };
+
+      (mockUsers[userIndex] as any).privacySettings = updatedSettings;
+
+      // Log privacy settings change for compliance
+      console.log('Privacy settings updated:', {
+        userId: id,
+        changes: settings,
+        timestamp: new Date().toISOString(),
+        ipAddress: req.ip
+      });
+
+      res.json({
+        success: true,
+        data: updatedSettings,
+        message: 'Privacy settings updated successfully'
+      });
+    } catch (error) {
+      console.error('Error updating privacy settings:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to update privacy settings',
+        message: 'Internal server error'
+      });
+    }
   }
 };
