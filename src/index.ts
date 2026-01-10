@@ -10,7 +10,7 @@ import commentsRoutes from './routes/commentsRoutes';
 import notificationsRoutes from './routes/notificationsRoutes';
 import path from 'path';
 import fs from 'fs';
-import { connectDB } from './db';
+import { connectDB, checkDBHealth, isDBConnected } from './db';
 
 dotenv.config();
 
@@ -50,36 +50,140 @@ app.use('/api/comments', commentsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 console.log('Routes registered successfully');
 
+// Health check endpoints
+app.get('/health', async (_req, res) => {
+  const dbHealthy = await checkDBHealth();
+  const status = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    database: {
+      connected: isDBConnected(),
+      healthy: dbHealthy,
+      status: dbHealthy ? 'connected' : 'disconnected'
+    },
+    memory: process.memoryUsage(),
+    version: process.version
+  };
+  
+  res.status(dbHealthy ? 200 : 503).json(status);
+});
+
+app.get('/health/db', async (_req, res) => {
+  const dbHealthy = await checkDBHealth();
+  res.status(dbHealthy ? 200 : 503).json({
+    database: {
+      connected: isDBConnected(),
+      healthy: dbHealthy,
+      status: dbHealthy ? 'connected' : 'disconnected',
+      timestamp: new Date().toISOString()
+    }
+  });
+});
+
 // Test route
-app.get('/api/test', (req, res) => {
-  res.json({ message: 'API routes are working!', timestamp: new Date() });
+app.get('/api/test', (_req, res) => {
+  res.json({ 
+    message: 'API routes are working!', 
+    timestamp: new Date(),
+    database: isDBConnected() ? 'connected' : 'disconnected'
+  });
 });
 
 // Direct users test route
-app.get('/api/users-direct', (req, res) => {
-  res.json({ message: 'Direct users route working!' });
+app.get('/api/users-direct', (_req, res) => {
+  res.json({ 
+    message: 'Direct users route working!',
+    database: isDBConnected() ? 'connected' : 'disconnected'
+  });
 });
 
-app.get('/', (req, res) => {
-  res.send('Aura Social Backend is running with MongoDB connection');
+app.get('/', (_req, res) => {
+  res.json({
+    message: 'Aura Social Backend is running',
+    status: 'ok',
+    database: isDBConnected() ? 'connected' : 'disconnected',
+    timestamp: new Date().toISOString()
+  });
 });
 
-// Start server and connect to database
+// Enhanced error handling middleware
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('❌ Unhandled error:', err);
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+  });
+});
+
+// 404 handler
+app.use((_req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'Not found',
+    message: `Route ${_req.method} ${_req.originalUrl} not found`
+  });
+});
+
+// Enhanced server startup with database connection management
 async function startServer() {
   try {
-    await connectDB();
-    app.listen(PORT, () => {
+    console.log('🚀 Starting Aura Social Backend...');
+    console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔧 Port: ${PORT}`);
+    
+    // Start the HTTP server first
+    const server = app.listen(PORT, () => {
       console.log(`🚀 Server is running on port ${PORT}`);
-      console.log(`📊 MongoDB connected to database: aura`);
+      console.log(`🌐 Health check available at: http://localhost:${PORT}/health`);
     });
+    
+    // Then attempt database connection (non-blocking)
+    console.log('🔄 Attempting database connection...');
+    try {
+      await connectDB();
+      console.log('✅ Database connection established');
+    } catch (error) {
+      console.warn('⚠️  Database connection failed, but server is still running');
+      console.warn('⚠️  The application will work with mock data until database is available');
+    }
+    
+    // Set up periodic health checks
+    setInterval(async () => {
+      const isHealthy = await checkDBHealth();
+      if (!isHealthy && isDBConnected()) {
+        console.warn('⚠️  Database health check failed - connection may be unstable');
+      }
+    }, 60000); // Check every minute
+    
+    // Graceful shutdown handling
+    const gracefulShutdown = (signal: string) => {
+      console.log(`\n🔄 Received ${signal}. Shutting down gracefully...`);
+      server.close(async () => {
+        console.log('✅ HTTP server closed');
+        process.exit(0);
+      });
+    };
+    
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+    
   } catch (error) {
     console.error('❌ Failed to start server:', error);
-    // Don't exit on DB connection failure, continue with server running
-    app.listen(PORT, () => {
-      console.log(`🚀 Server is running on port ${PORT}`);
-      console.log(`⚠️  Warning: Database connection failed. Server running without database.`);
-    });
+    process.exit(1);
   }
 }
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  // Don't exit immediately, log and continue
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit immediately, log and continue
+});
 
 startServer();

@@ -12,97 +12,251 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.isConnected = void 0;
+exports.isDBConnected = isDBConnected;
 exports.connectDB = connectDB;
 exports.getDB = getDB;
+exports.checkDBHealth = checkDBHealth;
 exports.closeDB = closeDB;
 const mongodb_1 = require("mongodb");
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 const mongoUri = process.env.MONGO_URI;
-// Validate that MONGO_URI is set and not the placeholder
-if (!mongoUri || mongoUri.includes('your_') || mongoUri.includes('placeholder')) {
-    console.warn("⚠️  Warning: MONGO_URI is not properly configured. Using fallback local connection.");
-    console.warn("🔧 Please set MONGO_URI in your environment variables with your actual MongoDB Atlas connection string.");
-}
-const client = new mongodb_1.MongoClient(mongoUri || "mongodb://localhost:27017/aura", {
+// Enhanced MongoDB connection configuration
+const connectionOptions = {
     maxPoolSize: 10,
-    serverSelectionTimeoutMS: 5000,
+    serverSelectionTimeoutMS: 10000, // Increased timeout
     socketTimeoutMS: 45000,
-    // Use TLS options that work with MongoDB Atlas
-    tls: true,
-    tlsAllowInvalidCertificates: false,
-    tlsAllowInvalidHostnames: false,
-});
+    connectTimeoutMS: 10000,
+    heartbeatFrequencyMS: 10000,
+    maxIdleTimeMS: 30000,
+    // Retry configuration
+    retryWrites: true,
+    retryReads: true,
+    // Connection pool settings
+    minPoolSize: 2,
+    maxConnecting: 2,
+};
+// Add TLS options only if connecting to Atlas (contains mongodb+srv or mongodb.net)
+if (mongoUri && (mongoUri.includes('mongodb+srv') || mongoUri.includes('mongodb.net'))) {
+    Object.assign(connectionOptions, {
+        tls: true,
+        tlsAllowInvalidCertificates: false,
+        tlsAllowInvalidHostnames: false,
+    });
+}
+const client = new mongodb_1.MongoClient(mongoUri || "mongodb://localhost:27017/aura", connectionOptions);
 let db;
 let isConnected = false;
+exports.isConnected = isConnected;
+let connectionAttempts = 0;
+const maxRetries = 5;
+let reconnectInterval = null;
+// Connection state management
+function isDBConnected() {
+    return isConnected;
+}
+// Enhanced connection function with retry logic
 function connectDB() {
     return __awaiter(this, void 0, void 0, function* () {
+        connectionAttempts++;
         try {
+            console.log(`🔄 Attempting to connect to MongoDB (attempt ${connectionAttempts}/${maxRetries})...`);
             yield client.connect();
-            db = client.db("aura"); // your database name
-            isConnected = true;
+            // Test the connection
+            yield client.db("admin").command({ ping: 1 });
+            db = client.db("aura");
+            exports.isConnected = isConnected = true;
+            connectionAttempts = 0; // Reset on successful connection
             console.log("✅ Connected to MongoDB successfully");
+            console.log(`📊 MongoDB connected to database: aura`);
+            // Set up connection monitoring
+            setupConnectionMonitoring();
             return db;
         }
         catch (err) {
-            console.error("❌ MongoDB connection error:", err);
-            // If it's an SSL/TLS error, provide helpful error message
-            if (err instanceof Error && (err.message.includes('SSL') || err.message.includes('TLS') || err.message.includes('alert internal error'))) {
-                console.error("🔒 SSL/TLS Connection Error:");
-                console.error("   This usually indicates one of the following issues:");
-                console.error("   1. MongoDB Atlas cluster is not running or accessible");
-                console.error("   2. Network connectivity issues");
-                console.error("   3. Outdated MongoDB driver or Node.js version");
-                console.error("   4. Firewall or proxy blocking the connection");
-                console.error("");
-                console.error("   Recommended solutions:");
-                console.error("   - Check MongoDB Atlas cluster status");
-                console.error("   - Update MONGO_URI in environment variables");
-                console.error("   - Ensure your IP is whitelisted in MongoDB Atlas");
-                console.error("   - Try updating MongoDB driver: npm update mongodb");
-                // For deployment, we'll continue with a warning but not exit
-                console.warn("⚠️  Warning: Running without database connection. Some features may not work.");
-                isConnected = false;
+            console.error(`❌ MongoDB connection error (attempt ${connectionAttempts}):`, err);
+            if (err instanceof Error) {
+                // Handle specific error types
+                if (err.message.includes('SSL') || err.message.includes('TLS') || err.message.includes('ECONNRESET')) {
+                    console.error("🔒 SSL/TLS Connection Error:");
+                    console.error("   This usually indicates one of the following issues:");
+                    console.error("   1. MongoDB Atlas cluster is not running or accessible");
+                    console.error("   2. Network connectivity issues");
+                    console.error("   3. Incorrect connection string or credentials");
+                    console.error("   4. Firewall or proxy blocking the connection");
+                    console.error("");
+                    console.error("   Recommended solutions:");
+                    console.error("   - Check MongoDB Atlas cluster status");
+                    console.error("   - Verify MONGO_URI in environment variables");
+                    console.error("   - Ensure your IP is whitelisted in MongoDB Atlas");
+                    console.error("   - Check network connectivity");
+                }
+                else if (err.message.includes('authentication')) {
+                    console.error("🔐 Authentication Error:");
+                    console.error("   - Check your MongoDB username and password");
+                    console.error("   - Verify database user permissions");
+                    console.error("   - Ensure the user has access to the 'aura' database");
+                }
+                else if (err.message.includes('ENOTFOUND') || err.message.includes('ECONNREFUSED')) {
+                    console.error("🌐 Network Error:");
+                    console.error("   - Check your internet connection");
+                    console.error("   - Verify the MongoDB server address");
+                    console.error("   - Check if MongoDB service is running (for local connections)");
+                }
+            }
+            exports.isConnected = isConnected = false;
+            // Retry logic
+            if (connectionAttempts < maxRetries) {
+                const retryDelay = Math.min(1000 * Math.pow(2, connectionAttempts - 1), 30000); // Exponential backoff, max 30s
+                console.log(`🔄 Retrying connection in ${retryDelay / 1000} seconds...`);
+                yield new Promise(resolve => setTimeout(resolve, retryDelay));
+                return connectDB();
+            }
+            else {
+                console.warn("⚠️  Warning: Max connection attempts reached. Running without database connection.");
+                console.warn("⚠️  Some features may not work properly. The server will continue with mock data.");
+                // Start periodic reconnection attempts
+                startPeriodicReconnection();
                 return null;
             }
-            // For other errors, still exit
-            process.exit(1);
         }
     });
 }
-function getDB() {
-    if (!isConnected) {
-        console.warn("⚠️  Warning: Database not connected. This may cause some features to not work properly.");
-        // Return a mock database object for basic functionality
-        return {
-            collection: (name) => {
-                console.warn(`⚠️  Warning: Using mock collection '${name}'. Data will not be persisted.`);
-                return {
-                    find: () => ({ toArray: () => [] }),
-                    findOne: () => ({}),
-                    insertOne: () => ({ acknowledged: true, insertedId: 'mock-id' }),
-                    updateOne: () => ({ matchedCount: 0, modifiedCount: 0 }),
-                    deleteOne: () => ({ deletedCount: 0 }),
-                };
+// Set up connection monitoring
+function setupConnectionMonitoring() {
+    // Monitor connection events
+    client.on('serverHeartbeatFailed', (event) => {
+        console.warn('⚠️  MongoDB heartbeat failed:', event);
+    });
+    client.on('serverClosed', (event) => {
+        console.warn('⚠️  MongoDB server connection closed:', event);
+        exports.isConnected = isConnected = false;
+        startPeriodicReconnection();
+    });
+    client.on('topologyClosed', () => {
+        console.warn('⚠️  MongoDB topology closed');
+        exports.isConnected = isConnected = false;
+        startPeriodicReconnection();
+    });
+    client.on('serverOpening', () => {
+        console.log('✅ MongoDB server connection opening');
+    });
+    client.on('topologyOpening', () => {
+        console.log('✅ MongoDB topology opening');
+    });
+}
+// Start periodic reconnection attempts
+function startPeriodicReconnection() {
+    if (reconnectInterval) {
+        clearInterval(reconnectInterval);
+    }
+    reconnectInterval = setInterval(() => __awaiter(this, void 0, void 0, function* () {
+        if (!isConnected) {
+            console.log('🔄 Attempting to reconnect to MongoDB...');
+            connectionAttempts = 0; // Reset attempts for reconnection
+            try {
+                yield connectDB();
+                if (isConnected && reconnectInterval) {
+                    clearInterval(reconnectInterval);
+                    reconnectInterval = null;
+                    console.log('✅ Successfully reconnected to MongoDB');
+                }
             }
-        };
+            catch (error) {
+                console.log('❌ Reconnection attempt failed, will retry...');
+            }
+        }
+    }), 30000); // Try to reconnect every 30 seconds
+}
+// Enhanced getDB function with connection checking
+function getDB() {
+    if (!isConnected || !db) {
+        console.warn("⚠️  Warning: Database not connected. Using mock database for this operation.");
+        // Return a comprehensive mock database object
+        return createMockDB();
     }
     return db;
 }
+// Create a mock database for when connection is not available
+function createMockDB() {
+    const mockCollection = {
+        find: () => ({
+            toArray: () => __awaiter(this, void 0, void 0, function* () { return []; }),
+            limit: () => mockCollection.find(),
+            skip: () => mockCollection.find(),
+            sort: () => mockCollection.find(),
+        }),
+        findOne: () => __awaiter(this, void 0, void 0, function* () { return null; }),
+        insertOne: (doc) => __awaiter(this, void 0, void 0, function* () {
+            return ({
+                acknowledged: true,
+                insertedId: `mock-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+            });
+        }),
+        insertMany: (docs) => __awaiter(this, void 0, void 0, function* () {
+            return ({
+                acknowledged: true,
+                insertedIds: docs.map((_, i) => `mock-${Date.now()}-${i}`)
+            });
+        }),
+        updateOne: () => __awaiter(this, void 0, void 0, function* () { return ({ matchedCount: 0, modifiedCount: 0 }); }),
+        updateMany: () => __awaiter(this, void 0, void 0, function* () { return ({ matchedCount: 0, modifiedCount: 0 }); }),
+        deleteOne: () => __awaiter(this, void 0, void 0, function* () { return ({ deletedCount: 0 }); }),
+        deleteMany: () => __awaiter(this, void 0, void 0, function* () { return ({ deletedCount: 0 }); }),
+        countDocuments: () => __awaiter(this, void 0, void 0, function* () { return 0; }),
+        createIndex: () => __awaiter(this, void 0, void 0, function* () { return 'mock-index'; }),
+        dropIndex: () => __awaiter(this, void 0, void 0, function* () { return true; }),
+    };
+    return {
+        collection: (name) => {
+            console.warn(`⚠️  Using mock collection '${name}'. Data operations will not be persisted.`);
+            return mockCollection;
+        },
+        admin: () => ({
+            command: () => __awaiter(this, void 0, void 0, function* () { return ({ ok: 1 }); })
+        }),
+        command: () => __awaiter(this, void 0, void 0, function* () { return ({ ok: 1 }); }),
+    };
+}
+// Health check function
+function checkDBHealth() {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            if (!isConnected || !db) {
+                return false;
+            }
+            yield client.db("admin").command({ ping: 1 });
+            return true;
+        }
+        catch (error) {
+            console.warn('⚠️  Database health check failed:', error);
+            exports.isConnected = isConnected = false;
+            startPeriodicReconnection();
+            return false;
+        }
+    });
+}
+// Graceful shutdown
 function closeDB() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
+            if (reconnectInterval) {
+                clearInterval(reconnectInterval);
+                reconnectInterval = null;
+            }
             if (client) {
                 yield client.close();
+                exports.isConnected = isConnected = false;
             }
-            console.log("✅ MongoDB connection closed");
+            console.log("✅ MongoDB connection closed gracefully");
         }
         catch (err) {
             console.error("❌ Error closing MongoDB connection:", err);
         }
     });
 }
-// Graceful shutdown
+// Graceful shutdown handlers
 process.on('SIGINT', () => __awaiter(void 0, void 0, void 0, function* () {
     console.log('\n🔄 Shutting down gracefully...');
     yield closeDB();
@@ -113,3 +267,8 @@ process.on('SIGTERM', () => __awaiter(void 0, void 0, void 0, function* () {
     yield closeDB();
     process.exit(0);
 }));
+// Unhandled rejection handler
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    // Don't exit the process, just log the error
+});
