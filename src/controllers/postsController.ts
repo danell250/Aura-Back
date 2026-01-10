@@ -317,8 +317,8 @@ export const postsController = {
         message: 'Internal server error'
       });
     }
-  }
-};
+  },
+
   // GET /api/posts/hashtags/trending - Get trending hashtags
   getTrendingHashtags: async (req: Request, res: Response) => {
     try {

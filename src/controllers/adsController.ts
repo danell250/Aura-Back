@@ -155,6 +155,12 @@ export const adsController = {
         });
       }
 
+      // Extract hashtags from headline and description
+      const hashtags = [
+        ...getHashtagsFromText(headline),
+        ...getHashtagsFromText(description)
+      ].filter((tag, index, arr) => arr.indexOf(tag) === index); // Remove duplicates
+
       const newAd = {
         id: `ad-${Date.now()}`,
         ownerId,
@@ -171,6 +177,8 @@ export const adsController = {
         subscriptionTier: subscriptionTier || 'Basic',
         reactions: {} as Record<string, number>,
         userReactions: [],
+        hashtags,
+        timestamp: Date.now(),
         expiryDate: durationDays ? Date.now() + (durationDays * 24 * 60 * 60 * 1000) : undefined
       };
 

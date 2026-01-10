@@ -10,6 +10,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.adsController = void 0;
+const hashtagUtils_1 = require("../utils/hashtagUtils");
 // Mock data - in production this would come from database
 const mockAds = [
     {
@@ -18,7 +19,7 @@ const mockAds = [
         ownerName: 'James Mitchell',
         ownerAvatar: 'https://picsum.photos/id/64/150/150',
         headline: 'Global Leadership Summit 2025',
-        description: 'Join 500+ executives for premier leadership conference. Keynotes, workshops, and networking.',
+        description: 'Join 500+ executives for premier leadership conference. Keynotes, workshops, and networking. #leadership #conference #networking #executives',
         mediaUrl: 'https://images.unsplash.com/photo-1542744173-8e7e53415bb0?q=80&w=800&auto=format&fit=crop',
         ctaText: 'Register Now',
         ctaLink: '#',
@@ -27,7 +28,9 @@ const mockAds = [
         status: 'active',
         subscriptionTier: 'Leadership Pulse',
         reactions: { '🎯': 45, '💼': 28 },
-        expiryDate: Date.now() + (30 * 24 * 60 * 60 * 1000) // 30 days from now
+        expiryDate: Date.now() + (30 * 24 * 60 * 60 * 1000), // 30 days from now
+        hashtags: ['leadership', 'conference', 'networking', 'executives'],
+        timestamp: Date.now() - 1800000
     },
     {
         id: 'ad-career-coaching',
@@ -35,7 +38,7 @@ const mockAds = [
         ownerName: 'Sarah Williams',
         ownerAvatar: 'https://picsum.photos/id/65/150/150',
         headline: 'Executive Career Transformation',
-        description: '1-on-1 coaching to help you reach your next career milestone. Limited spots available.',
+        description: '1-on-1 coaching to help you reach your next career milestone. Limited spots available. #coaching #career #transformation #growth',
         mediaUrl: 'https://images.unsplash.com/photo-1515378791036-0648a3e77b4a?q=80&w=800&auto=format&fit=crop',
         ctaText: 'Book Session',
         ctaLink: '#',
@@ -44,14 +47,16 @@ const mockAds = [
         status: 'active',
         subscriptionTier: 'Career Growth',
         reactions: { '🚀': 67, '💡': 34 },
-        expiryDate: Date.now() + (15 * 24 * 60 * 60 * 1000) // 15 days from now
+        expiryDate: Date.now() + (15 * 24 * 60 * 60 * 1000), // 15 days from now
+        hashtags: ['coaching', 'career', 'transformation', 'growth'],
+        timestamp: Date.now() - 3600000
     }
 ];
 exports.adsController = {
     // GET /api/ads - Get all ads
     getAllAds: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { page = 1, limit = 10, placement, status, ownerId } = req.query;
+            const { page = 1, limit = 10, placement, status, ownerId, hashtags } = req.query;
             let filteredAds = [...mockAds];
             // Filter by placement if specified
             if (placement) {
@@ -64,6 +69,11 @@ exports.adsController = {
             // Filter by owner if specified
             if (ownerId) {
                 filteredAds = filteredAds.filter(ad => ad.ownerId === ownerId);
+            }
+            // Filter by hashtags if specified
+            if (hashtags) {
+                const searchTags = Array.isArray(hashtags) ? hashtags : [hashtags];
+                filteredAds = (0, hashtagUtils_1.filterByHashtags)(filteredAds, searchTags);
             }
             // Filter out expired ads
             const now = Date.now();
@@ -130,6 +140,11 @@ exports.adsController = {
                     message: 'ownerId, headline, description, ctaText, and ctaLink are required'
                 });
             }
+            // Extract hashtags from headline and description
+            const hashtags = [
+                ...(0, hashtagUtils_1.getHashtagsFromText)(headline),
+                ...(0, hashtagUtils_1.getHashtagsFromText)(description)
+            ].filter((tag, index, arr) => arr.indexOf(tag) === index); // Remove duplicates
             const newAd = {
                 id: `ad-${Date.now()}`,
                 ownerId,
@@ -146,6 +161,8 @@ exports.adsController = {
                 subscriptionTier: subscriptionTier || 'Basic',
                 reactions: {},
                 userReactions: [],
+                hashtags,
+                timestamp: Date.now(),
                 expiryDate: durationDays ? Date.now() + (durationDays * 24 * 60 * 60 * 1000) : undefined
             };
             // In production, save to database

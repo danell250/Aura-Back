@@ -23,6 +23,7 @@ const usersRoutes_1 = __importDefault(require("./routes/usersRoutes"));
 const adsRoutes_1 = __importDefault(require("./routes/adsRoutes"));
 const commentsRoutes_1 = __importDefault(require("./routes/commentsRoutes"));
 const notificationsRoutes_1 = __importDefault(require("./routes/notificationsRoutes"));
+const messagesRoutes_1 = __importDefault(require("./routes/messagesRoutes"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const db_1 = require("./db");
@@ -56,6 +57,7 @@ app.use('/api/posts', postsRoutes_1.default);
 app.use('/api/ads', adsRoutes_1.default);
 app.use('/api/comments', commentsRoutes_1.default);
 app.use('/api/notifications', notificationsRoutes_1.default);
+app.use('/api/messages', messagesRoutes_1.default);
 console.log('Routes registered successfully');
 // Health check endpoints
 app.get('/health', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {

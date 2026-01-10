@@ -5,6 +5,8 @@ const postsController_1 = require("../controllers/postsController");
 const router = (0, express_1.Router)();
 // GET /api/posts - Get all posts
 router.get('/', postsController_1.postsController.getAllPosts);
+// GET /api/posts/hashtags/trending - Get trending hashtags
+router.get('/hashtags/trending', postsController_1.postsController.getTrendingHashtags);
 // GET /api/posts/:id - Get post by ID
 router.get('/:id', postsController_1.postsController.getPostById);
 // POST /api/posts - Create new post

@@ -10,6 +10,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.postsController = void 0;
+const hashtagUtils_1 = require("../utils/hashtagUtils");
 // Mock data - in production this would come from database
 const mockPosts = [
     {
@@ -22,21 +23,42 @@ const mockPosts = [
             handle: '@jamesmitchell',
             avatar: 'https://picsum.photos/id/64/150/150'
         },
-        content: 'Strategic leadership requires a balance of vision and execution. The most successful leaders don\'t just set direction—they create systems that sustain momentum through uncertainty.',
+        content: 'Strategic leadership requires a balance of vision and execution. The most successful leaders don\'t just set direction—they create systems that sustain momentum through uncertainty. #leadership #strategy #execution #vision',
         energy: '💡 Deep Dive',
         radiance: 156,
         timestamp: Date.now() - 3600000,
         reactions: { '👍': 45, '💡': 23, '🚀': 12 },
         userReactions: [],
         comments: [],
-        isBoosted: false
+        isBoosted: false,
+        hashtags: ['leadership', 'strategy', 'execution', 'vision']
+    },
+    {
+        id: 'post-2',
+        author: {
+            id: '2',
+            firstName: 'Sarah',
+            lastName: 'Williams',
+            name: 'Sarah Williams',
+            handle: '@sarahwilliams',
+            avatar: 'https://picsum.photos/id/65/150/150'
+        },
+        content: 'Innovation isn\'t just about technology—it\'s about reimagining how we solve problems. The best innovations often come from questioning assumptions we didn\'t even know we had. #innovation #problemsolving #creativity #mindset',
+        energy: '🚀 Breakthrough',
+        radiance: 203,
+        timestamp: Date.now() - 7200000,
+        reactions: { '🚀': 67, '💡': 34, '🔥': 21 },
+        userReactions: [],
+        comments: [],
+        isBoosted: true,
+        hashtags: ['innovation', 'problemsolving', 'creativity', 'mindset']
     }
 ];
 exports.postsController = {
     // GET /api/posts - Get all posts
     getAllPosts: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { page = 1, limit = 20, userId, energy } = req.query;
+            const { page = 1, limit = 20, userId, energy, hashtags } = req.query;
             let filteredPosts = [...mockPosts];
             // Filter by user if specified
             if (userId) {
@@ -45,6 +67,11 @@ exports.postsController = {
             // Filter by energy type if specified
             if (energy) {
                 filteredPosts = filteredPosts.filter(post => post.energy === energy);
+            }
+            // Filter by hashtags if specified
+            if (hashtags) {
+                const searchTags = Array.isArray(hashtags) ? hashtags : [hashtags];
+                filteredPosts = (0, hashtagUtils_1.filterByHashtags)(filteredPosts, searchTags);
             }
             // Sort by timestamp (newest first)
             filteredPosts.sort((a, b) => b.timestamp - a.timestamp);
@@ -110,6 +137,8 @@ exports.postsController = {
                     message: 'content and authorId are required'
                 });
             }
+            // Extract hashtags from content
+            const hashtags = (0, hashtagUtils_1.getHashtagsFromText)(content);
             // In production, fetch author from database
             const author = {
                 id: authorId,
@@ -131,7 +160,8 @@ exports.postsController = {
                 reactions: {},
                 userReactions: [],
                 comments: [],
-                isBoosted: false
+                isBoosted: false,
+                hashtags
             };
             // In production, save to database
             mockPosts.unshift(newPost);
@@ -267,6 +297,26 @@ exports.postsController = {
             res.status(500).json({
                 success: false,
                 error: 'Failed to boost post',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // GET /api/posts/hashtags/trending - Get trending hashtags
+    getTrendingHashtags: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { limit = 10, hours = 24 } = req.query;
+            const trendingTags = (0, hashtagUtils_1.getTrendingHashtags)(mockPosts, Number(limit), Number(hours));
+            res.json({
+                success: true,
+                data: trendingTags,
+                message: 'Trending hashtags retrieved successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error fetching trending hashtags:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to fetch trending hashtags',
                 message: 'Internal server error'
             });
         }
