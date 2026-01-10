@@ -18,4 +18,6 @@ router.delete('/:id', usersController_1.usersController.deleteUser);
 router.post('/:id/connect', usersController_1.usersController.sendConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', usersController_1.usersController.blockUser);
+// POST /api/users/:id/purchase-credits - Purchase credits
+router.post('/:id/purchase-credits', usersController_1.usersController.purchaseCredits);
 exports.default = router;

@@ -124,7 +124,7 @@ export const usersController = {
         acquaintances: [],
         blockedUsers: [],
         trustScore: 10,
-        auraCredits: 50,
+        auraCredits: 100, // New users start with 100 free credits
         activeGlow: 'none',
         ...userData
       };
@@ -248,6 +248,70 @@ export const usersController = {
       res.status(500).json({
         success: false,
         error: 'Failed to block user',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // POST /api/users/:id/purchase-credits - Purchase credits
+  purchaseCredits: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { credits, bundleName, transactionId, paymentMethod } = req.body;
+
+      // Validate required fields
+      if (!credits || !bundleName) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required fields',
+          message: 'credits and bundleName are required'
+        });
+      }
+
+      // Find user
+      const userIndex = mockUsers.findIndex(u => u.id === id);
+      if (userIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      // Update user credits
+      const currentCredits = mockUsers[userIndex].auraCredits || 0;
+      const newCredits = currentCredits + credits;
+      mockUsers[userIndex].auraCredits = newCredits;
+
+      // Log the transaction (in production, save to database)
+      console.log('Credit purchase processed:', {
+        userId: id,
+        bundleName,
+        credits,
+        previousCredits: currentCredits,
+        newCredits,
+        transactionId,
+        paymentMethod,
+        timestamp: new Date().toISOString()
+      });
+
+      res.json({
+        success: true,
+        data: {
+          userId: id,
+          creditsAdded: credits,
+          previousCredits: currentCredits,
+          newCredits,
+          bundleName,
+          transactionId
+        },
+        message: `Successfully added ${credits} credits to user account`
+      });
+    } catch (error) {
+      console.error('Error processing credit purchase:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to process credit purchase',
         message: 'Internal server error'
       });
     }
