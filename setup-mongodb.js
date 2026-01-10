@@ -73,7 +73,7 @@ function setupAtlasConnection() {
   console.log('5. Whitelist your IP address (or use 0.0.0.0/0 for development)');
   console.log('6. Get your connection string');
   console.log('\nExample connection string:');
-  console.log('mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/aura?retryWrites=true&w=majority');
+  console.log('mongodb+srv://YOUR_USERNAME:YOUR_PASSWORD@cluster0.xxxxx.mongodb.net/aura?retryWrites=true&w=majority');
   
   const readline = require('readline').createInterface({
     input: process.stdin,
