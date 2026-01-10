@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { getHashtagsFromText, getTrendingHashtags, filterByHashtags } from '../utils/hashtagUtils';
 
 // Mock data - in production this would come from database
 const mockAds: any[] = [
@@ -8,7 +9,7 @@ const mockAds: any[] = [
     ownerName: 'James Mitchell',
     ownerAvatar: 'https://picsum.photos/id/64/150/150',
     headline: 'Global Leadership Summit 2025',
-    description: 'Join 500+ executives for premier leadership conference. Keynotes, workshops, and networking.',
+    description: 'Join 500+ executives for premier leadership conference. Keynotes, workshops, and networking. #leadership #conference #networking #executives',
     mediaUrl: 'https://images.unsplash.com/photo-1542744173-8e7e53415bb0?q=80&w=800&auto=format&fit=crop',
     ctaText: 'Register Now',
     ctaLink: '#',
@@ -17,7 +18,9 @@ const mockAds: any[] = [
     status: 'active',
     subscriptionTier: 'Leadership Pulse',
     reactions: { '🎯': 45, '💼': 28 },
-    expiryDate: Date.now() + (30 * 24 * 60 * 60 * 1000) // 30 days from now
+    expiryDate: Date.now() + (30 * 24 * 60 * 60 * 1000), // 30 days from now
+    hashtags: ['leadership', 'conference', 'networking', 'executives'],
+    timestamp: Date.now() - 1800000
   },
   {
     id: 'ad-career-coaching',
@@ -25,7 +28,7 @@ const mockAds: any[] = [
     ownerName: 'Sarah Williams',
     ownerAvatar: 'https://picsum.photos/id/65/150/150',
     headline: 'Executive Career Transformation',
-    description: '1-on-1 coaching to help you reach your next career milestone. Limited spots available.',
+    description: '1-on-1 coaching to help you reach your next career milestone. Limited spots available. #coaching #career #transformation #growth',
     mediaUrl: 'https://images.unsplash.com/photo-1515378791036-0648a3e77b4a?q=80&w=800&auto=format&fit=crop',
     ctaText: 'Book Session',
     ctaLink: '#',
@@ -34,7 +37,9 @@ const mockAds: any[] = [
     status: 'active',
     subscriptionTier: 'Career Growth',
     reactions: { '🚀': 67, '💡': 34 },
-    expiryDate: Date.now() + (15 * 24 * 60 * 60 * 1000) // 15 days from now
+    expiryDate: Date.now() + (15 * 24 * 60 * 60 * 1000), // 15 days from now
+    hashtags: ['coaching', 'career', 'transformation', 'growth'],
+    timestamp: Date.now() - 3600000
   }
 ];
 
@@ -42,7 +47,7 @@ export const adsController = {
   // GET /api/ads - Get all ads
   getAllAds: async (req: Request, res: Response) => {
     try {
-      const { page = 1, limit = 10, placement, status, ownerId } = req.query;
+      const { page = 1, limit = 10, placement, status, ownerId, hashtags } = req.query;
       
       let filteredAds = [...mockAds];
       
@@ -59,6 +64,12 @@ export const adsController = {
       // Filter by owner if specified
       if (ownerId) {
         filteredAds = filteredAds.filter(ad => ad.ownerId === ownerId);
+      }
+      
+      // Filter by hashtags if specified
+      if (hashtags) {
+        const searchTags = Array.isArray(hashtags) ? hashtags : [hashtags];
+        filteredAds = filterByHashtags(filteredAds, searchTags as string[]);
       }
       
       // Filter out expired ads

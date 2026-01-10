@@ -6,6 +6,9 @@ const router = Router();
 // GET /api/posts - Get all posts
 router.get('/', postsController.getAllPosts);
 
+// GET /api/posts/hashtags/trending - Get trending hashtags
+router.get('/hashtags/trending', postsController.getTrendingHashtags);
+
 // GET /api/posts/:id - Get post by ID
 router.get('/:id', postsController.getPostById);
 
