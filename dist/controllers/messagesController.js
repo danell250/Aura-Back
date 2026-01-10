@@ -11,6 +11,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.messagesController = void 0;
 const Message_1 = require("../models/Message");
+const mongodb_1 = require("mongodb");
+const db_1 = require("../db");
 exports.messagesController = {
     // GET /api/messages/conversations - Get all conversations for a user
     getConversations: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -22,8 +24,17 @@ exports.messagesController = {
                     message: 'User ID is required'
                 });
             }
+            // Check if database is connected
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({
+                    success: true,
+                    data: [], // Return empty array when DB is not connected
+                    message: 'Database not connected, using fallback'
+                });
+            }
+            const messagesCollection = (0, Message_1.getMessagesCollection)();
             // Get latest message for each conversation
-            const conversations = yield Message_1.Message.aggregate([
+            const conversations = yield messagesCollection.aggregate([
                 {
                     $match: {
                         $or: [
@@ -69,7 +80,7 @@ exports.messagesController = {
                 {
                     $sort: { 'lastMessage.timestamp': -1 }
                 }
-            ]);
+            ]).toArray();
             res.json({
                 success: true,
                 data: conversations
@@ -94,7 +105,16 @@ exports.messagesController = {
                     message: 'Current user ID is required'
                 });
             }
-            const messages = yield Message_1.Message.find({
+            // Check if database is connected
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({
+                    success: true,
+                    data: [], // Return empty array when DB is not connected
+                    message: 'Database not connected, using fallback'
+                });
+            }
+            const messagesCollection = (0, Message_1.getMessagesCollection)();
+            const messages = yield messagesCollection.find({
                 $or: [
                     { senderId: currentUserId, receiverId: userId },
                     { senderId: userId, receiverId: currentUserId }
@@ -102,13 +122,14 @@ exports.messagesController = {
             })
                 .sort({ timestamp: -1 })
                 .limit(Number(limit))
-                .skip((Number(page) - 1) * Number(limit));
+                .skip((Number(page) - 1) * Number(limit))
+                .toArray();
             // Mark messages as read
-            yield Message_1.Message.updateMany({
+            yield messagesCollection.updateMany({
                 senderId: userId,
                 receiverId: currentUserId,
                 isRead: false
-            }, { isRead: true });
+            }, { $set: { isRead: true } });
             res.json({
                 success: true,
                 data: messages.reverse() // Return in chronological order
@@ -132,18 +153,44 @@ exports.messagesController = {
                     message: 'Sender ID, receiver ID, and text are required'
                 });
             }
-            const message = new Message_1.Message({
+            // Check if database is connected
+            if (!(0, db_1.isDBConnected)()) {
+                // Return a mock message when DB is not connected
+                const mockMessage = {
+                    _id: new mongodb_1.ObjectId(),
+                    senderId,
+                    receiverId,
+                    text,
+                    timestamp: new Date(),
+                    isRead: false,
+                    messageType,
+                    mediaUrl,
+                    replyTo,
+                    isEdited: false
+                };
+                return res.status(201).json({
+                    success: true,
+                    data: mockMessage,
+                    message: 'Database not connected, message not persisted'
+                });
+            }
+            const messagesCollection = (0, Message_1.getMessagesCollection)();
+            const message = {
                 senderId,
                 receiverId,
                 text,
+                timestamp: new Date(),
+                isRead: false,
                 messageType,
                 mediaUrl,
-                replyTo
-            });
-            yield message.save();
+                replyTo,
+                isEdited: false
+            };
+            const result = yield messagesCollection.insertOne(message);
+            const insertedMessage = yield messagesCollection.findOne({ _id: result.insertedId });
             res.status(201).json({
                 success: true,
-                data: message
+                data: insertedMessage
             });
         }
         catch (error) {
@@ -165,7 +212,8 @@ exports.messagesController = {
                     message: 'Text and user ID are required'
                 });
             }
-            const message = yield Message_1.Message.findById(messageId);
+            const messagesCollection = (0, Message_1.getMessagesCollection)();
+            const message = yield messagesCollection.findOne({ _id: new mongodb_1.ObjectId(messageId) });
             if (!message) {
                 return res.status(404).json({
                     success: false,
@@ -178,13 +226,22 @@ exports.messagesController = {
                     message: 'You can only edit your own messages'
                 });
             }
-            message.text = text;
-            message.isEdited = true;
-            message.editedAt = new Date();
-            yield message.save();
+            const result = yield messagesCollection.findOneAndUpdate({ _id: new mongodb_1.ObjectId(messageId) }, {
+                $set: {
+                    text,
+                    isEdited: true,
+                    editedAt: new Date()
+                }
+            }, { returnDocument: 'after' });
+            if (!result) {
+                return res.status(500).json({
+                    success: false,
+                    message: 'Failed to update message'
+                });
+            }
             res.json({
                 success: true,
-                data: message
+                data: result
             });
         }
         catch (error) {
@@ -206,7 +263,8 @@ exports.messagesController = {
                     message: 'User ID is required'
                 });
             }
-            const message = yield Message_1.Message.findById(messageId);
+            const messagesCollection = (0, Message_1.getMessagesCollection)();
+            const message = yield messagesCollection.findOne({ _id: new mongodb_1.ObjectId(messageId) });
             if (!message) {
                 return res.status(404).json({
                     success: false,
@@ -219,7 +277,7 @@ exports.messagesController = {
                     message: 'You can only delete your own messages'
                 });
             }
-            yield Message_1.Message.findByIdAndDelete(messageId);
+            yield messagesCollection.deleteOne({ _id: new mongodb_1.ObjectId(messageId) });
             res.json({
                 success: true,
                 message: 'Message deleted successfully'
@@ -243,11 +301,12 @@ exports.messagesController = {
                     message: 'Sender ID and receiver ID are required'
                 });
             }
-            yield Message_1.Message.updateMany({
+            const messagesCollection = (0, Message_1.getMessagesCollection)();
+            yield messagesCollection.updateMany({
                 senderId,
                 receiverId,
                 isRead: false
-            }, { isRead: true });
+            }, { $set: { isRead: true } });
             res.json({
                 success: true,
                 message: 'Messages marked as read'

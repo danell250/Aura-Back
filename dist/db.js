@@ -20,6 +20,7 @@ exports.checkDBHealth = checkDBHealth;
 exports.closeDB = closeDB;
 const mongodb_1 = require("mongodb");
 const dotenv_1 = __importDefault(require("dotenv"));
+const Message_1 = require("./models/Message");
 dotenv_1.default.config();
 const mongoUri = process.env.MONGO_URI;
 // Enhanced MongoDB connection configuration
@@ -68,6 +69,14 @@ function connectDB() {
             db = client.db("aura");
             exports.isConnected = isConnected = true;
             connectionAttempts = 0; // Reset on successful connection
+            // Initialize collections
+            try {
+                (0, Message_1.initializeMessageCollection)(db);
+                console.log("✅ Message collection initialized");
+            }
+            catch (error) {
+                console.warn("⚠️  Warning: Could not initialize message collection:", error);
+            }
             console.log("✅ Connected to MongoDB successfully");
             console.log(`📊 MongoDB connected to database: aura`);
             // Set up connection monitoring

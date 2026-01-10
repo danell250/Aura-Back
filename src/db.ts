@@ -1,5 +1,6 @@
 import { MongoClient, Db } from "mongodb";
 import dotenv from "dotenv";
+import { initializeMessageCollection } from "./models/Message";
 
 dotenv.config();
 
@@ -57,6 +58,14 @@ export async function connectDB(): Promise<Db | null> {
     db = client.db("aura");
     isConnected = true;
     connectionAttempts = 0; // Reset on successful connection
+    
+    // Initialize collections
+    try {
+      initializeMessageCollection(db);
+      console.log("✅ Message collection initialized");
+    } catch (error) {
+      console.warn("⚠️  Warning: Could not initialize message collection:", error);
+    }
     
     console.log("✅ Connected to MongoDB successfully");
     console.log(`📊 MongoDB connected to database: aura`);

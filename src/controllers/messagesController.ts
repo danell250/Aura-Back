@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
-import { Message } from '../models/Message';
+import { getMessagesCollection, IMessage } from '../models/Message';
+import { ObjectId } from 'mongodb';
+import { isDBConnected } from '../db';
 
 export const messagesController = {
   // GET /api/messages/conversations - Get all conversations for a user
@@ -14,8 +16,19 @@ export const messagesController = {
         });
       }
 
+      // Check if database is connected
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: [], // Return empty array when DB is not connected
+          message: 'Database not connected, using fallback'
+        });
+      }
+
+      const messagesCollection = getMessagesCollection();
+
       // Get latest message for each conversation
-      const conversations = await Message.aggregate([
+      const conversations = await messagesCollection.aggregate([
         {
           $match: {
             $or: [
@@ -61,7 +74,7 @@ export const messagesController = {
         {
           $sort: { 'lastMessage.timestamp': -1 }
         }
-      ]);
+      ]).toArray();
 
       res.json({
         success: true,
@@ -89,7 +102,18 @@ export const messagesController = {
         });
       }
 
-      const messages = await Message.find({
+      // Check if database is connected
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: [], // Return empty array when DB is not connected
+          message: 'Database not connected, using fallback'
+        });
+      }
+
+      const messagesCollection = getMessagesCollection();
+
+      const messages = await messagesCollection.find({
         $or: [
           { senderId: currentUserId, receiverId: userId },
           { senderId: userId, receiverId: currentUserId }
@@ -97,16 +121,17 @@ export const messagesController = {
       })
       .sort({ timestamp: -1 })
       .limit(Number(limit))
-      .skip((Number(page) - 1) * Number(limit));
+      .skip((Number(page) - 1) * Number(limit))
+      .toArray();
 
       // Mark messages as read
-      await Message.updateMany(
+      await messagesCollection.updateMany(
         {
           senderId: userId,
           receiverId: currentUserId,
           isRead: false
         },
-        { isRead: true }
+        { $set: { isRead: true } }
       );
 
       res.json({
@@ -134,20 +159,49 @@ export const messagesController = {
         });
       }
 
-      const message = new Message({
+      // Check if database is connected
+      if (!isDBConnected()) {
+        // Return a mock message when DB is not connected
+        const mockMessage: IMessage = {
+          _id: new ObjectId(),
+          senderId,
+          receiverId,
+          text,
+          timestamp: new Date(),
+          isRead: false,
+          messageType,
+          mediaUrl,
+          replyTo,
+          isEdited: false
+        };
+
+        return res.status(201).json({
+          success: true,
+          data: mockMessage,
+          message: 'Database not connected, message not persisted'
+        });
+      }
+
+      const messagesCollection = getMessagesCollection();
+
+      const message: IMessage = {
         senderId,
         receiverId,
         text,
+        timestamp: new Date(),
+        isRead: false,
         messageType,
         mediaUrl,
-        replyTo
-      });
+        replyTo,
+        isEdited: false
+      };
 
-      await message.save();
+      const result = await messagesCollection.insertOne(message);
+      const insertedMessage = await messagesCollection.findOne({ _id: result.insertedId });
 
       res.status(201).json({
         success: true,
-        data: message
+        data: insertedMessage
       });
     } catch (error) {
       console.error('Error sending message:', error);
@@ -171,7 +225,8 @@ export const messagesController = {
         });
       }
 
-      const message = await Message.findById(messageId);
+      const messagesCollection = getMessagesCollection();
+      const message = await messagesCollection.findOne({ _id: new ObjectId(messageId) });
       
       if (!message) {
         return res.status(404).json({
@@ -187,15 +242,28 @@ export const messagesController = {
         });
       }
 
-      message.text = text;
-      message.isEdited = true;
-      message.editedAt = new Date();
-      
-      await message.save();
+      const result = await messagesCollection.findOneAndUpdate(
+        { _id: new ObjectId(messageId) },
+        { 
+          $set: { 
+            text, 
+            isEdited: true, 
+            editedAt: new Date() 
+          } 
+        },
+        { returnDocument: 'after' }
+      );
+
+      if (!result) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to update message'
+        });
+      }
 
       res.json({
         success: true,
-        data: message
+        data: result
       });
     } catch (error) {
       console.error('Error editing message:', error);
@@ -219,7 +287,8 @@ export const messagesController = {
         });
       }
 
-      const message = await Message.findById(messageId);
+      const messagesCollection = getMessagesCollection();
+      const message = await messagesCollection.findOne({ _id: new ObjectId(messageId) });
       
       if (!message) {
         return res.status(404).json({
@@ -235,7 +304,7 @@ export const messagesController = {
         });
       }
 
-      await Message.findByIdAndDelete(messageId);
+      await messagesCollection.deleteOne({ _id: new ObjectId(messageId) });
 
       res.json({
         success: true,
@@ -262,13 +331,15 @@ export const messagesController = {
         });
       }
 
-      await Message.updateMany(
+      const messagesCollection = getMessagesCollection();
+
+      await messagesCollection.updateMany(
         {
           senderId,
           receiverId,
           isRead: false
         },
-        { isRead: true }
+        { $set: { isRead: true } }
       );
 
       res.json({
