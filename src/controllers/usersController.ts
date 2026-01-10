@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 
 // Mock data - in production this would come from database
-const mockUsers = [
+let mockUsers = [
   {
     id: '1',
     firstName: 'James',
@@ -248,6 +248,47 @@ export const usersController = {
       res.status(500).json({
         success: false,
         error: 'Failed to block user',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // GET /api/users/search - Search users
+  searchUsers: async (req: Request, res: Response) => {
+    try {
+      const { q } = req.query;
+      
+      if (!q || typeof q !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing search query',
+          message: 'Query parameter "q" is required'
+        });
+      }
+
+      const searchTerm = q.toLowerCase().trim();
+      const searchResults = mockUsers.filter(user => {
+        return (
+          user.name.toLowerCase().includes(searchTerm) ||
+          user.firstName.toLowerCase().includes(searchTerm) ||
+          user.lastName.toLowerCase().includes(searchTerm) ||
+          user.handle.toLowerCase().includes(searchTerm) ||
+          user.email.toLowerCase().includes(searchTerm) ||
+          (user.bio && user.bio.toLowerCase().includes(searchTerm))
+        );
+      });
+
+      res.json({
+        success: true,
+        data: searchResults,
+        count: searchResults.length,
+        query: q
+      });
+    } catch (error) {
+      console.error('Error searching users:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to search users',
         message: 'Internal server error'
       });
     }

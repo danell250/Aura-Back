@@ -8,6 +8,9 @@ console.log('Users routes loaded successfully');
 // GET /api/users - Get all users
 router.get('/', usersController.getAllUsers);
 
+// GET /api/users/search - Search users (must come before /:id routes)
+router.get('/search', usersController.searchUsers);
+
 // POST /api/users - Create new user
 router.post('/', usersController.createUser);
 
