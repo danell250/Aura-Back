@@ -675,5 +675,65 @@ export const usersController = {
         message: 'Internal server error'
       });
     }
+  },
+
+  // POST /api/users/:id/record-profile-view - Record that a user viewed another user's profile
+  recordProfileView: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { viewerId } = req.body;
+      
+      // Find the user whose profile was viewed
+      const userIndex = mockUsers.findIndex(u => u.id === id);
+      if (userIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+      
+      // Find the viewer user
+      const viewerIndex = mockUsers.findIndex(u => u.id === viewerId);
+      if (viewerIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          error: 'Viewer not found',
+          message: `Viewer with ID ${viewerId} does not exist`
+        });
+      }
+      
+      // Initialize profileViews array if it doesn't exist
+      if (!(mockUsers[userIndex] as any).profileViews) {
+        (mockUsers[userIndex] as any).profileViews = [];
+      }
+      
+      // Add the viewer ID to the profile views if not already present
+      const profileViews = (mockUsers[userIndex] as any).profileViews;
+      if (!profileViews.includes(viewerId)) {
+        profileViews.push(viewerId);
+      }
+      
+      // Also potentially create a notification for the profile owner
+      // In a real app, this would add to a notifications collection
+      
+      res.json({
+        success: true,
+        data: {
+          profileOwnerId: id,
+          viewerId: viewerId,
+          timestamp: new Date().toISOString(),
+          totalViews: profileViews.length
+        },
+        message: 'Profile view recorded successfully'
+      });
+    } catch (error) {
+      console.error('Error recording profile view:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to record profile view',
+        message: 'Internal server error'
+      });
+    }
   }
 };

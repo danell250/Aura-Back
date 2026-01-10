@@ -56,6 +56,9 @@ router.post('/:id/connect', usersController.sendConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', usersController.blockUser);
 
+// POST /api/users/:id/record-profile-view - Record profile view
+router.post('/:id/record-profile-view', usersController.recordProfileView);
+
 // GET /api/users/:id - Get user by ID
 router.get('/:id', usersController.getUserById);
 
