@@ -27,6 +27,13 @@ router.post('/:id/purchase-credits', (req: Request, res: Response) => {
   usersController.purchaseCredits(req, res);
 });
 
+// POST /api/users/:id/spend-credits - Spend/deduct credits (must come before /:id routes)
+console.log('Registering spend-credits route for pattern /:id/spend-credits');
+router.post('/:id/spend-credits', (req: Request, res: Response) => {
+  console.log('Spend credits route hit!', req.params, req.body);
+  usersController.spendCredits(req, res);
+});
+
 // POST /api/users/:id/connect - Send connection request
 router.post('/:id/connect', usersController.sendConnectionRequest);
 

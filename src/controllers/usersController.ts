@@ -356,5 +356,75 @@ export const usersController = {
         message: 'Internal server error'
       });
     }
+  },
+
+  // POST /api/users/:id/spend-credits - Spend/deduct credits
+  spendCredits: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { credits, reason } = req.body;
+
+      // Validate required fields
+      if (!credits || credits <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid credits amount',
+          message: 'credits must be a positive number'
+        });
+      }
+
+      // Find user
+      const userIndex = mockUsers.findIndex(u => u.id === id);
+      if (userIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      // Check if user has enough credits
+      const currentCredits = mockUsers[userIndex].auraCredits || 0;
+      if (currentCredits < credits) {
+        return res.status(400).json({
+          success: false,
+          error: 'Insufficient credits',
+          message: `User has ${currentCredits} credits but needs ${credits}`
+        });
+      }
+
+      // Deduct credits
+      const newCredits = currentCredits - credits;
+      mockUsers[userIndex].auraCredits = newCredits;
+
+      // Log the transaction (in production, save to database)
+      console.log('Credit spending processed:', {
+        userId: id,
+        creditsSpent: credits,
+        reason,
+        previousCredits: currentCredits,
+        newCredits,
+        timestamp: new Date().toISOString()
+      });
+
+      res.json({
+        success: true,
+        data: {
+          userId: id,
+          creditsSpent: credits,
+          reason,
+          previousCredits: currentCredits,
+          newCredits
+        },
+        message: `Successfully deducted ${credits} credits from user account`
+      });
+    } catch (error) {
+      console.error('Error processing credit spending:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to process credit spending',
+        message: 'Internal server error'
+      });
+    }
   }
 };
