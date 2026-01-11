@@ -10,4 +10,5 @@ router.post('/inspiration', geminiController_1.generatePostInspiration);
 router.post('/reply', geminiController_1.suggestReply);
 router.post('/birthday', geminiController_1.generateQuirkyBirthdayWish);
 router.post('/analyze', geminiController_1.analyzeDataAura);
+router.post('/content', geminiController_1.generateContent);
 exports.default = router;
