@@ -25,6 +25,7 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// CORS configuration
 app.use(cors({
   origin: (origin, callback) => {
     // allow server-to-server & tools like curl/postman
@@ -53,6 +54,13 @@ app.use(cors({
 
 // Remove the problematic wildcard options route
 // app.options("*", cors());
+
+// Add COOP/COEP headers for PayPal popup compatibility
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  next();
+});
 
 // Pre-flight handling is managed by CORS middleware above
 app.use(express.json());
