@@ -25,19 +25,33 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
-  'https://auraradiance.vercel.app',
-  'https://auraradiance.netlify.app',
-  'http://localhost:5000',
-  'http://localhost:5173'
-];
-
 app.use(cors({
-  origin: allowedOrigins,
+  origin: (origin, callback) => {
+    // allow server-to-server & tools like curl/postman
+    if (!origin) return callback(null, true);
+
+    // Use environment variable from Render, fallback to hardcoded values
+    const frontendUrl = process.env.VITE_FRONTEND_URL;
+    const allowed = [
+      frontendUrl,
+      "https://auraradiance.vercel.app", 
+      "http://localhost:5173"
+    ].filter(Boolean); // Remove any undefined/null values
+
+    if (allowed.includes(origin)) {
+      return callback(null, true);
+    }
+
+    console.error("❌ Blocked by CORS:", origin);
+    console.log("🔗 Allowed origins:", allowed);
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
+app.options("*", cors());
 
 // Pre-flight handling is managed by CORS middleware above
 app.use(express.json());
@@ -57,6 +71,20 @@ app.use('/api/users', (req, res, next) => {
   console.log(`Users route hit: ${req.method} ${req.path}`);
   next();
 }, usersRoutes);
+
+// Debug endpoint to check environment variables
+app.get('/api/debug/env', (req, res) => {
+  res.json({
+    frontendUrl: process.env.VITE_FRONTEND_URL,
+    nodeEnv: process.env.NODE_ENV,
+    port: process.env.PORT,
+    allowedOrigins: [
+      process.env.VITE_FRONTEND_URL,
+      "https://auraradiance.vercel.app", 
+      "http://localhost:5173"
+    ].filter(Boolean)
+  });
+});
 
 // Direct test route for debugging
 app.post('/api/users/direct-test', (req, res) => {
