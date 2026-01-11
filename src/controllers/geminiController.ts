@@ -32,6 +32,13 @@ const fallbackResponses = {
     "Your energy reflects innovation and curiosity. Digital Frequency: Innovative, Curious, Dynamic.",
     "You embody strength and positivity. Digital Frequency: Strong, Positive, Empowering.",
     "Your presence inspires connection and growth. Digital Frequency: Connected, Growth-oriented, Supportive."
+  ],
+  content: [
+    "Here's some great content for you: Share your thoughts on something you're passionate about today!",
+    "Consider writing about a challenge you've overcome recently and what you learned from it.",
+    "Maybe share an interesting article or resource that has impacted your perspective lately.",
+    "Tell your network about a goal you're currently working toward and why it matters to you.",
+    "Write about a skill you've developed recently and how it's helped you grow personally or professionally."
   ]
 };
 
@@ -121,5 +128,24 @@ export const analyzeDataAura = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Analysis Error:", error);
     res.status(500).json({ error: "Unable to calibrate neural aura at this time." });
+  }
+};
+
+export const generateContent = async (req: Request, res: Response) => {
+  const { prompt } = req.body;
+
+  try {
+    // Check if Gemini API is available
+    if (process.env.GEMINI_API_KEY) {
+      // If Gemini API key exists, you could optionally use it here
+      // For now, we'll use fallback responses
+    }
+    
+    // Use fallback response
+    const fallbackResponse = getRandomResponse('content');
+    res.json({ text: fallbackResponse });
+  } catch (error) {
+    console.error("Content Generation Error:", error);
+    res.status(500).json({ error: "The creative frequencies are currently shifting. Please try again in a moment! 🌟" });
   }
 };
