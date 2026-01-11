@@ -13,9 +13,11 @@ import commentsRoutes from './routes/commentsRoutes';
 import notificationsRoutes from './routes/notificationsRoutes';
 import messagesRoutes from './routes/messagesRoutes';
 import subscriptionsRoutes from './routes/subscriptionsRoutes';
+import authRoutes from './routes/authRoutes';
+import { attachUser } from './middleware/authMiddleware';
 import path from 'path';
 import fs from 'fs';
-import { connectDB, checkDBHealth, isDBConnected } from './db';
+import { connectDB, checkDBHealth, isDBConnected, getDB } from './db';
 
 dotenv.config();
 
@@ -27,43 +29,66 @@ passport.use(new GoogleStrategy({
 },
 async (accessToken, refreshToken, profile, done) => {
   try {
-    // In a real application, you would typically:
-    // 1. Check if user exists in your database
-    // 2. Create user if doesn't exist
-    // 3. Return the user object
+    // Parse name from profile
+    const displayName = profile.displayName || '';
+    const nameParts = displayName.trim().split(/\s+/);
+    const firstName = nameParts[0] || 'User';
+    const lastName = nameParts.slice(1).join(' ') || '';
+    const email = profile.emails?.[0]?.value;
     
-    // For now, return a basic user object based on profile
+    if (!email) {
+      return done(new Error('Google account does not have an email address'), undefined);
+    }
+    
+    // Create user object with Google profile data
     const user = {
       id: profile.id,
       googleId: profile.id,
-      name: profile.displayName,
-      email: profile.emails?.[0]?.value,
-      firstName: profile.name?.givenName,
-      lastName: profile.name?.familyName,
-      avatar: profile.photos?.[0]?.value,
-      handle: `@${profile.displayName.replace(/\s+/g, '').toLowerCase()}`
+      firstName: firstName,
+      lastName: lastName,
+      name: displayName || `${firstName} ${lastName}`.trim(),
+      email: email.toLowerCase().trim(),
+      avatar: profile.photos?.[0]?.value || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
+      avatarType: 'image' as const,
+      handle: `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`,
+      bio: 'New to Aura',
+      industry: 'Other',
+      companyName: '',
+      phone: '',
+      dob: '',
+      acquaintances: [],
+      blockedUsers: [],
+      trustScore: 10,
+      auraCredits: 100,
+      activeGlow: 'none' as const
     };
     
-    return done(null, user as any);
+    return done(null, user);
   } catch (error) {
+    console.error('Error in Google OAuth strategy:', error);
     return done(error as any, undefined);
   }
 }
 ));
 
-// Serialize user for session
+// Serialize user for session - store user ID
 passport.serializeUser((user: any, done) => {
   done(null, user.id);
 });
 
-// Deserialize user from session
-passport.deserializeUser(async (id: any, done) => {
-  // In a real application, you would fetch user from database by id
-  // For now, we'll just pass through the user object
+// Deserialize user from session - fetch full user data from database
+passport.deserializeUser(async (id: string, done) => {
   try {
-    // Placeholder - in real app, fetch user from DB
-    done(null, id);
+    const db = getDB();
+    const user = await db.collection('users').findOne({ id });
+    
+    if (user) {
+      done(null, user);
+    } else {
+      done(null, false);
+    }
   } catch (error) {
+    console.error('Error deserializing user:', error);
     done(error, null);
   }
 });
@@ -144,12 +169,19 @@ app.use('/uploads', express.static(uploadsDir));
 
 // Routes
 console.log('Registering routes...');
+
+// Authentication routes (should come first)
+app.use('/auth', authRoutes);
+
+// Apply user attachment middleware to all API routes
+app.use('/api', attachUser);
+
 app.use('/api/users', (req, res, next) => {
   console.log(`Users route hit: ${req.method} ${req.path}`);
   next();
 }, usersRoutes);
 
-// Google OAuth routes
+// Google OAuth routes (legacy - moved to /auth)
 app.get('/auth/google',
   passport.authenticate('google', { scope: ['profile', 'email'] })
 );
@@ -162,7 +194,7 @@ app.get('/auth/google/callback',
   }
 );
 
-// Logout route
+// Logout route (legacy - moved to /auth)
 app.get('/auth/logout', (req, res) => {
   req.logout((err) => {
     if (err) {
@@ -179,7 +211,7 @@ app.get('/auth/logout', (req, res) => {
   });
 });
 
-// Get current user info
+// Get current user info (legacy - moved to /auth)
 app.get('/auth/user', (req, res) => {
   if (req.isAuthenticated && req.isAuthenticated()) {
     res.json({ user: req.user });
