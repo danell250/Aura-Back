@@ -9,6 +9,7 @@ import adsRoutes from './routes/adsRoutes';
 import commentsRoutes from './routes/commentsRoutes';
 import notificationsRoutes from './routes/notificationsRoutes';
 import messagesRoutes from './routes/messagesRoutes';
+import subscriptionsRoutes from './routes/subscriptionsRoutes';
 import path from 'path';
 import fs from 'fs';
 import { connectDB, checkDBHealth, isDBConnected } from './db';
@@ -65,6 +66,7 @@ app.use('/api/ads', adsRoutes);
 app.use('/api/comments', commentsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/messages', messagesRoutes);
+app.use('/api/subscriptions', subscriptionsRoutes);
 console.log('Routes registered successfully');
 
 // Health check endpoints
