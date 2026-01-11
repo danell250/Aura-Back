@@ -37,7 +37,7 @@ if (!fs_1.default.existsSync(uploadsDir)) {
     fs_1.default.mkdirSync(uploadsDir, { recursive: true });
 }
 const allowedOrigins = ((_a = process.env.ALLOWED_ORIGINS) === null || _a === void 0 ? void 0 : _a.split(',')) || [
-    'https://auraradiance.netlify.app',
+    'https://auraradiance.vercel.app',
     'https://auraraidiate.netlify.app/',
     'http://localhost:5000',
     'http://localhost:5173'

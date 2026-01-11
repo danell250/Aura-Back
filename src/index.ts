@@ -26,7 +26,7 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
-  'https://auraradiance.netlify.app',
+  'https://auraradiance.vercel.app',
   'https://auraraidiate.netlify.app/',
   'http://localhost:5000',
   'http://localhost:5173'
