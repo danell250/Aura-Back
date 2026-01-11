@@ -51,7 +51,8 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
-app.options("*", cors());
+// Remove the problematic wildcard options route
+// app.options("*", cors());
 
 // Pre-flight handling is managed by CORS middleware above
 app.use(express.json());

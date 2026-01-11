@@ -11,7 +11,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
@@ -36,18 +35,31 @@ const uploadsDir = path_1.default.join(__dirname, '../uploads');
 if (!fs_1.default.existsSync(uploadsDir)) {
     fs_1.default.mkdirSync(uploadsDir, { recursive: true });
 }
-const allowedOrigins = ((_a = process.env.ALLOWED_ORIGINS) === null || _a === void 0 ? void 0 : _a.split(',')) || [
-    'https://auraradiance.vercel.app',
-    'https://auraradiance.netlify.app',
-    'http://localhost:5000',
-    'http://localhost:5173'
-];
 app.use((0, cors_1.default)({
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+        // allow server-to-server & tools like curl/postman
+        if (!origin)
+            return callback(null, true);
+        // Use environment variable from Render, fallback to hardcoded values
+        const frontendUrl = process.env.VITE_FRONTEND_URL;
+        const allowed = [
+            frontendUrl,
+            "https://auraradiance.vercel.app",
+            "http://localhost:5173"
+        ].filter(Boolean); // Remove any undefined/null values
+        if (allowed.includes(origin)) {
+            return callback(null, true);
+        }
+        console.error("❌ Blocked by CORS:", origin);
+        console.log("🔗 Allowed origins:", allowed);
+        return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true
+    allowedHeaders: ["Content-Type", "Authorization"]
 }));
+// Remove the problematic wildcard options route
+// app.options("*", cors());
 // Pre-flight handling is managed by CORS middleware above
 app.use(express_1.default.json());
 // Debug middleware to log all requests
@@ -63,6 +75,19 @@ app.use('/api/users', (req, res, next) => {
     console.log(`Users route hit: ${req.method} ${req.path}`);
     next();
 }, usersRoutes_1.default);
+// Debug endpoint to check environment variables
+app.get('/api/debug/env', (req, res) => {
+    res.json({
+        frontendUrl: process.env.VITE_FRONTEND_URL,
+        nodeEnv: process.env.NODE_ENV,
+        port: process.env.PORT,
+        allowedOrigins: [
+            process.env.VITE_FRONTEND_URL,
+            "https://auraradiance.vercel.app",
+            "http://localhost:5173"
+        ].filter(Boolean)
+    });
+});
 // Direct test route for debugging
 app.post('/api/users/direct-test', (req, res) => {
     console.log('Direct test route hit!');
