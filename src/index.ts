@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import passport from 'passport';
+import session from 'express-session';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import geminiRoutes from './routes/geminiRoutes';
 import uploadRoutes from './routes/uploadRoutes';
 import postsRoutes from './routes/postsRoutes';
@@ -15,6 +18,55 @@ import fs from 'fs';
 import { connectDB, checkDBHealth, isDBConnected } from './db';
 
 dotenv.config();
+
+// Passport Google OAuth Strategy Configuration
+passport.use(new GoogleStrategy({
+  clientID: process.env.GOOGLE_CLIENT_ID || '63639970194-r83ifit3giq02jd1rgfq84uea5tbgv6h.apps.googleusercontent.com',
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET || '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',
+  callbackURL: "/auth/google/callback"
+},
+async (accessToken, refreshToken, profile, done) => {
+  try {
+    // In a real application, you would typically:
+    // 1. Check if user exists in your database
+    // 2. Create user if doesn't exist
+    // 3. Return the user object
+    
+    // For now, return a basic user object based on profile
+    const user = {
+      id: profile.id,
+      googleId: profile.id,
+      name: profile.displayName,
+      email: profile.emails?.[0]?.value,
+      firstName: profile.name?.givenName,
+      lastName: profile.name?.familyName,
+      avatar: profile.photos?.[0]?.value,
+      handle: `@${profile.displayName.replace(/\s+/g, '').toLowerCase()}`
+    };
+    
+    return done(null, user as any);
+  } catch (error) {
+    return done(error as any, undefined);
+  }
+}
+));
+
+// Serialize user for session
+passport.serializeUser((user: any, done) => {
+  done(null, user.id);
+});
+
+// Deserialize user from session
+passport.deserializeUser(async (id: any, done) => {
+  // In a real application, you would fetch user from database by id
+  // For now, we'll just pass through the user object
+  try {
+    // Placeholder - in real app, fetch user from DB
+    done(null, id);
+  } catch (error) {
+    done(error, null);
+  }
+});
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -55,6 +107,21 @@ app.use(cors({
 // Remove the problematic wildcard options route
 // app.options("*", cors());
 
+// Session middleware
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'fallback_secret_for_development',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production', // Set to true in production with HTTPS
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// Passport middleware
+app.use(passport.initialize());
+app.use(passport.session());
+
 // Middleware for general request processing
 app.use((req, res, next) => {
   // Set headers to fix Cross-Origin-Opener-Policy issues with popups
@@ -81,6 +148,45 @@ app.use('/api/users', (req, res, next) => {
   console.log(`Users route hit: ${req.method} ${req.path}`);
   next();
 }, usersRoutes);
+
+// Google OAuth routes
+app.get('/auth/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+app.get('/auth/google/callback',
+  passport.authenticate('google', { failureRedirect: '/login' }),
+  (req, res) => {
+    // Successful authentication, redirect to frontend
+    res.redirect(process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app');
+  }
+);
+
+// Logout route
+app.get('/auth/logout', (req, res) => {
+  req.logout((err) => {
+    if (err) {
+      console.error('Error during logout:', err);
+    }
+    req.session.destroy((err) => {
+      if (err) {
+        console.error('Error destroying session:', err);
+      }
+      // Clear the session object properly
+      req.session = undefined as any;
+      res.json({ success: true, message: 'Logged out successfully' });
+    });
+  });
+});
+
+// Get current user info
+app.get('/auth/user', (req, res) => {
+  if (req.isAuthenticated && req.isAuthenticated()) {
+    res.json({ user: req.user });
+  } else {
+    res.status(401).json({ error: 'Not authenticated' });
+  }
+});
 
 // Debug endpoint to check environment variables
 app.get('/api/debug/env', (req, res) => {

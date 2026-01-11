@@ -26,13 +26,19 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-session": "^1.18.2",
     "mongodb": "^6.10.0",
     "mongoose": "^9.1.2",
     "multer": "^2.0.2",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
     "typescript": "^5.9.3",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@types/express-session": "^1.18.2",
+    "@types/passport": "^1.0.17",
+    "@types/passport-google-oauth20": "^2.0.17",
     "nodemon": "^3.1.11",
     "ts-node": "^10.9.2"
   }
