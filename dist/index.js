@@ -61,10 +61,12 @@ app.use((0, cors_1.default)({
 }));
 // Remove the problematic wildcard options route
 // app.options("*", cors());
-// Add COOP/COEP headers for PayPal popup compatibility
+// Add COOP/COEP headers for security, but allow popup functionality
 app.use((req, res, next) => {
-    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-    res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+    // Override COOP/COEP headers that interfere with window.close in popups
+    // Set to values that won't block window.close operations
+    res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
     next();
 });
 // Pre-flight handling is managed by CORS middleware above
