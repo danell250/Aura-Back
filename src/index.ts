@@ -39,8 +39,7 @@ app.use(cors({
   credentials: true
 }));
 
-// IMPORTANT: handle preflight
-app.options("*", cors());
+// Pre-flight handling is managed by CORS middleware above
 app.use(express.json());
 
 // Debug middleware to log all requests

@@ -30,7 +30,7 @@ const fs_1 = __importDefault(require("fs"));
 const db_1 = require("./db");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
-const PORT = process.env.PORT || 5002;
+const PORT = process.env.PORT || 5000;
 // Ensure uploads directory exists
 const uploadsDir = path_1.default.join(__dirname, '../uploads');
 if (!fs_1.default.existsSync(uploadsDir)) {
@@ -38,14 +38,17 @@ if (!fs_1.default.existsSync(uploadsDir)) {
 }
 const allowedOrigins = ((_a = process.env.ALLOWED_ORIGINS) === null || _a === void 0 ? void 0 : _a.split(',')) || [
     'https://auraradiance.vercel.app',
-    'https://auraraidiate.netlify.app/',
+    'https://auraradiance.netlify.app',
     'http://localhost:5000',
     'http://localhost:5173'
 ];
 app.use((0, cors_1.default)({
     origin: allowedOrigins,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true
 }));
+// Pre-flight handling is managed by CORS middleware above
 app.use(express_1.default.json());
 // Debug middleware to log all requests
 app.use((req, res, next) => {
