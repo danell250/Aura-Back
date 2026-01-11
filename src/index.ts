@@ -17,7 +17,7 @@ import { connectDB, checkDBHealth, isDBConnected } from './db';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5002;
+const PORT = process.env.PORT || 5000;
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, '../uploads');
