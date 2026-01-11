@@ -21,8 +21,6 @@ router.post('/:id/purchase-credits', (req, res) => {
     console.log('Purchase credits route hit!', req.params, req.body);
     usersController_1.usersController.purchaseCredits(req, res);
 });
-// POST /api/users/:id/spend-credits - Spend credits
-router.post('/:id/spend-credits', usersController_1.usersController.spendCredits);
 // Privacy and Data Management Routes
 // GET /api/users/:id/privacy-data - Export user's privacy data (GDPR compliance)
 router.get('/:id/privacy-data', usersController_1.usersController.getPrivacyData);
@@ -32,12 +30,6 @@ router.post('/:id/clear-data', usersController_1.usersController.clearUserData);
 router.get('/:id/privacy-settings', usersController_1.usersController.getPrivacySettings);
 // PUT /api/users/:id/privacy-settings - Update user's privacy settings
 router.put('/:id/privacy-settings', usersController_1.usersController.updatePrivacySettings);
-// POST /api/users/:id/spend-credits - Spend/deduct credits (must come before /:id routes)
-console.log('Registering spend-credits route for pattern /:id/spend-credits');
-router.post('/:id/spend-credits', (req, res) => {
-    console.log('Spend credits route hit!', req.params, req.body);
-    usersController_1.usersController.spendCredits(req, res);
-});
 // POST /api/users/:id/connect - Send connection request
 router.post('/:id/connect', usersController_1.usersController.sendConnectionRequest);
 // POST /api/users/:id/block - Block user
