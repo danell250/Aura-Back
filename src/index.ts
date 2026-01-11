@@ -33,9 +33,17 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
 ];
 
 app.use(cors({
-  origin: allowedOrigins,
+  origin: [
+    "http://localhost:5173",
+    "https://auraradiance.vercel.app",
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true
 }));
+
+// IMPORTANT: handle preflight
+app.options("*", cors());
 app.use(express.json());
 
 // Debug middleware to log all requests
