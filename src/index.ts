@@ -58,7 +58,7 @@ app.use(cors({
 // Middleware for general request processing
 app.use((req, res, next) => {
   // Set headers to fix Cross-Origin-Opener-Policy issues with popups
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
   res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
   next();
 });
