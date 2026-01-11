@@ -57,8 +57,9 @@ app.use(cors({
 
 // Middleware for general request processing
 app.use((req, res, next) => {
-  // Note: COOP/COEP headers may be added by hosting platform
-  // Our app-level middleware doesn't set these to allow hosting platform control
+  // Set headers to fix Cross-Origin-Opener-Policy issues with popups
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
   next();
 });
 
