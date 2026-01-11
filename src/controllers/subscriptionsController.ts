@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { getDb } from '../db';
+import { getDB } from '../db';
 
 interface Subscription {
   id: string;
@@ -19,7 +19,7 @@ export const subscriptionsController = {
   async getUserSubscriptions(req: Request, res: Response) {
     try {
       const { userId } = req.params;
-      const db = getDb();
+      const db = getDB();
       const subscriptions = await db.collection('subscriptions')
         .find({ userId })
         .sort({ createdDate: -1 })
@@ -41,7 +41,7 @@ export const subscriptionsController = {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
-      const db = getDb();
+      const db = getDB();
       const subscription: Subscription = {
         id: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         userId,
@@ -66,7 +66,7 @@ export const subscriptionsController = {
   async cancelSubscription(req: Request, res: Response) {
     try {
       const { subscriptionId } = req.params;
-      const db = getDb();
+      const db = getDB();
 
       const result = await db.collection('subscriptions').updateOne(
         { id: subscriptionId },
@@ -103,7 +103,7 @@ export const subscriptionsController = {
       //   return res.status(401).json({ error: 'Invalid webhook signature' });
       // }
 
-      const db = getDb();
+      const db = getDB();
 
       switch (event.event_type) {
         case 'BILLING.SUBSCRIPTION.ACTIVATED':

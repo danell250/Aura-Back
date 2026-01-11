@@ -24,6 +24,7 @@ const adsRoutes_1 = __importDefault(require("./routes/adsRoutes"));
 const commentsRoutes_1 = __importDefault(require("./routes/commentsRoutes"));
 const notificationsRoutes_1 = __importDefault(require("./routes/notificationsRoutes"));
 const messagesRoutes_1 = __importDefault(require("./routes/messagesRoutes"));
+const subscriptionsRoutes_1 = __importDefault(require("./routes/subscriptionsRoutes"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const db_1 = require("./db");
@@ -46,11 +47,24 @@ app.use((0, cors_1.default)({
     credentials: true
 }));
 app.use(express_1.default.json());
+// Debug middleware to log all requests
+app.use((req, res, next) => {
+    console.log(`🔍 Request: ${req.method} ${req.path} - ${new Date().toISOString()}`);
+    next();
+});
 // Serve uploaded files statically
 app.use('/uploads', express_1.default.static(uploadsDir));
 // Routes
 console.log('Registering routes...');
-app.use('/api/users', usersRoutes_1.default);
+app.use('/api/users', (req, res, next) => {
+    console.log(`Users route hit: ${req.method} ${req.path}`);
+    next();
+}, usersRoutes_1.default);
+// Direct test route for debugging
+app.post('/api/users/direct-test', (req, res) => {
+    console.log('Direct test route hit!');
+    res.json({ success: true, message: 'Direct route working!' });
+});
 app.use('/api/gemini', geminiRoutes_1.default);
 app.use('/api/upload', uploadRoutes_1.default);
 app.use('/api/posts', postsRoutes_1.default);
@@ -58,6 +72,7 @@ app.use('/api/ads', adsRoutes_1.default);
 app.use('/api/comments', commentsRoutes_1.default);
 app.use('/api/notifications', notificationsRoutes_1.default);
 app.use('/api/messages', messagesRoutes_1.default);
+app.use('/api/subscriptions', subscriptionsRoutes_1.default);
 console.log('Routes registered successfully');
 // Health check endpoints
 app.get('/health', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -94,6 +109,20 @@ app.get('/api/test', (_req, res) => {
         timestamp: new Date(),
         database: (0, db_1.isDBConnected)() ? 'connected' : 'disconnected'
     });
+});
+// Test POST route
+app.post('/api/test-post', (_req, res) => {
+    console.log('Test POST route hit!');
+    res.json({
+        message: 'POST route working!',
+        timestamp: new Date(),
+        database: (0, db_1.isDBConnected)() ? 'connected' : 'disconnected'
+    });
+});
+// Simple POST route at root level
+app.post('/test-simple', (_req, res) => {
+    console.log('Simple POST route hit!');
+    res.json({ message: 'Simple POST working!' });
 });
 // Direct users test route
 app.get('/api/users-direct', (_req, res) => {
