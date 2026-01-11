@@ -27,16 +27,13 @@ if (!fs.existsSync(uploadsDir)) {
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
   'https://auraradiance.vercel.app',
-  'https://auraraidiate.netlify.app/',
+  'https://auraradiance.netlify.app',
   'http://localhost:5000',
   'http://localhost:5173'
 ];
 
 app.use(cors({
-  origin: [
-    "http://localhost:5173",
-    "https://auraradiance.vercel.app",
-  ],
+  origin: allowedOrigins,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true
