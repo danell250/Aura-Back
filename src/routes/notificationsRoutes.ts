@@ -5,7 +5,7 @@ import { requireAuth, requireOwnership, optionalAuth } from '../middleware/authM
 const router = Router();
 
 // GET /api/notifications/user/:userId - Get notifications for a user (requires auth + ownership)
-router.get('/user/:userId', requireAuth, requireOwnership(), notificationsController.getNotificationsByUser);
+router.get('/user/:userId', requireAuth, requireOwnership('userId'), notificationsController.getNotificationsByUser);
 
 // POST /api/notifications - Create new notification (requires auth)
 router.post('/', requireAuth, notificationsController.createNotification);
@@ -14,7 +14,7 @@ router.post('/', requireAuth, notificationsController.createNotification);
 router.put('/:id/read', requireAuth, notificationsController.markAsRead);
 
 // PUT /api/notifications/user/:userId/read-all - Mark all notifications as read (requires auth + ownership)
-router.put('/user/:userId/read-all', requireAuth, requireOwnership(), notificationsController.markAllAsRead);
+router.put('/user/:userId/read-all', requireAuth, requireOwnership('userId'), notificationsController.markAllAsRead);
 
 // DELETE /api/notifications/:id - Delete notification (requires auth)
 router.delete('/:id', requireAuth, notificationsController.deleteNotification);
