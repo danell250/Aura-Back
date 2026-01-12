@@ -1,9 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import passport from 'passport';
-import session from 'express-session';
-import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import geminiRoutes from './routes/geminiRoutes';
 import uploadRoutes from './routes/uploadRoutes';
 import postsRoutes from './routes/postsRoutes';
@@ -13,86 +10,12 @@ import commentsRoutes from './routes/commentsRoutes';
 import notificationsRoutes from './routes/notificationsRoutes';
 import messagesRoutes from './routes/messagesRoutes';
 import subscriptionsRoutes from './routes/subscriptionsRoutes';
-import authRoutes from './routes/authRoutes';
 import privacyRoutes from './routes/privacyRoutes';
-import { attachUser } from './middleware/authMiddleware';
 import path from 'path';
 import fs from 'fs';
-import { connectDB, checkDBHealth, isDBConnected, getDB } from './db';
+import { connectDB, checkDBHealth, isDBConnected } from './db';
 
 dotenv.config();
-
-// Passport Google OAuth Strategy Configuration
-passport.use(new GoogleStrategy({
-  clientID: process.env.GOOGLE_CLIENT_ID || '63639970194-r83ifit3giq02jd1rgfq84uea5tbgv6h.apps.googleusercontent.com',
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET || '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',
-  callbackURL: "/auth/google/callback"
-},
-async (_accessToken, _refreshToken, profile, done) => {
-  try {
-    // Parse name from profile
-    const displayName = profile.displayName || '';
-    const nameParts = displayName.trim().split(/\s+/);
-    const firstName = nameParts[0] || 'User';
-    const lastName = nameParts.slice(1).join(' ') || '';
-    const email = profile.emails?.[0]?.value;
-    
-    if (!email) {
-      return done(new Error('Google account does not have an email address'), undefined);
-    }
-    
-    // Create user object with Google profile data
-    const user = {
-      id: profile.id,
-      googleId: profile.id,
-      firstName: firstName,
-      lastName: lastName,
-      name: displayName || `${firstName} ${lastName}`.trim(),
-      email: email.toLowerCase().trim(),
-      avatar: profile.photos?.[0]?.value || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
-      avatarType: 'image' as const,
-      handle: `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`,
-      bio: 'New to Aura',
-      industry: 'Other',
-      companyName: '',
-      phone: '',
-      dob: '',
-      acquaintances: [],
-      blockedUsers: [],
-      trustScore: 10,
-      auraCredits: 100,
-      activeGlow: 'none' as const
-    };
-    
-    return done(null, user);
-  } catch (error) {
-    console.error('Error in Google OAuth strategy:', error);
-    return done(error as any, undefined);
-  }
-}
-));
-
-// Serialize user for session - store user ID
-passport.serializeUser((user: any, done) => {
-  done(null, user.id);
-});
-
-// Deserialize user from session - fetch full user data from database
-passport.deserializeUser(async (id: string, done) => {
-  try {
-    const db = getDB();
-    const user = await db.collection('users').findOne({ id });
-    
-    if (user) {
-      done(null, user);
-    } else {
-      done(null, false);
-    }
-  } catch (error) {
-    console.error('Error deserializing user:', error);
-    done(error, null);
-  }
-});
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -130,24 +53,6 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization", "X-User-Id", "X-User-ID", "x-user-id"]
 }));
 
-// Remove the problematic wildcard options route
-// app.options("*", cors());
-
-// Session middleware
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'fallback_secret_for_development',
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    secure: process.env.NODE_ENV === 'production', // Set to true in production with HTTPS
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
-}));
-
-// Passport middleware
-app.use(passport.initialize());
-app.use(passport.session());
-
 // Middleware for general request processing
 app.use((req, res, next) => {
   // Set headers to fix Cross-Origin-Opener-Policy issues with popups
@@ -171,14 +76,8 @@ app.use('/uploads', express.static(uploadsDir));
 // Routes
 console.log('Registering routes...');
 
-// Authentication routes (should come first)
-app.use('/auth', authRoutes);
-
 // Privacy routes
 app.use('/api/privacy', privacyRoutes);
-
-// Apply user attachment middleware to all API routes
-app.use('/api', attachUser);
 
 app.use('/api/users', (req, res, next) => {
   console.log(`Users route hit: ${req.method} ${req.path}`);
@@ -204,6 +103,7 @@ app.post('/api/users/direct-test', (req, res) => {
   console.log('Direct test route hit!');
   res.json({ success: true, message: 'Direct route working!' });
 });
+
 app.use('/api/gemini', geminiRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/posts', postsRoutes);
