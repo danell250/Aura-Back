@@ -34,6 +34,8 @@ router.put('/:id/privacy-settings', authMiddleware_1.requireAuth, (0, authMiddle
 // Social interaction routes (require auth)
 // POST /api/users/:id/connect - Send connection request
 router.post('/:id/connect', authMiddleware_1.requireAuth, usersController_1.usersController.sendConnectionRequest);
+// POST /api/users/:id/accept-connection - Accept connection request
+router.post('/:id/accept-connection', authMiddleware_1.requireAuth, usersController_1.usersController.acceptConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', authMiddleware_1.requireAuth, usersController_1.usersController.blockUser);
 // POST /api/users/:id/record-profile-view - Record profile view
