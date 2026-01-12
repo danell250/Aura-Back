@@ -15,6 +15,7 @@ import messagesRoutes from './routes/messagesRoutes';
 import subscriptionsRoutes from './routes/subscriptionsRoutes';
 import authRoutes from './routes/authRoutes';
 import privacyRoutes from './routes/privacyRoutes';
+import dataExportRoutes from './routes/dataExportRoutes';
 import { attachUser } from './middleware/authMiddleware';
 import path from 'path';
 import fs from 'fs';
@@ -176,6 +177,9 @@ app.use('/auth', authRoutes);
 
 // Privacy routes
 app.use('/api/privacy', privacyRoutes);
+
+// Data export routes
+app.use('/api/data-export', dataExportRoutes);
 
 // Apply user attachment middleware to all API routes
 app.use('/api', attachUser);
