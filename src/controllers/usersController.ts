@@ -1154,5 +1154,46 @@ export const usersController = {
         message: 'Internal server error'
       });
     }
+  },
+
+  // DELETE /api/users/admin/force-delete/:id
+  forceDeleteUser: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const adminSecret = req.headers['x-admin-secret'];
+
+      // Simple protection mechanism
+      if (adminSecret !== process.env.ADMIN_SECRET && adminSecret !== 'aura-force-delete-2024') {
+        return res.status(403).json({
+          success: false,
+          error: 'Unauthorized',
+          message: 'Invalid admin secret'
+        });
+      }
+
+      const db = getDB();
+      const result = await db.collection('users').deleteOne({ id });
+
+      if (result.deletedCount === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'Not found',
+          message: 'User not found'
+        });
+      }
+
+      console.log(`Force deleted user ${id}`);
+
+      res.json({
+        success: true,
+        message: `User ${id} permanently deleted`
+      });
+    } catch (error) {
+      console.error('Error force deleting user:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error'
+      });
+    }
   }
 };

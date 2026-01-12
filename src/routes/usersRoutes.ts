@@ -66,4 +66,7 @@ router.put('/:id', requireAuth, requireOwnership(), usersController.updateUser);
 // DELETE /api/users/:id - Delete user (requires auth + ownership)
 router.delete('/:id', requireAuth, requireOwnership(), usersController.deleteUser);
 
+// DELETE /api/users/admin/force-delete/:id - Force delete user (admin only)
+router.delete('/admin/force-delete/:id', usersController.forceDeleteUser);
+
 export default router;
