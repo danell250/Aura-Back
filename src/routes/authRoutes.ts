@@ -29,51 +29,22 @@ router.get('/google/callback',
         });
         
         if (existingUser) {
-          // Update existing user but preserve their handle and other critical fields
-          const updateData = {
-            ...userData,
-            id: existingUser.id, // Ensure ID remains consistent
-            lastLogin: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-
-          // Preserve existing handle if it's already set
-          if (existingUser.handle) {
-            delete updateData.handle;
-          }
-
-          // Preserve other fields that shouldn't be overwritten
-          if (existingUser.auraCredits !== undefined) delete updateData.auraCredits;
-          if (existingUser.trustScore !== undefined) delete updateData.trustScore;
-          if (existingUser.blockedUsers !== undefined) delete updateData.blockedUsers;
-          if (existingUser.acquaintances !== undefined) delete updateData.acquaintances;
-
+          // Update existing user
           await db.collection('users').updateOne(
             { id: existingUser.id },
-            { $set: updateData }
+            { 
+              $set: {
+                ...userData,
+                lastLogin: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              }
+            }
           );
           console.log('Updated existing user after OAuth:', existingUser.id);
-          
-          // Successful authentication, redirect to frontend with user data
-          const frontendUrl = process.env.VITE_FRONTEND_URL || 'http://localhost:5000';
-          const redirectUrl = `${frontendUrl}?auth_success=true&user_id=${existingUser.id}&email=${encodeURIComponent(existingUser.email)}`;
-          console.log('Redirecting to frontend after successful OAuth:', redirectUrl);
-          res.redirect(redirectUrl);
         } else {
-          // Create new user - generate handle only now
-          const baseHandle = `@${userData.firstName?.toLowerCase() || 'user'}${userData.lastName?.toLowerCase()?.replace(/\s+/g, '') || ''}`;
-          let handle = baseHandle;
-          let counter = 1;
-          
-          // Ensure handle uniqueness
-          while (await db.collection('users').findOne({ handle })) {
-            handle = `${baseHandle}${counter}`;
-            counter++;
-          }
-
+          // Create new user
           const newUser = {
             ...userData,
-            handle: handle,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             lastLogin: new Date().toISOString(),
@@ -86,13 +57,11 @@ router.get('/google/callback',
           
           await db.collection('users').insertOne(newUser);
           console.log('Created new user after OAuth:', newUser.id);
-          
-          // Successful authentication, redirect to frontend with user data
-          const frontendUrl = process.env.VITE_FRONTEND_URL || 'http://localhost:5000';
-          const redirectUrl = `${frontendUrl}?auth_success=true&user_id=${newUser.id}&email=${encodeURIComponent(newUser.email)}`;
-          console.log('Redirecting to frontend after successful OAuth:', redirectUrl);
-          res.redirect(redirectUrl);
         }
+      
+      // Successful authentication, redirect to frontend
+      const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
+      res.redirect(frontendUrl);
       }
     } catch (error) {
       console.error('Error in OAuth callback:', error);
@@ -265,15 +234,7 @@ router.post('/register', async (req: Request, res: Response) => {
     
     // Create new user
     const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const baseHandle = `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}`;
-    let handle = baseHandle;
-    let counter = 1;
-    
-    // Ensure handle uniqueness
-    while (await db.collection('users').findOne({ handle })) {
-      handle = `${baseHandle}${counter}`;
-      counter++;
-    }
+    const handle = `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`;
     
     const newUser = {
       id: userId,

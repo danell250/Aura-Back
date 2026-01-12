@@ -51,6 +51,7 @@ async (_accessToken, _refreshToken, profile, done) => {
       email: email.toLowerCase().trim(),
       avatar: profile.photos?.[0]?.value || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
       avatarType: 'image' as const,
+      handle: `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`,
       bio: 'New to Aura',
       industry: 'Other',
       companyName: '',
@@ -183,41 +184,6 @@ app.use('/api/users', (req, res, next) => {
   console.log(`Users route hit: ${req.method} ${req.path}`);
   next();
 }, usersRoutes);
-
-// API Google OAuth routes (for frontend compatibility)
-app.get('/api/auth/google',
-  passport.authenticate('google', { scope: ['profile', 'email'] })
-);
-
-app.get('/api/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: '/login' }),
-  (req, res) => {
-    // Successful authentication, redirect to frontend
-    res.redirect(process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app');
-  }
-);
-
-// Google OAuth routes (legacy - moved to /auth)
-app.get('/auth/google',
-  passport.authenticate('google', { scope: ['profile', 'email'] })
-);
-
-app.get('/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: '/login' }),
-  (req, res) => {
-    // Successful authentication, redirect to frontend
-    res.redirect(process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app');
-  }
-);
-
-// Get current user info (legacy - moved to /auth)
-app.get('/auth/user', (req, res) => {
-  if (req.isAuthenticated && req.isAuthenticated()) {
-    res.json({ user: req.user });
-  } else {
-    res.status(401).json({ error: 'Not authenticated' });
-  }
-});
 
 // Debug endpoint to check environment variables
 app.get('/api/debug/env', (req, res) => {

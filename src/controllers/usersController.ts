@@ -136,27 +136,12 @@ export const usersController = {
 
       // Create new user with proper ID
       const userId = userData.id || `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
-      // Generate handle deterministically if not provided
-      let finalHandle = userData.handle;
-      if (!finalHandle) {
-        const baseHandle = `@${userData.firstName?.toLowerCase() || 'user'}${userData.lastName?.toLowerCase() || ''}`;
-        finalHandle = baseHandle;
-        let counter = 1;
-        
-        // Ensure handle uniqueness
-        while (await db.collection('users').findOne({ handle: finalHandle })) {
-          finalHandle = `${baseHandle}${counter}`;
-          counter++;
-        }
-      }
-      
       const newUser = {
         id: userId,
         firstName: userData.firstName,
         lastName: userData.lastName,
         name: userData.name || `${userData.firstName} ${userData.lastName}`,
-        handle: finalHandle,
+        handle: userData.handle || `@${userData.firstName.toLowerCase()}${userData.lastName.toLowerCase()}`,
         avatar: userData.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
         avatarType: userData.avatarType || 'image',
         email: userData.email,
