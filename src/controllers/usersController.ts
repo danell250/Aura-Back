@@ -658,7 +658,7 @@ export const usersController = {
       // In production, this would:
       // 1. Anonymize or delete user data across all tables
       // 2. Remove posts, comments, reactions, messages
-      // 3. Clear profile views, connections, notifications
+      // 3. Clear profile views, acquaintances, notifications
       // 4. Purge uploaded files and media
       // 5. Remove from search indexes
       // 6. Clear analytics and tracking data
@@ -676,7 +676,7 @@ export const usersController = {
           'Account data',
           'Posts and comments',
           'Messages and conversations',
-          'Connections and relationships',
+          'Acquaintances and relationships',
           'Media files and uploads',
           'Activity logs and analytics'
         ]

@@ -25,10 +25,10 @@ export const dataExportController = {
       const exportRequest = {
         id: exportRequestId,
         userId: userId,
-        status: 'processing',
+        status: 'processing' as const,
         requestedAt: new Date().toISOString(),
-        completedAt: null,
-        downloadUrl: null,
+        completedAt: null as string | null,
+        downloadUrl: null as string | null,
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
         ipAddress: req.ip,
         userAgent: req.get('User-Agent')
@@ -42,14 +42,17 @@ export const dataExportController = {
       const exportData = await generateUserDataExport(userId, db);
       
       // Update export request
-      exportRequest.status = 'completed';
-      exportRequest.completedAt = new Date().toISOString();
-      exportRequest.downloadUrl = `/api/data-export/download/${exportRequestId}`;
+      const updatedExportRequest = {
+        ...exportRequest,
+        status: 'completed' as const,
+        completedAt: new Date().toISOString(),
+        downloadUrl: `/api/data-export/download/${exportRequestId}`
+      };
 
       // Store the export data temporarily (in production, save to file storage)
       // For demo purposes, we'll store in memory or database
       await db.collection('dataExports').insertOne({
-        ...exportRequest,
+        ...updatedExportRequest,
         data: exportData
       });
 
@@ -58,8 +61,8 @@ export const dataExportController = {
         data: {
           exportRequestId,
           status: 'completed',
-          downloadUrl: exportRequest.downloadUrl,
-          expiresAt: exportRequest.expiresAt,
+          downloadUrl: updatedExportRequest.downloadUrl,
+          expiresAt: updatedExportRequest.expiresAt,
           dataSize: JSON.stringify(exportData).length,
           recordCount: calculateRecordCount(exportData)
         },
@@ -195,35 +198,49 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
       exportedAt: new Date().toISOString(),
       exportVersion: '1.0',
       format: 'JSON',
-      description: 'Complete personal data export from Aura Social Platform'
+      description: 'Complete personal data export from Aura Social Platform',
+      summary: {
+        totalPosts: 0,
+        totalComments: 0,
+        totalReactions: 0,
+        totalAcquaintances: 0,
+        totalNotifications: 0,
+        totalMessages: 0,
+        accountAge: 0,
+        lastActivity: null as string | null
+      },
+      errors: [] as Array<{ message: string; timestamp: string; error: string }>
     },
-    personalInformation: {},
-    accountData: {},
+    personalInformation: {} as any,
+    accountData: {} as any,
     contentData: {
-      posts: [],
-      comments: [],
-      reactions: []
+      posts: [] as any[],
+      comments: [] as any[],
+      reactions: [] as any[]
     },
     socialData: {
-      connections: [],
-      blockedUsers: [],
-      profileViews: [],
-      sentConnectionRequests: []
+      acquaintances: [] as string[],
+      blockedUsers: [] as string[],
+      profileViews: [] as string[],
+      sentConnectionRequests: [] as string[]
     },
     privacyData: {
-      settings: {},
-      consentRecords: [],
-      dataProcessingHistory: []
+      settings: {} as any,
+      consentRecords: [] as Array<{ type: string; consent: boolean; timestamp: string }>,
+      dataProcessingHistory: [] as Array<{ action: string; timestamp: string; description: string }>
     },
     activityData: {
-      loginHistory: [],
-      analyticsEvents: [],
-      interactions: []
+      loginHistory: [] as any[],
+      analyticsEvents: [] as any[],
+      interactions: [] as any[]
     },
     systemData: {
-      notifications: [],
-      messages: [],
-      subscriptions: []
+      notifications: [] as any[],
+      messages: {
+        sent: [] as any[],
+        received: [] as any[]
+      },
+      subscriptions: [] as any[]
     }
   };
 
@@ -264,7 +281,7 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
       };
 
       exportData.socialData = {
-        connections: user.acquaintances || [],
+        acquaintances: user.acquaintances || [],
         blockedUsers: user.blockedUsers || [],
         profileViews: user.profileViews || [],
         sentConnectionRequests: user.sentConnectionRequests || []
@@ -275,7 +292,7 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
 
     // 2. Get user's posts
     const posts = await db.collection('posts').find({ 'author.id': userId }).toArray();
-    exportData.contentData.posts = posts.map(post => ({
+    exportData.contentData.posts = posts.map((post: any) => ({
       id: post.id,
       content: post.content,
       mediaUrl: post.mediaUrl,
@@ -294,7 +311,7 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
 
     // 3. Get user's comments
     const comments = await db.collection('comments').find({ 'author.id': userId }).toArray();
-    exportData.contentData.comments = comments.map(comment => ({
+    exportData.contentData.comments = comments.map((comment: any) => ({
       id: comment.id,
       postId: comment.postId,
       text: comment.text,
@@ -314,13 +331,13 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
     }).toArray();
 
     exportData.contentData.reactions = [
-      ...postsWithUserReactions.map(post => ({
+      ...postsWithUserReactions.map((post: any) => ({
         type: 'post',
         targetId: post.id,
         reaction: post.userReactions[userId],
         timestamp: new Date().toISOString() // In production, store reaction timestamps
       })),
-      ...commentsWithUserReactions.map(comment => ({
+      ...commentsWithUserReactions.map((comment: any) => ({
         type: 'comment',
         targetId: comment.id,
         postId: comment.postId,
@@ -331,7 +348,7 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
 
     // 5. Get user's notifications
     const notifications = await db.collection('notifications').find({ userId: userId }).toArray();
-    exportData.systemData.notifications = notifications.map(notification => ({
+    exportData.systemData.notifications = notifications.map((notification: any) => ({
       id: notification.id,
       type: notification.type,
       message: notification.message,
@@ -347,7 +364,7 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
     const receivedMessages = await db.collection('messages').find({ receiverId: userId }).toArray();
     
     exportData.systemData.messages = {
-      sent: sentMessages.map(msg => ({
+      sent: sentMessages.map((msg: any) => ({
         id: msg.id,
         receiverId: msg.receiverId,
         text: msg.text,
@@ -357,7 +374,7 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
         isRead: msg.isRead,
         createdAt: msg.createdAt || new Date(msg.timestamp).toISOString()
       })),
-      received: receivedMessages.map(msg => ({
+      received: receivedMessages.map((msg: any) => ({
         id: msg.id,
         senderId: msg.senderId,
         text: msg.text,
@@ -386,22 +403,22 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
       {
         type: 'data_processing',
         consent: user?.privacySettings?.dataProcessingConsent || false,
-        timestamp: user?.privacySettings?.updatedAt || user?.createdAt
+        timestamp: user?.privacySettings?.updatedAt || user?.createdAt || new Date().toISOString()
       },
       {
         type: 'analytics',
         consent: user?.privacySettings?.analyticsConsent || false,
-        timestamp: user?.privacySettings?.updatedAt || user?.createdAt
+        timestamp: user?.privacySettings?.updatedAt || user?.createdAt || new Date().toISOString()
       },
       {
         type: 'marketing',
         consent: user?.privacySettings?.marketingConsent || false,
-        timestamp: user?.privacySettings?.updatedAt || user?.createdAt
+        timestamp: user?.privacySettings?.updatedAt || user?.createdAt || new Date().toISOString()
       },
       {
         type: 'third_party_sharing',
         consent: user?.privacySettings?.thirdPartySharing || false,
-        timestamp: user?.privacySettings?.updatedAt || user?.createdAt
+        timestamp: user?.privacySettings?.updatedAt || user?.createdAt || new Date().toISOString()
       }
     ];
 
@@ -409,12 +426,12 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
     exportData.privacyData.dataProcessingHistory = [
       {
         action: 'account_created',
-        timestamp: user?.createdAt,
+        timestamp: user?.createdAt || new Date().toISOString(),
         description: 'User account created with initial data processing consent'
       },
       {
         action: 'privacy_settings_updated',
-        timestamp: user?.privacySettings?.updatedAt || user?.createdAt,
+        timestamp: user?.privacySettings?.updatedAt || user?.createdAt || new Date().toISOString(),
         description: 'Privacy settings last updated by user'
       },
       {
@@ -429,11 +446,11 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
       totalPosts: exportData.contentData.posts.length,
       totalComments: exportData.contentData.comments.length,
       totalReactions: exportData.contentData.reactions.length,
-      totalConnections: exportData.socialData.connections.length,
+      totalAcquaintances: exportData.socialData.acquaintances.length,
       totalNotifications: exportData.systemData.notifications.length,
       totalMessages: exportData.systemData.messages.sent.length + exportData.systemData.messages.received.length,
       accountAge: user?.createdAt ? Math.floor((Date.now() - new Date(user.createdAt).getTime()) / (1000 * 60 * 60 * 24)) : 0,
-      lastActivity: user?.lastLogin
+      lastActivity: user?.lastLogin || null
     };
 
   } catch (error) {
@@ -459,7 +476,7 @@ function calculateRecordCount(exportData: any): number {
   if (exportData.contentData?.posts) count += exportData.contentData.posts.length;
   if (exportData.contentData?.comments) count += exportData.contentData.comments.length;
   if (exportData.contentData?.reactions) count += exportData.contentData.reactions.length;
-  if (exportData.socialData?.connections) count += exportData.socialData.connections.length;
+  if (exportData.socialData?.acquaintances) count += exportData.socialData.acquaintances.length;
   if (exportData.systemData?.notifications) count += exportData.systemData.notifications.length;
   if (exportData.systemData?.messages?.sent) count += exportData.systemData.messages.sent.length;
   if (exportData.systemData?.messages?.received) count += exportData.systemData.messages.received.length;
