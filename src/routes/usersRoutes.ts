@@ -45,6 +45,9 @@ router.put('/:id/privacy-settings', requireAuth, requireOwnership(), usersContro
 // POST /api/users/:id/connect - Send connection request
 router.post('/:id/connect', requireAuth, usersController.sendConnectionRequest);
 
+// POST /api/users/:id/accept-connection - Accept connection request
+router.post('/:id/accept-connection', requireAuth, usersController.acceptConnectionRequest);
+
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', requireAuth, usersController.blockUser);
 

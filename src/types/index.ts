@@ -16,7 +16,7 @@ export interface User {
   email?: string;
   phone?: string;
   acquaintances?: string[]; 
-  sentConnectionRequests?: string[];
+  sentAcquaintanceRequests?: string[];
   notifications?: Notification[];
   blockedUsers?: string[];
   profileViews?: string[];

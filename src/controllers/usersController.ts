@@ -255,7 +255,7 @@ export const usersController = {
       }
       
       // Check if the requester has already sent a connection request
-      const requesterSentRequests = requester.sentConnectionRequests || [];
+      const requesterSentRequests = requester.sentAcquaintanceRequests || [];
       if (requesterSentRequests.includes(targetUserId)) {
         return res.status(400).json({
           success: false,
@@ -267,7 +267,7 @@ export const usersController = {
       // Create a notification for the target user
       const newNotification = {
         id: `notif-conn-${Date.now()}-${Math.random()}`,
-        type: 'connection_request',
+        type: 'acquaintance_request',
         fromUser: {
           id: requester.id,
           name: requester.name,
@@ -276,7 +276,7 @@ export const usersController = {
           avatarType: requester.avatarType
         },
         message: 'wants to connect with you',
-        timestamp: new Date().toISOString(),
+        timestamp: Date.now(),
         isRead: false,
         connectionId: targetUserId
       };
@@ -299,7 +299,7 @@ export const usersController = {
         { id },
         { 
           $set: { 
-            sentConnectionRequests: updatedSentRequests,
+            sentAcquaintanceRequests: updatedSentRequests,
             updatedAt: new Date().toISOString()
           }
         }
@@ -319,6 +319,121 @@ export const usersController = {
       res.status(500).json({
         success: false,
         error: 'Failed to send connection request',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // POST /api/users/:id/accept-connection - Accept connection request
+  acceptConnectionRequest: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params; // The ID of the user accepting the request (acceptor)
+      const { requesterId } = req.body; // The ID of the user who sent the request
+
+      const db = getDB();
+
+      // Find both users
+      const acceptor = await db.collection('users').findOne({ id });
+      if (!acceptor) {
+        return res.status(404).json({
+          success: false,
+          error: 'Acceptor not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      const requester = await db.collection('users').findOne({ id: requesterId });
+      if (!requester) {
+        return res.status(404).json({
+          success: false,
+          error: 'Requester not found',
+          message: `User with ID ${requesterId} does not exist`
+        });
+      }
+
+      // Check if they are already connected
+      const acceptorAcquaintances = acceptor.acquaintances || [];
+      if (acceptorAcquaintances.includes(requesterId)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Already connected',
+          message: 'Users are already connected'
+        });
+      }
+
+      // Update acceptor (add acquaintance, update notifications)
+      const updatedAcceptorAcquaintances = [...acceptorAcquaintances, requesterId];
+      // Mark the specific request notification as read
+      const updatedNotifications = (acceptor.notifications || []).map((n: any) => {
+        if (n.type === 'acquaintance_request' && n.fromUser.id === requesterId) {
+          return { ...n, isRead: true };
+        }
+        return n;
+      });
+
+      await db.collection('users').updateOne(
+        { id },
+        { 
+          $set: { 
+            acquaintances: updatedAcceptorAcquaintances,
+            notifications: updatedNotifications,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+
+      // Update requester (add acquaintance, remove sent request, add acceptance notification)
+      const requesterSentRequests = (requester.sentAcquaintanceRequests || []).filter((rid: string) => rid !== id);
+      const requesterAcquaintances = [...(requester.acquaintances || []), id];
+      
+      const acceptanceNotification = {
+        id: `notif-accept-${Date.now()}-${Math.random()}`,
+        type: 'acquaintance_accepted', // Using a generic type or reuse 'acquaintance_request' with different message
+        fromUser: {
+          id: acceptor.id,
+          name: acceptor.name,
+          handle: acceptor.handle,
+          avatar: acceptor.avatar,
+          avatarType: acceptor.avatarType
+        },
+        message: 'accepted your connection request',
+        timestamp: Date.now(),
+        isRead: false,
+        connectionId: id
+      };
+
+      await db.collection('users').updateOne(
+        { id: requesterId },
+        { 
+          $set: { 
+            acquaintances: requesterAcquaintances,
+            sentAcquaintanceRequests: requesterSentRequests,
+            updatedAt: new Date().toISOString()
+          },
+          $push: {
+            notifications: {
+              $each: [acceptanceNotification],
+              $position: 0
+            }
+          } as any
+        }
+      );
+
+      res.json({
+        success: true,
+        data: {
+          acceptorId: id,
+          requesterId: requesterId,
+          timestamp: new Date().toISOString()
+        },
+        message: 'Connection request accepted successfully'
+      });
+
+    } catch (error) {
+      console.error('Error accepting connection request:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to accept connection request',
         message: 'Internal server error'
       });
     }
@@ -909,6 +1024,106 @@ export const usersController = {
       res.status(500).json({
         success: false,
         error: 'Failed to record profile view',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // POST /api/users/:id/connect - Send connection request
+  sendConnectionRequest: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { requesterId } = req.body;
+      const db = getDB();
+
+      if (id === requesterId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid request',
+          message: 'Cannot send connection request to yourself'
+        });
+      }
+
+      // Find the target user
+      const targetUser = await db.collection('users').findOne({ id });
+      if (!targetUser) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      // Find the requester
+      const requester = await db.collection('users').findOne({ id: requesterId });
+      if (!requester) {
+        return res.status(404).json({
+          success: false,
+          error: 'Requester not found',
+          message: `User with ID ${requesterId} does not exist`
+        });
+      }
+
+      // Check if already connected or requested
+      const targetAcquaintances = targetUser.acquaintances || [];
+      if (targetAcquaintances.includes(requesterId)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Already connected',
+          message: 'You are already connected with this user'
+        });
+      }
+
+      // Create notification for target user
+      const newNotification = {
+        id: `notif-conn-${Date.now()}-${Math.random()}`,
+        type: 'acquaintance_request',
+        fromUser: {
+          id: requester.id,
+          name: requester.name,
+          handle: requester.handle,
+          avatar: requester.avatar,
+          avatarType: requester.avatarType
+        },
+        message: 'wants to connect with you',
+        timestamp: Date.now(),
+        isRead: false
+      };
+
+      // Add to target user's notifications and sentRequests
+      const updatedNotifications = [newNotification, ...(targetUser.notifications || [])];
+      
+      // Update target user
+      await db.collection('users').updateOne(
+        { id },
+        { 
+          $set: { 
+            notifications: updatedNotifications,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+
+      // Update requester's sentAcquaintanceRequests
+      await db.collection('users').updateOne(
+        { id: requesterId },
+        {
+          $addToSet: { sentAcquaintanceRequests: id },
+          $set: { updatedAt: new Date().toISOString() }
+        }
+      );
+
+      res.json({
+        success: true,
+        message: 'Connection request sent successfully',
+        data: newNotification
+      });
+
+    } catch (error) {
+      console.error('Error sending connection request:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to send connection request',
         message: 'Internal server error'
       });
     }
