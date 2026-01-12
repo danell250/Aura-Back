@@ -48,6 +48,44 @@ const mockPosts: any[] = [
 ];
 
 export const postsController = {
+  // GET /api/posts/search - Search posts
+  searchPosts: async (req: Request, res: Response) => {
+    try {
+      const { q } = req.query;
+      
+      if (!q || typeof q !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing search query',
+          message: 'Query parameter q is required'
+        });
+      }
+
+      const searchTerms = q.toLowerCase().split(' ').filter(term => term.length > 0);
+      
+      const filteredPosts = mockPosts.filter(post => {
+        const contentMatch = post.content && searchTerms.some(term => post.content.toLowerCase().includes(term));
+        const authorNameMatch = post.author.name && searchTerms.some(term => post.author.name.toLowerCase().includes(term));
+        const authorHandleMatch = post.author.handle && searchTerms.some(term => post.author.handle.toLowerCase().includes(term));
+        const hashtagMatch = post.hashtags && post.hashtags.some((tag: string) => searchTerms.some(term => tag.toLowerCase().includes(term)));
+        
+        return contentMatch || authorNameMatch || authorHandleMatch || hashtagMatch;
+      });
+
+      res.json({
+        success: true,
+        data: filteredPosts
+      });
+    } catch (error) {
+      console.error('Error searching posts:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to search posts',
+        message: 'Internal server error'
+      });
+    }
+  },
+
   // GET /api/posts - Get all posts
   getAllPosts: async (req: Request, res: Response) => {
     try {

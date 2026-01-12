@@ -3,6 +3,9 @@ import { postsController } from '../controllers/postsController';
 
 const router = Router();
 
+// GET /api/posts/search - Search posts
+router.get('/search', postsController.searchPosts);
+
 // GET /api/posts - Get all posts
 router.get('/', postsController.getAllPosts);
 

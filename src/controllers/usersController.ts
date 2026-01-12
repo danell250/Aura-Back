@@ -77,20 +77,54 @@ export const usersController = {
 
       const db = getDB();
       
-      // Check if user already exists
-      const existingUser = await db.collection('users').findOne({ 
-        $or: [
-          { email: userData.email },
-          { handle: userData.handle }
-        ]
-      });
-      
-      if (existingUser) {
-        return res.status(409).json({
-          success: false,
-          error: 'User already exists',
-          message: 'A user with this email or handle already exists'
+      // Check if user already exists by email
+      const existingUserByEmail = await db.collection('users').findOne({ email: userData.email });
+
+      if (existingUserByEmail) {
+        // User exists, update them instead of returning 409
+        const userId = existingUserByEmail.id;
+        const updateData = {
+          ...userData,
+          id: userId, // Ensure ID remains consistent
+          updatedAt: new Date().toISOString()
+        };
+
+        // Remove fields that shouldn't be overwritten blindly if they exist in DB
+        // e.g., if we want to preserve credits or trust score from DB if not provided in payload
+        // But for now, let's assume the payload might have fresher profile info from Google
+        // However, we should preserve sensitive fields like auraCredits if they aren't meant to be reset
+        if (existingUserByEmail.auraCredits !== undefined) delete updateData.auraCredits;
+        if (existingUserByEmail.trustScore !== undefined) delete updateData.trustScore;
+        if (existingUserByEmail.blockedUsers !== undefined) delete updateData.blockedUsers;
+        // acquaintances might be complex to merge, but if payload has empty array, we shouldn't overwrite existing
+        if (existingUserByEmail.acquaintances && (!updateData.acquaintances || updateData.acquaintances.length === 0)) {
+           delete updateData.acquaintances;
+        }
+
+        await db.collection('users').updateOne(
+          { id: userId },
+          { $set: updateData }
+        );
+
+        console.log('User already exists, updated profile:', userId);
+
+        return res.status(200).json({
+          success: true,
+          data: { ...existingUserByEmail, ...updateData },
+          message: 'User updated successfully'
         });
+      }
+
+      // Check if handle is taken by someone else
+      if (userData.handle) {
+        const existingUserByHandle = await db.collection('users').findOne({ handle: userData.handle });
+        if (existingUserByHandle) {
+           return res.status(409).json({
+            success: false,
+            error: 'Handle already taken',
+            message: 'A user with this handle already exists'
+          });
+        }
       }
 
       // Create new user with proper ID
