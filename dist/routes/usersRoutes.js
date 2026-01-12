@@ -38,6 +38,8 @@ router.post('/:id/connect', authMiddleware_1.optionalAuth, usersController_1.use
 router.post('/:id/accept-connection', authMiddleware_1.optionalAuth, usersController_1.usersController.acceptConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', authMiddleware_1.requireAuth, usersController_1.usersController.blockUser);
+// POST /api/users/:id/remove-acquaintance - Remove acquaintance
+router.post('/:id/remove-acquaintance', authMiddleware_1.requireAuth, usersController_1.usersController.removeAcquaintance);
 // POST /api/users/:id/record-profile-view - Record profile view
 router.post('/:id/record-profile-view', authMiddleware_1.requireAuth, usersController_1.usersController.recordProfileView);
 // GET /api/users/:id/notifications - Get user notifications (requires auth + ownership)

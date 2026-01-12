@@ -1134,5 +1134,89 @@ export const usersController = {
         message: 'Internal server error'
       });
     }
+  },
+
+  // POST /api/users/:id/remove-acquaintance - Remove acquaintance
+  removeAcquaintance: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params; // The ID of the user removing the acquaintance
+      const { targetUserId } = req.body; // The ID of the user to remove
+
+      const db = getDB();
+
+      // Find both users
+      const currentUser = await db.collection('users').findOne({ id });
+      if (!currentUser) {
+        return res.status(404).json({
+          success: false,
+          error: 'Current user not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      const targetUser = await db.collection('users').findOne({ id: targetUserId });
+      if (!targetUser) {
+        return res.status(404).json({
+          success: false,
+          error: 'Target user not found',
+          message: `User with ID ${targetUserId} does not exist`
+        });
+      }
+
+      // Check if they are currently connected
+      const currentAcquaintances = currentUser.acquaintances || [];
+      if (!currentAcquaintances.includes(targetUserId)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Not connected',
+          message: 'Users are not connected'
+        });
+      }
+
+      // Remove target user from current user's acquaintances
+      const updatedCurrentUserAcquaintances = currentAcquaintances.filter((aid: string) => aid !== targetUserId);
+      
+      await db.collection('users').updateOne(
+        { id },
+        { 
+          $set: { 
+            acquaintances: updatedCurrentUserAcquaintances,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+
+      // Remove current user from target user's acquaintances
+      const targetUserAcquaintances = targetUser.acquaintances || [];
+      const updatedTargetUserAcquaintances = targetUserAcquaintances.filter((aid: string) => aid !== id);
+      
+      await db.collection('users').updateOne(
+        { id: targetUserId },
+        { 
+          $set: { 
+            acquaintances: updatedTargetUserAcquaintances,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+
+      res.json({
+        success: true,
+        data: {
+          userId: id,
+          removedUserId: targetUserId,
+          timestamp: new Date().toISOString()
+        },
+        message: 'Acquaintance removed successfully'
+      });
+
+    } catch (error) {
+      console.error('Error removing acquaintance:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to remove acquaintance',
+        message: 'Internal server error'
+      });
+    }
   }
 };

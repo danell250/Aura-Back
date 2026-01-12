@@ -51,6 +51,9 @@ router.post('/:id/accept-connection', optionalAuth, usersController.acceptConnec
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', requireAuth, usersController.blockUser);
 
+// POST /api/users/:id/remove-acquaintance - Remove acquaintance
+router.post('/:id/remove-acquaintance', requireAuth, usersController.removeAcquaintance);
+
 // POST /api/users/:id/record-profile-view - Record profile view
 router.post('/:id/record-profile-view', requireAuth, usersController.recordProfileView);
 
