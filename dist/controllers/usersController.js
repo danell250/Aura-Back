@@ -12,11 +12,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.usersController = void 0;
 const db_1 = require("../db");
 exports.usersController = {
-    // GET /api/users - Get all users
+    // GET /api/users - Get all users (respects showInSearch privacy setting)
     getAllUsers: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const db = (0, db_1.getDB)();
-            const users = yield db.collection('users').find({}).toArray();
+            // Filter out users who have explicitly set showInSearch to false
+            // Users without the setting (undefined) default to true (visible)
+            const query = {
+                $or: [
+                    { 'privacySettings.showInSearch': { $ne: false } },
+                    { 'privacySettings.showInSearch': { $exists: false } }
+                ]
+            };
+            const users = yield db.collection('users').find(query).toArray();
             res.json({
                 success: true,
                 data: users,
@@ -319,13 +327,25 @@ exports.usersController = {
             // Create a case-insensitive regex search
             const searchRegex = new RegExp(searchTerm, 'i');
             const searchResults = yield db.collection('users').find({
-                $or: [
-                    { name: searchRegex },
-                    { firstName: searchRegex },
-                    { lastName: searchRegex },
-                    { handle: searchRegex },
-                    { email: searchRegex },
-                    { bio: searchRegex }
+                $and: [
+                    // Privacy filter: only show users who allow being found in search
+                    {
+                        $or: [
+                            { 'privacySettings.showInSearch': { $ne: false } },
+                            { 'privacySettings.showInSearch': { $exists: false } }
+                        ]
+                    },
+                    // Text search filter
+                    {
+                        $or: [
+                            { name: searchRegex },
+                            { firstName: searchRegex },
+                            { lastName: searchRegex },
+                            { handle: searchRegex },
+                            { email: searchRegex },
+                            { bio: searchRegex }
+                        ]
+                    }
                 ]
             }).toArray();
             res.json({

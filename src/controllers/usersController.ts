@@ -365,13 +365,25 @@ export const usersController = {
       const searchRegex = new RegExp(searchTerm, 'i');
       
       const searchResults = await db.collection('users').find({
-        $or: [
-          { name: searchRegex },
-          { firstName: searchRegex },
-          { lastName: searchRegex },
-          { handle: searchRegex },
-          { email: searchRegex },
-          { bio: searchRegex }
+        $and: [
+          // Privacy filter: only show users who allow being found in search
+          {
+            $or: [
+              { 'privacySettings.showInSearch': { $ne: false } },
+              { 'privacySettings.showInSearch': { $exists: false } }
+            ]
+          },
+          // Text search filter
+          {
+            $or: [
+              { name: searchRegex },
+              { firstName: searchRegex },
+              { lastName: searchRegex },
+              { handle: searchRegex },
+              { email: searchRegex },
+              { bio: searchRegex }
+            ]
+          }
         ]
       }).toArray();
 

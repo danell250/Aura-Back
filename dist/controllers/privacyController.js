@@ -193,7 +193,7 @@ exports.privacyController = {
                 const searchTerm = q.toLowerCase().trim();
                 const searchRegex = new RegExp(searchTerm, 'i');
                 searchQuery.$and = [
-                    searchQuery.$or[0], // Keep the privacy filter
+                    { $or: searchQuery.$or }, // Keep the privacy filter
                     {
                         $or: [
                             { name: searchRegex },

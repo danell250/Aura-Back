@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { getDB } from '../db';
 
 // Mock data - in production this would come from database
 const mockComments: any[] = [
