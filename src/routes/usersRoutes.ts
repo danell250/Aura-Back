@@ -57,12 +57,6 @@ router.post('/:id/remove-acquaintance', requireAuth, usersController.removeAcqua
 // POST /api/users/:id/record-profile-view - Record profile view
 router.post('/:id/record-profile-view', requireAuth, usersController.recordProfileView);
 
-// GET /api/users/:id/notifications - Get user notifications (requires auth + ownership)
-router.get('/:id/notifications', requireAuth, requireOwnership(), usersController.getNotifications);
-
-// PUT /api/users/:id/notifications/read-all - Mark all notifications as read (requires auth + ownership)
-router.put('/:id/notifications/read-all', requireAuth, requireOwnership(), usersController.markAllNotificationsRead);
-
 // GET /api/users/:id - Get user by ID (public)
 router.get('/:id', optionalAuth, usersController.getUserById);
 

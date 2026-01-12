@@ -52,7 +52,7 @@ export const createNotificationInDB = async (userId: string, type: string, fromU
 };
 
 export const notificationsController = {
-  // GET /api/users/:userId/notifications - Get notifications for a user
+  // GET /api/notifications/user/:userId - Get notifications for a user
   getNotificationsByUser: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
@@ -206,7 +206,7 @@ export const notificationsController = {
     }
   },
 
-  // PUT /api/users/:userId/notifications/read-all - Mark all notifications as read
+  // PUT /api/notifications/user/:userId/read-all - Mark all notifications as read
   markAllAsRead: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;

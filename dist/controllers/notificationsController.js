@@ -55,7 +55,7 @@ const createNotificationInDB = (userId, type, fromUserId, message, postId, conne
 });
 exports.createNotificationInDB = createNotificationInDB;
 exports.notificationsController = {
-    // GET /api/users/:userId/notifications - Get notifications for a user
+    // GET /api/notifications/user/:userId - Get notifications for a user
     getNotificationsByUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
@@ -188,7 +188,7 @@ exports.notificationsController = {
             });
         }
     }),
-    // PUT /api/users/:userId/notifications/read-all - Mark all notifications as read
+    // PUT /api/notifications/user/:userId/read-all - Mark all notifications as read
     markAllAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;

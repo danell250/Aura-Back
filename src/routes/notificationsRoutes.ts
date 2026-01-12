@@ -1,21 +1,22 @@
 import { Router } from 'express';
 import { notificationsController } from '../controllers/notificationsController';
+import { requireAuth, requireOwnership, optionalAuth } from '../middleware/authMiddleware';
 
 const router = Router();
 
-// GET /api/users/:userId/notifications - Get notifications for a user
-router.get('/users/:userId/notifications', notificationsController.getNotificationsByUser);
+// GET /api/notifications/user/:userId - Get notifications for a user (requires auth + ownership)
+router.get('/user/:userId', requireAuth, requireOwnership(), notificationsController.getNotificationsByUser);
 
-// POST /api/notifications - Create new notification
-router.post('/', notificationsController.createNotification);
+// POST /api/notifications - Create new notification (requires auth)
+router.post('/', requireAuth, notificationsController.createNotification);
 
-// PUT /api/notifications/:id/read - Mark notification as read
-router.put('/:id/read', notificationsController.markAsRead);
+// PUT /api/notifications/:id/read - Mark notification as read (requires auth)
+router.put('/:id/read', requireAuth, notificationsController.markAsRead);
 
-// PUT /api/users/:userId/notifications/read-all - Mark all notifications as read
-router.put('/users/:userId/notifications/read-all', notificationsController.markAllAsRead);
+// PUT /api/notifications/user/:userId/read-all - Mark all notifications as read (requires auth + ownership)
+router.put('/user/:userId/read-all', requireAuth, requireOwnership(), notificationsController.markAllAsRead);
 
-// DELETE /api/notifications/:id - Delete notification
-router.delete('/:id', notificationsController.deleteNotification);
+// DELETE /api/notifications/:id - Delete notification (requires auth)
+router.delete('/:id', requireAuth, notificationsController.deleteNotification);
 
 export default router;
