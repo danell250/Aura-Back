@@ -14,6 +14,7 @@ import notificationsRoutes from './routes/notificationsRoutes';
 import messagesRoutes from './routes/messagesRoutes';
 import subscriptionsRoutes from './routes/subscriptionsRoutes';
 import authRoutes from './routes/authRoutes';
+import privacyRoutes from './routes/privacyRoutes';
 import { attachUser } from './middleware/authMiddleware';
 import path from 'path';
 import fs from 'fs';
@@ -172,6 +173,9 @@ console.log('Registering routes...');
 
 // Authentication routes (should come first)
 app.use('/auth', authRoutes);
+
+// Privacy routes
+app.use('/api/privacy', privacyRoutes);
 
 // Apply user attachment middleware to all API routes
 app.use('/api', attachUser);
