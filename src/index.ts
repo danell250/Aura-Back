@@ -114,7 +114,8 @@ app.use(cors({
     const allowed = [
       frontendUrl,
       "https://auraradiance.vercel.app", 
-      "http://localhost:5173"
+      "http://localhost:5173",
+      "http://localhost:5000"
     ].filter(Boolean); // Remove any undefined/null values
 
     if (allowed.includes(origin)) {
