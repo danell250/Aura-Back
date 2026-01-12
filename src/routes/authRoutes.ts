@@ -60,8 +60,7 @@ router.get('/google/callback',
         }
       
       // Successful authentication, redirect to frontend
-      const frontendUrl = process.env.VITE_FRONTEND_URL || 'http://localhost:5000';
-      console.log('Redirecting to frontend:', frontendUrl);
+      const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
       res.redirect(frontendUrl);
       }
     } catch (error) {
