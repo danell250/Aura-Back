@@ -21,6 +21,69 @@ const mockNotifications = [
   }
 ];
 
+// Helper function to create a notification in the database
+export const createNotificationInDB = async (userId: string, type: string, fromUserId: string, message: string, postId?: string, connectionId?: string) => {
+  // In production, this would save to the database
+  // For now, we'll add to the mock array
+  
+  // In production, fetch fromUser from database
+  const { getDB } = require('../db');
+  const db = getDB();
+  const fromUserDoc = await db.collection('users').findOne({ id: fromUserId });
+  
+  const fromUser = fromUserDoc ? {
+    id: fromUserDoc.id,
+    firstName: fromUserDoc.firstName || '',
+    lastName: fromUserDoc.lastName || '',
+    name: fromUserDoc.name,
+    handle: fromUserDoc.handle,
+    avatar: fromUserDoc.avatar
+  } : {
+    id: fromUserId,
+    firstName: 'User',
+    lastName: '',
+    name: 'User',
+    handle: '@user',
+    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`
+  };
+  
+  const newNotification = {
+    id: `notif-${type}-${Date.now()}-${Math.random()}`,
+    userId,
+    type,
+    fromUser,
+    message,
+    timestamp: Date.now(),
+    isRead: false,
+    postId: postId || '',
+    connectionId: connectionId || undefined
+  };
+  
+  // In production, save to database
+  mockNotifications.push(newNotification);
+  
+  // Also update the user's notification array in the database
+  try {
+    const userDoc = await db.collection('users').findOne({ id: userId });
+    if (userDoc) {
+      const updatedNotifications = [newNotification, ...(userDoc.notifications || [])];
+      await db.collection('users').updateOne(
+        { id: userId },
+        { 
+          $set: { 
+            notifications: updatedNotifications,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+    }
+  } catch (error) {
+    console.error('Error updating user notifications:', error);
+  }
+  
+  return newNotification;
+};
+
 export const notificationsController = {
   // GET /api/users/:userId/notifications - Get notifications for a user
   getNotificationsByUser: async (req: Request, res: Response) => {

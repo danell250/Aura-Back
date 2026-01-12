@@ -27,4 +27,7 @@ router.post('/:id/react', postsController.reactToPost);
 // POST /api/posts/:id/boost - Boost post
 router.post('/:id/boost', postsController.boostPost);
 
+// POST /api/posts/:id/share - Share post
+router.post('/:id/share', postsController.sharePost);
+
 export default router;

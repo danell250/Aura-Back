@@ -211,12 +211,98 @@ export const usersController = {
   // POST /api/users/:id/connect - Send connection request
   sendConnectionRequest: async (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
-      const { targetUserId } = req.body;
-
-      // In production, this would create a notification and update user records
+      const { id } = req.params; // The ID of the user who initiated the request (requester)
+      const { targetUserId } = req.body; // The ID of the user receiving the request
+      
+      const db = getDB();
+      
+      // Find both users
+      const requester = await db.collection('users').findOne({ id });
+      if (!requester) {
+        return res.status(404).json({
+          success: false,
+          error: 'Requester not found',
+          message: `Requester with ID ${id} does not exist`
+        });
+      }
+      
+      const targetUser = await db.collection('users').findOne({ id: targetUserId });
+      if (!targetUser) {
+        return res.status(404).json({
+          success: false,
+          error: 'Target user not found',
+          message: `Target user with ID ${targetUserId} does not exist`
+        });
+      }
+      
+      // Check if they're already connected
+      const requesterAcquaintances = requester.acquaintances || [];
+      if (requesterAcquaintances.includes(targetUserId)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Already connected',
+          message: 'Users are already connected'
+        });
+      }
+      
+      // Check if the requester has already sent a connection request
+      const requesterSentRequests = requester.sentConnectionRequests || [];
+      if (requesterSentRequests.includes(targetUserId)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Request already sent',
+          message: 'Connection request already sent'
+        });
+      }
+      
+      // Create a notification for the target user
+      const newNotification = {
+        id: `notif-conn-${Date.now()}-${Math.random()}`,
+        type: 'connection_request',
+        fromUser: {
+          id: requester.id,
+          name: requester.name,
+          handle: requester.handle,
+          avatar: requester.avatar,
+          avatarType: requester.avatarType
+        },
+        message: 'wants to connect with you',
+        timestamp: new Date().toISOString(),
+        isRead: false,
+        connectionId: targetUserId
+      };
+      
+      // Update target user with the new notification
+      const targetUserNotifications = [newNotification, ...(targetUser.notifications || [])];
+      await db.collection('users').updateOne(
+        { id: targetUserId },
+        { 
+          $set: { 
+            notifications: targetUserNotifications,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+      
+      // Update requester to add the sent connection request
+      const updatedSentRequests = [...requesterSentRequests, targetUserId];
+      await db.collection('users').updateOne(
+        { id },
+        { 
+          $set: { 
+            sentConnectionRequests: updatedSentRequests,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+      
       res.json({
         success: true,
+        data: {
+          requesterId: id,
+          targetUserId: targetUserId,
+          timestamp: new Date().toISOString()
+        },
         message: 'Connection request sent successfully'
       });
     } catch (error) {
@@ -757,8 +843,35 @@ export const usersController = {
         );
       }
       
-      // Also potentially create a notification for the profile owner
-      // In a real app, this would add to a notifications collection
+      // Create a notification for the profile owner
+      const newNotification = {
+        id: `notif-profile-view-${Date.now()}-${Math.random()}`,
+        type: 'profile_view',
+        fromUser: {
+          id: viewer.id,
+          name: viewer.name,
+          handle: viewer.handle,
+          avatar: viewer.avatar,
+          avatarType: viewer.avatarType
+        },
+        message: 'viewed your profile',
+        timestamp: new Date().toISOString(),
+        isRead: false
+      };
+      
+      // Add notification to the profile owner's notification array
+      const updatedNotifications = [newNotification, ...(user.notifications || [])];
+      
+      await db.collection('users').updateOne(
+        { id },
+        { 
+          $set: { 
+            profileViews: profileViews,
+            notifications: updatedNotifications,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
       
       res.json({
         success: true,

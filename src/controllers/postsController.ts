@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { getHashtagsFromText, getTrendingHashtags, filterByHashtags } from '../utils/hashtagUtils';
+import { createNotificationInDB } from './notificationsController';
 
 // Mock data - in production this would come from database
 const mockPosts: any[] = [
@@ -270,6 +271,17 @@ export const postsController = {
         (post.reactions as any)[reaction] = 0;
       }
       (post.reactions as any)[reaction]++;
+      
+      // Create notification for post author if it's a like reaction and not from the author themselves
+      if (reaction === '✨' && post.author.id !== userId) {
+        await createNotificationInDB(
+          post.author.id,  // recipient user ID
+          'like',          // notification type
+          userId,          // user who liked the post
+          'liked your post', // message
+          id               // post ID
+        ).catch(err => console.error('Error creating like notification:', err));
+      }
 
       res.json({
         success: true,
@@ -314,6 +326,48 @@ export const postsController = {
       res.status(500).json({
         success: false,
         error: 'Failed to boost post',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // POST /api/posts/:id/share - Share a post
+  sharePost: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { userId } = req.body;
+      
+      const postIndex = mockPosts.findIndex(p => p.id === id);
+      if (postIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          error: 'Post not found'
+        });
+      }
+
+      const post = mockPosts[postIndex];
+      
+      // Create notification for post author if not shared by the author themselves
+      if (post.author.id !== userId) {
+        await createNotificationInDB(
+          post.author.id,  // recipient user ID
+          'share',         // notification type
+          userId,         // user who shared the post
+          'shared your post', // message
+          id              // post ID
+        ).catch(err => console.error('Error creating share notification:', err));
+      }
+
+      res.json({
+        success: true,
+        data: post,
+        message: 'Post shared successfully'
+      });
+    } catch (error) {
+      console.error('Error sharing post:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to share post',
         message: 'Internal server error'
       });
     }
