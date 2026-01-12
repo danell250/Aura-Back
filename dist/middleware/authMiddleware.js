@@ -8,29 +8,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireAdmin = exports.requireOwnership = exports.attachUser = exports.optionalAuth = exports.requireAuth = void 0;
 const db_1 = require("../db");
-// Helper to verify Firebase ID Token
-const verifyFirebaseToken = (token) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        // Verify token with Google's public endpoint
-        const response = yield fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
-        if (!response.ok) {
-            console.warn('Token verification failed:', yield response.text());
-            return null;
-        }
-        const data = yield response.json();
-        return {
-            uid: data.sub,
-            email: data.email
-        };
-    }
-    catch (error) {
-        console.error('Error verifying Firebase token:', error);
-        return null;
-    }
-});
+const firebaseAdmin_1 = __importDefault(require("../firebaseAdmin"));
 // Middleware to check if user is authenticated via session or Bearer token
 const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     // 1. Check Session Auth
@@ -41,28 +25,38 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
-        const decoded = yield verifyFirebaseToken(token);
-        if (decoded) {
+        try {
+            // Verify Firebase token using Admin SDK
+            const decodedToken = yield firebaseAdmin_1.default.auth().verifyIdToken(token);
             // Token is valid, ensure user is attached
             if (!req.user) {
                 const db = (0, db_1.getDB)();
-                const user = yield db.collection('users').findOne({ id: decoded.uid });
+                const user = yield db.collection('users').findOne({ id: decodedToken.uid });
                 if (user) {
                     req.user = user;
                 }
                 else {
-                    // User authenticated but not in DB yet (e.g. during creation/first sync)
-                    // Create a temporary user object with the ID from token
+                    // User authenticated but not in DB yet
                     req.user = {
-                        id: decoded.uid,
-                        email: decoded.email,
-                        // Add other required fields with defaults if necessary
+                        id: decodedToken.uid,
+                        email: decodedToken.email,
+                        // Add other required fields with defaults
+                        name: decodedToken.name || 'User',
+                        handle: decodedToken.uid.substring(0, 8),
+                        firstName: 'User',
+                        lastName: '',
+                        trustScore: 10,
+                        auraCredits: 0
                     };
                 }
             }
             // Mock isAuthenticated for compatibility
             req.isAuthenticated = (() => true);
             return next();
+        }
+        catch (error) {
+            console.error('Error verifying Firebase token:', error);
+            // Fall through to 401
         }
     }
     res.status(401).json({
@@ -82,14 +76,19 @@ const optionalAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, funct
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
-        const decoded = yield verifyFirebaseToken(token);
-        if (decoded) {
-            const db = (0, db_1.getDB)();
-            const user = yield db.collection('users').findOne({ id: decoded.uid });
-            if (user) {
-                req.user = user;
-                req.isAuthenticated = (() => true);
+        try {
+            const decodedToken = yield firebaseAdmin_1.default.auth().verifyIdToken(token);
+            if (decodedToken) {
+                const db = (0, db_1.getDB)();
+                const user = yield db.collection('users').findOne({ id: decodedToken.uid });
+                if (user) {
+                    req.user = user;
+                    req.isAuthenticated = (() => true);
+                }
             }
+        }
+        catch (e) {
+            // Ignore errors in optional auth
         }
     }
     next();
@@ -115,22 +114,27 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
         const authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith('Bearer ')) {
             const token = authHeader.split(' ')[1];
-            const decoded = yield verifyFirebaseToken(token);
-            if (decoded) {
-                const db = (0, db_1.getDB)();
-                const user = yield db.collection('users').findOne({ id: decoded.uid });
-                if (user) {
-                    req.user = Object.assign(Object.assign({}, user), { id: user.id });
+            try {
+                const decodedToken = yield firebaseAdmin_1.default.auth().verifyIdToken(token);
+                if (decodedToken) {
+                    const db = (0, db_1.getDB)();
+                    const user = yield db.collection('users').findOne({ id: decodedToken.uid });
+                    if (user) {
+                        req.user = Object.assign(Object.assign({}, user), { id: user.id });
+                    }
+                    else {
+                        // Minimal user object from token
+                        req.user = {
+                            id: decodedToken.uid,
+                            email: decodedToken.email
+                        };
+                    }
+                    // Mock isAuthenticated
+                    req.isAuthenticated = (() => true);
                 }
-                else {
-                    // Minimal user object from token
-                    req.user = {
-                        id: decoded.uid,
-                        email: decoded.email
-                    };
-                }
-                // Mock isAuthenticated
-                req.isAuthenticated = (() => true);
+            }
+            catch (e) {
+                console.warn('Failed to verify token in attachUser:', e);
             }
         }
         next();

@@ -28,6 +28,8 @@ const notificationsRoutes_1 = __importDefault(require("./routes/notificationsRou
 const messagesRoutes_1 = __importDefault(require("./routes/messagesRoutes"));
 const subscriptionsRoutes_1 = __importDefault(require("./routes/subscriptionsRoutes"));
 const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
+const privacyRoutes_1 = __importDefault(require("./routes/privacyRoutes"));
+const dataExportRoutes_1 = __importDefault(require("./routes/dataExportRoutes"));
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -166,6 +168,10 @@ app.use('/uploads', express_1.default.static(uploadsDir));
 console.log('Registering routes...');
 // Authentication routes (should come first)
 app.use('/auth', authRoutes_1.default);
+// Privacy routes
+app.use('/api/privacy', privacyRoutes_1.default);
+// Data export routes
+app.use('/api/data-export', dataExportRoutes_1.default);
 // Apply user attachment middleware to all API routes
 app.use('/api', authMiddleware_1.attachUser);
 app.use('/api/users', (req, res, next) => {

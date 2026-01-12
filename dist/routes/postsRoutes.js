@@ -19,4 +19,6 @@ router.delete('/:id', postsController_1.postsController.deletePost);
 router.post('/:id/react', postsController_1.postsController.reactToPost);
 // POST /api/posts/:id/boost - Boost post
 router.post('/:id/boost', postsController_1.postsController.boostPost);
+// POST /api/posts/:id/share - Share post
+router.post('/:id/share', postsController_1.postsController.sharePost);
 exports.default = router;

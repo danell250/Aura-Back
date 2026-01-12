@@ -1,16 +1,21 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
-import { User } from '../types';
+import puppeteer from 'puppeteer';
 
 export const dataExportController = {
   // GET /api/data-export/request/:userId - Request data export
   requestDataExport: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
+      const { format = 'json' } = req.query; // Support format parameter
+      
+      console.log(`Data export requested for user ${userId} in ${format} format`);
+      
       const db = getDB();
       
       const user = await db.collection('users').findOne({ id: userId });
       if (!user) {
+        console.error(`User not found: ${userId}`);
         return res.status(404).json({
           success: false,
           error: 'User not found',
@@ -19,12 +24,13 @@ export const dataExportController = {
       }
 
       // Generate export request ID
-      const exportRequestId = `export-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const exportRequestId = `export-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
       
       // Create export request record
       const exportRequest = {
         id: exportRequestId,
         userId: userId,
+        format: format as string,
         status: 'processing' as const,
         requestedAt: new Date().toISOString(),
         completedAt: null as string | null,
@@ -34,46 +40,64 @@ export const dataExportController = {
         userAgent: req.get('User-Agent')
       };
 
-      // In production, you'd store this in a separate exports collection
-      // For now, we'll process it immediately
-      console.log('Data export requested:', exportRequest);
+      console.log('Processing data export:', exportRequest);
 
-      // Process the export immediately (in production, this would be queued)
-      const exportData = await generateUserDataExport(userId, db);
-      
-      // Update export request
-      const updatedExportRequest = {
-        ...exportRequest,
-        status: 'completed' as const,
-        completedAt: new Date().toISOString(),
-        downloadUrl: `/api/data-export/download/${exportRequestId}`
-      };
+      try {
+        // Process the export immediately (in production, this would be queued)
+        const exportData = await generateUserDataExport(userId, db);
+        
+        // Update export request
+        const updatedExportRequest = {
+          ...exportRequest,
+          status: 'completed' as const,
+          completedAt: new Date().toISOString(),
+          downloadUrl: `/api/data-export/download/${exportRequestId}`
+        };
 
-      // Store the export data temporarily (in production, save to file storage)
-      // For demo purposes, we'll store in memory or database
-      await db.collection('dataExports').insertOne({
-        ...updatedExportRequest,
-        data: exportData
-      });
+        // Store the export data temporarily (in production, save to file storage)
+        await db.collection('dataExports').insertOne({
+          ...updatedExportRequest,
+          data: exportData
+        });
 
-      res.json({
-        success: true,
-        data: {
-          exportRequestId,
-          status: 'completed',
-          downloadUrl: updatedExportRequest.downloadUrl,
-          expiresAt: updatedExportRequest.expiresAt,
-          dataSize: JSON.stringify(exportData).length,
-          recordCount: calculateRecordCount(exportData)
-        },
-        message: 'Data export completed successfully'
-      });
+        console.log('Data export completed successfully:', exportRequestId);
+
+        res.json({
+          success: true,
+          data: {
+            exportRequestId,
+            status: 'completed',
+            format: format,
+            downloadUrl: updatedExportRequest.downloadUrl,
+            expiresAt: updatedExportRequest.expiresAt,
+            dataSize: JSON.stringify(exportData).length,
+            recordCount: calculateRecordCount(exportData)
+          },
+          message: 'Data export completed successfully'
+        });
+      } catch (exportError) {
+        console.error('Error during data export generation:', exportError);
+        
+        // Store failed export record
+        await db.collection('dataExports').insertOne({
+          ...exportRequest,
+          status: 'failed',
+          error: exportError instanceof Error ? exportError.message : 'Unknown error',
+          completedAt: new Date().toISOString()
+        });
+
+        return res.status(500).json({
+          success: false,
+          error: 'Export generation failed',
+          message: exportError instanceof Error ? exportError.message : 'Failed to generate export data'
+        });
+      }
     } catch (error) {
       console.error('Error requesting data export:', error);
       res.status(500).json({
         success: false,
         error: 'Failed to request data export',
-        message: 'Internal server error'
+        message: error instanceof Error ? error.message : 'Internal server error'
       });
     }
   },
@@ -102,20 +126,34 @@ export const dataExportController = {
         });
       }
 
-      // Set headers for file download
-      const filename = `aura-data-export-${exportRecord.userId}-${new Date().toISOString().split('T')[0]}.json`;
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('Cache-Control', 'no-cache');
-
-      // Send the export data
-      res.json(exportRecord.data);
+      const format = exportRecord.format || 'json';
+      
+      if (format === 'pdf') {
+        // Generate and serve PDF
+        const pdfBuffer = await generatePDFExport(exportRecord.data);
+        const filename = `aura-data-export-${exportRecord.userId}-${new Date().toISOString().split('T')[0]}.pdf`;
+        
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Content-Length', pdfBuffer.length.toString());
+        
+        res.send(pdfBuffer);
+      } else {
+        // Serve JSON (default)
+        const filename = `aura-data-export-${exportRecord.userId}-${new Date().toISOString().split('T')[0]}.json`;
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Cache-Control', 'no-cache');
+        
+        res.json(exportRecord.data);
+      }
     } catch (error) {
       console.error('Error downloading data export:', error);
       res.status(500).json({
         success: false,
         error: 'Failed to download data export',
-        message: 'Internal server error'
+        message: error instanceof Error ? error.message : 'Internal server error'
       });
     }
   },
@@ -219,15 +257,15 @@ async function generateUserDataExport(userId: string, db: any): Promise<any> {
       reactions: [] as any[]
     },
     socialData: {
-      acquaintances: [] as string[],
-      blockedUsers: [] as string[],
-      profileViews: [] as string[],
-      sentConnectionRequests: [] as string[]
+      acquaintances: [] as any[],
+      blockedUsers: [] as any[],
+      profileViews: [] as any[],
+      sentConnectionRequests: [] as any[]
     },
     privacyData: {
       settings: {} as any,
-      consentRecords: [] as Array<{ type: string; consent: boolean; timestamp: string }>,
-      dataProcessingHistory: [] as Array<{ action: string; timestamp: string; description: string }>
+      consentRecords: [] as any[],
+      dataProcessingHistory: [] as any[]
     },
     activityData: {
       loginHistory: [] as any[],
@@ -483,4 +521,198 @@ function calculateRecordCount(exportData: any): number {
   if (exportData.privacyData?.consentRecords) count += exportData.privacyData.consentRecords.length;
   
   return count;
+}
+
+// Helper function to generate PDF export
+async function generatePDFExport(exportData: any): Promise<Buffer> {
+  try {
+    const htmlContent = generateHTMLTemplate(exportData);
+    
+    // Use Puppeteer to generate PDF from HTML
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    
+    const page = await browser.newPage();
+    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+    
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: {
+        top: '20px',
+        right: '20px',
+        bottom: '20px',
+        left: '20px'
+      }
+    });
+    
+    await browser.close();
+    return Buffer.from(pdfBuffer);
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    throw new Error('Failed to generate PDF export');
+  }
+}
+
+// Helper function to generate HTML template for PDF
+function generateHTMLTemplate(exportData: any): string {
+  const summary = exportData.exportInfo?.summary || {};
+  const personalInfo = exportData.personalInformation || {};
+  const contentData = exportData.contentData || {};
+  const socialData = exportData.socialData || {};
+  const privacyData = exportData.privacyData || {};
+  
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Aura Data Export - ${personalInfo.name || 'User'}</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; color: #333; }
+        .header { text-align: center; border-bottom: 2px solid #4F46E5; padding-bottom: 20px; margin-bottom: 30px; }
+        .section { margin-bottom: 30px; page-break-inside: avoid; }
+        .section-title { color: #4F46E5; font-size: 18px; font-weight: bold; margin-bottom: 15px; border-bottom: 1px solid #E5E7EB; padding-bottom: 5px; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .info-item { padding: 8px; background: #F9FAFB; border-radius: 4px; }
+        .info-label { font-weight: bold; color: #6B7280; }
+        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin: 20px 0; }
+        .stat-card { text-align: center; padding: 15px; background: #F3F4F6; border-radius: 8px; }
+        .stat-number { font-size: 24px; font-weight: bold; color: #4F46E5; }
+        .stat-label { font-size: 12px; color: #6B7280; text-transform: uppercase; }
+        .content-list { max-height: 300px; overflow: hidden; }
+        .content-item { padding: 10px; border-left: 3px solid #4F46E5; margin-bottom: 10px; background: #F9FAFB; }
+        .timestamp { color: #6B7280; font-size: 12px; }
+        .footer { margin-top: 50px; text-align: center; color: #6B7280; font-size: 12px; border-top: 1px solid #E5E7EB; padding-top: 20px; }
+        @media print { body { margin: 20px; } .section { page-break-inside: avoid; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Aura Data Export</h1>
+        <p><strong>${personalInfo.name || 'User'}</strong> • Generated on ${new Date(exportData.exportInfo?.exportedAt || Date.now()).toLocaleDateString()}</p>
+    </div>
+
+    <div class="section">
+        <h2 class="section-title">Export Summary</h2>
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number">${summary.totalPosts || 0}</div>
+                <div class="stat-label">Posts</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">${summary.totalComments || 0}</div>
+                <div class="stat-label">Comments</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">${summary.totalAcquaintances || 0}</div>
+                <div class="stat-label">Acquaintances</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">${summary.totalMessages || 0}</div>
+                <div class="stat-label">Messages</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">${summary.totalNotifications || 0}</div>
+                <div class="stat-label">Notifications</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">${summary.accountAge || 0}</div>
+                <div class="stat-label">Days Active</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2 class="section-title">Personal Information</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="info-label">Name:</div>
+                <div>${personalInfo.name || 'Not provided'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Email:</div>
+                <div>${personalInfo.email || 'Not provided'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Handle:</div>
+                <div>@${personalInfo.handle || 'Not set'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Account Created:</div>
+                <div>${personalInfo.createdAt ? new Date(personalInfo.createdAt).toLocaleDateString() : 'Unknown'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Bio:</div>
+                <div>${personalInfo.bio || 'No bio provided'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Industry:</div>
+                <div>${personalInfo.industry || 'Not specified'}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2 class="section-title">Recent Posts (Last 10)</h2>
+        <div class="content-list">
+            ${(contentData.posts || []).slice(0, 10).map((post: any) => `
+                <div class="content-item">
+                    <div>${post.content || 'No content'}</div>
+                    <div class="timestamp">${post.timestamp ? new Date(post.timestamp).toLocaleString() : 'Unknown date'}</div>
+                </div>
+            `).join('')}
+            ${(contentData.posts || []).length === 0 ? '<p>No posts found</p>' : ''}
+        </div>
+    </div>
+
+    <div class="section">
+        <h2 class="section-title">Privacy Settings</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="info-label">Show Profile in Search:</div>
+                <div>${privacyData.settings?.showInSearch !== false ? 'Yes' : 'No'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Show Online Status:</div>
+                <div>${privacyData.settings?.showOnlineStatus !== false ? 'Yes' : 'No'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Allow Tagging:</div>
+                <div>${privacyData.settings?.allowTagging !== false ? 'Yes' : 'No'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Email Notifications:</div>
+                <div>${privacyData.settings?.emailNotifications !== false ? 'Yes' : 'No'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Analytics Consent:</div>
+                <div>${privacyData.settings?.analyticsConsent === true ? 'Yes' : 'No'}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Show Profile Views:</div>
+                <div>${privacyData.settings?.showProfileViews !== false ? 'Yes' : 'No'}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2 class="section-title">Data Processing Consent Records</h2>
+        ${(privacyData.consentRecords || []).map((record: any) => `
+            <div class="content-item">
+                <div><strong>${record.type?.replace(/_/g, ' ').toUpperCase() || 'Unknown'}:</strong> ${record.consent ? 'Granted' : 'Denied'}</div>
+                <div class="timestamp">${record.timestamp ? new Date(record.timestamp).toLocaleString() : 'Unknown date'}</div>
+            </div>
+        `).join('')}
+    </div>
+
+    <div class="footer">
+        <p>This export contains your personal data as stored in the Aura platform as of ${new Date(exportData.exportInfo?.exportedAt || Date.now()).toLocaleString()}.</p>
+        <p>For the complete data export including all technical details, please download the JSON format.</p>
+        <p>Export ID: ${exportData.exportInfo?.userId || 'Unknown'} • Version: ${exportData.exportInfo?.exportVersion || '1.0'}</p>
+    </div>
+</body>
+</html>`;
 }

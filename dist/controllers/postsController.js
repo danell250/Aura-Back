@@ -11,6 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.postsController = void 0;
 const hashtagUtils_1 = require("../utils/hashtagUtils");
+const notificationsController_1 = require("./notificationsController");
 // Mock data - in production this would come from database
 const mockPosts = [
     {
@@ -256,6 +257,15 @@ exports.postsController = {
                 post.reactions[reaction] = 0;
             }
             post.reactions[reaction]++;
+            // Create notification for post author if it's a like reaction and not from the author themselves
+            if (reaction === '✨' && post.author.id !== userId) {
+                yield (0, notificationsController_1.createNotificationInDB)(post.author.id, // recipient user ID
+                'like', // notification type
+                userId, // user who liked the post
+                'liked your post', // message
+                id // post ID
+                ).catch(err => console.error('Error creating like notification:', err));
+            }
             res.json({
                 success: true,
                 data: post,
@@ -297,6 +307,43 @@ exports.postsController = {
             res.status(500).json({
                 success: false,
                 error: 'Failed to boost post',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // POST /api/posts/:id/share - Share a post
+    sharePost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const { userId } = req.body;
+            const postIndex = mockPosts.findIndex(p => p.id === id);
+            if (postIndex === -1) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Post not found'
+                });
+            }
+            const post = mockPosts[postIndex];
+            // Create notification for post author if not shared by the author themselves
+            if (post.author.id !== userId) {
+                yield (0, notificationsController_1.createNotificationInDB)(post.author.id, // recipient user ID
+                'share', // notification type
+                userId, // user who shared the post
+                'shared your post', // message
+                id // post ID
+                ).catch(err => console.error('Error creating share notification:', err));
+            }
+            res.json({
+                success: true,
+                data: post,
+                message: 'Post shared successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error sharing post:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to share post',
                 message: 'Internal server error'
             });
         }

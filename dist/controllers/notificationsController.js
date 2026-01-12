@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.notificationsController = void 0;
+exports.notificationsController = exports.createNotificationInDB = void 0;
 // Mock data - in production this would come from database
 const mockNotifications = [
     {
@@ -30,6 +30,61 @@ const mockNotifications = [
         postId: 'post-1'
     }
 ];
+// Helper function to create a notification in the database
+const createNotificationInDB = (userId, type, fromUserId, message, postId, connectionId) => __awaiter(void 0, void 0, void 0, function* () {
+    // In production, this would save to the database
+    // For now, we'll add to the mock array
+    // In production, fetch fromUser from database
+    const { getDB } = require('../db');
+    const db = getDB();
+    const fromUserDoc = yield db.collection('users').findOne({ id: fromUserId });
+    const fromUser = fromUserDoc ? {
+        id: fromUserDoc.id,
+        firstName: fromUserDoc.firstName || '',
+        lastName: fromUserDoc.lastName || '',
+        name: fromUserDoc.name,
+        handle: fromUserDoc.handle,
+        avatar: fromUserDoc.avatar
+    } : {
+        id: fromUserId,
+        firstName: 'User',
+        lastName: '',
+        name: 'User',
+        handle: '@user',
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`
+    };
+    const newNotification = {
+        id: `notif-${type}-${Date.now()}-${Math.random()}`,
+        userId,
+        type,
+        fromUser,
+        message,
+        timestamp: Date.now(),
+        isRead: false,
+        postId: postId || '',
+        connectionId: connectionId || undefined
+    };
+    // In production, save to database
+    mockNotifications.push(newNotification);
+    // Also update the user's notification array in the database
+    try {
+        const userDoc = yield db.collection('users').findOne({ id: userId });
+        if (userDoc) {
+            const updatedNotifications = [newNotification, ...(userDoc.notifications || [])];
+            yield db.collection('users').updateOne({ id: userId }, {
+                $set: {
+                    notifications: updatedNotifications,
+                    updatedAt: new Date().toISOString()
+                }
+            });
+        }
+    }
+    catch (error) {
+        console.error('Error updating user notifications:', error);
+    }
+    return newNotification;
+});
+exports.createNotificationInDB = createNotificationInDB;
 exports.notificationsController = {
     // GET /api/users/:userId/notifications - Get notifications for a user
     getNotificationsByUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
