@@ -12,7 +12,7 @@ const mockPosts: any[] = [
       lastName: 'Mitchell',
       name: 'James Mitchell',
       handle: '@jamesmitchell',
-      avatar: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgdmlld0JveD0iMCAwIDE1MCAxNTAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNTAiIGhlaWdodD0iMTUwIiBmaWxsPSIjRjJGN0ZBIi8+Cjx0ZXh0IHg9Ijc1IiB5PSI3NSIgZm9udC1zaXplPSI0MCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzk4QjNDRCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkZNPC90ZXh0Pgo8L3N2Zz4='
+      avatar: 'https://picsum.photos/id/7/150/150'
     },
     content: 'Strategic leadership requires a balance of vision and execution. The most successful leaders don\'t just set direction—they create systems that sustain momentum through uncertainty. #leadership #strategy #execution #vision',
     energy: '💡 Deep Dive',
@@ -32,7 +32,7 @@ const mockPosts: any[] = [
       lastName: 'Williams',
       name: 'Sarah Williams',
       handle: '@sarahwilliams',
-      avatar: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgdmlld0JveD0iMCAwIDE1MCAxNTAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNTAiIGhlaWdodD0iMTUwIiBmaWxsPSIjRTNFNUU3Ii8+Cjx0ZXh0IHg9Ijc1IiB5PSI3NSIgZm9udC1zaXplPSI0MCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzk4QjNDRCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPlNNPC90ZXh0Pgo8L3N2Zz4='
+      avatar: 'https://picsum.photos/id/25/150/150'
     },
     content: 'Innovation isn\'t just about technology—it\'s about reimagining how we solve problems. The best innovations often come from questioning assumptions we didn\'t even know we had. #innovation #problemsolving #creativity #mindset',
     energy: '🚀 Breakthrough',

@@ -64,7 +64,7 @@ export interface AuthenticatedRequest extends Request {
 // Re-export common types that might be used across backend
 export interface Notification {
   id: string;
-  type: 'reaction' | 'comment' | 'link' | 'credit_received' | 'boost_received' | 'connection_request' | 'profile_view' | 'share' | 'like' | 'message';
+  type: 'reaction' | 'comment' | 'link' | 'credit_received' | 'boost_received' | 'acquaintance_request' | 'profile_view' | 'share' | 'like' | 'message';
   fromUser: User;
   message: string;
   timestamp: number;

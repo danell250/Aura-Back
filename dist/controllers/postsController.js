@@ -22,7 +22,7 @@ const mockPosts = [
             lastName: 'Mitchell',
             name: 'James Mitchell',
             handle: '@jamesmitchell',
-            avatar: 'https://picsum.photos/id/64/150/150'
+            avatar: 'https://picsum.photos/id/7/150/150'
         },
         content: 'Strategic leadership requires a balance of vision and execution. The most successful leaders don\'t just set direction—they create systems that sustain momentum through uncertainty. #leadership #strategy #execution #vision',
         energy: '💡 Deep Dive',
@@ -42,7 +42,7 @@ const mockPosts = [
             lastName: 'Williams',
             name: 'Sarah Williams',
             handle: '@sarahwilliams',
-            avatar: 'https://picsum.photos/id/65/150/150'
+            avatar: 'https://picsum.photos/id/25/150/150'
         },
         content: 'Innovation isn\'t just about technology—it\'s about reimagining how we solve problems. The best innovations often come from questioning assumptions we didn\'t even know we had. #innovation #problemsolving #creativity #mindset',
         energy: '🚀 Breakthrough',

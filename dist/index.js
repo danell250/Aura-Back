@@ -29,7 +29,6 @@ const messagesRoutes_1 = __importDefault(require("./routes/messagesRoutes"));
 const subscriptionsRoutes_1 = __importDefault(require("./routes/subscriptionsRoutes"));
 const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const privacyRoutes_1 = __importDefault(require("./routes/privacyRoutes"));
-const dataExportRoutes_1 = __importDefault(require("./routes/dataExportRoutes"));
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -40,7 +39,7 @@ passport_1.default.use(new passport_google_oauth20_1.Strategy({
     clientID: process.env.GOOGLE_CLIENT_ID || '63639970194-r83ifit3giq02jd1rgfq84uea5tbgv6h.apps.googleusercontent.com',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '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',
     callbackURL: "/auth/google/callback"
-}, (accessToken, refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
+}, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c, _d;
     try {
         // Parse name from profile
@@ -170,8 +169,6 @@ console.log('Registering routes...');
 app.use('/auth', authRoutes_1.default);
 // Privacy routes
 app.use('/api/privacy', privacyRoutes_1.default);
-// Data export routes
-app.use('/api/data-export', dataExportRoutes_1.default);
 // Apply user attachment middleware to all API routes
 app.use('/api', authMiddleware_1.attachUser);
 app.use('/api/users', (req, res, next) => {

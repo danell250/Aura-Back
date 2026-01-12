@@ -21,7 +21,7 @@ const mockComments = [
             lastName: 'Williams',
             name: 'Sarah Williams',
             handle: '@sarahwilliams',
-            avatar: 'https://picsum.photos/id/65/150/150'
+            avatar: 'https://picsum.photos/id/25/150/150'
         },
         text: 'Great insights! This really resonates with my experience in executive coaching.',
         timestamp: Date.now() - 1800000,

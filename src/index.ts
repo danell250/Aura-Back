@@ -15,7 +15,6 @@ import messagesRoutes from './routes/messagesRoutes';
 import subscriptionsRoutes from './routes/subscriptionsRoutes';
 import authRoutes from './routes/authRoutes';
 import privacyRoutes from './routes/privacyRoutes';
-import dataExportRoutes from './routes/dataExportRoutes';
 import { attachUser } from './middleware/authMiddleware';
 import path from 'path';
 import fs from 'fs';
@@ -29,7 +28,7 @@ passport.use(new GoogleStrategy({
   clientSecret: process.env.GOOGLE_CLIENT_SECRET || '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',
   callbackURL: "/auth/google/callback"
 },
-async (accessToken, refreshToken, profile, done) => {
+async (_accessToken, _refreshToken, profile, done) => {
   try {
     // Parse name from profile
     const displayName = profile.displayName || '';
@@ -177,9 +176,6 @@ app.use('/auth', authRoutes);
 
 // Privacy routes
 app.use('/api/privacy', privacyRoutes);
-
-// Data export routes
-app.use('/api/data-export', dataExportRoutes);
 
 // Apply user attachment middleware to all API routes
 app.use('/api', attachUser);
