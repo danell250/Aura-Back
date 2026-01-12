@@ -395,7 +395,21 @@ export const usersController = {
             ]
           }
         ]
-      }).toArray();
+      })
+      .project({
+        id: 1,
+        name: 1,
+        handle: 1,
+        avatar: 1,
+        avatarType: 1,
+        bio: 1,
+        firstName: 1,
+        lastName: 1,
+        industry: 1,
+        companyName: 1
+      })
+      .limit(20) // Limit results to improve performance
+      .toArray();
 
       res.json({
         success: true,
@@ -564,6 +578,104 @@ export const usersController = {
       res.status(500).json({
         success: false,
         error: 'Failed to process credit spending',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // GET /api/users/:id/notifications - Get user notifications
+  getNotifications: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { unreadOnly } = req.query;
+      const db = getDB();
+      
+      const user = await db.collection('users').findOne({ id });
+      
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+      
+      let notifications = user.notifications || [];
+      
+      // Calculate unread count before filtering
+      const unreadCount = notifications.filter((n: any) => !n.isRead).length;
+      
+      // Filter if unreadOnly is requested
+      if (unreadOnly === 'true') {
+        notifications = notifications.filter((n: any) => !n.isRead);
+      }
+      
+      // Sort by date (newest first) if they have createdAt
+      notifications.sort((a: any, b: any) => {
+        const dateA = new Date(a.createdAt || 0).getTime();
+        const dateB = new Date(b.createdAt || 0).getTime();
+        return dateB - dateA;
+      });
+      
+      res.json({
+        success: true,
+        data: notifications,
+        count: notifications.length,
+        unreadCount
+      });
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch notifications',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // PUT /api/users/:id/notifications/read-all - Mark all notifications as read
+  markAllNotificationsRead: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+      
+      const user = await db.collection('users').findOne({ id });
+      
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+      
+      if (!user.notifications || user.notifications.length === 0) {
+        return res.json({
+          success: true,
+          message: 'No notifications to mark as read'
+        });
+      }
+      
+      // Update all notifications to be read
+      const updatedNotifications = user.notifications.map((n: any) => ({
+        ...n,
+        isRead: true
+      }));
+      
+      await db.collection('users').updateOne(
+        { id },
+        { $set: { notifications: updatedNotifications } }
+      );
+      
+      res.json({
+        success: true,
+        message: 'All notifications marked as read'
+      });
+    } catch (error) {
+      console.error('Error marking notifications as read:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to mark notifications as read',
         message: 'Internal server error'
       });
     }

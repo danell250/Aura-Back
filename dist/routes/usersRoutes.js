@@ -40,6 +40,10 @@ router.post('/:id/accept-connection', authMiddleware_1.requireAuth, usersControl
 router.post('/:id/block', authMiddleware_1.requireAuth, usersController_1.usersController.blockUser);
 // POST /api/users/:id/record-profile-view - Record profile view
 router.post('/:id/record-profile-view', authMiddleware_1.requireAuth, usersController_1.usersController.recordProfileView);
+// GET /api/users/:id/notifications - Get user notifications (requires auth + ownership)
+router.get('/:id/notifications', authMiddleware_1.requireAuth, (0, authMiddleware_1.requireOwnership)(), usersController_1.usersController.getNotifications);
+// PUT /api/users/:id/notifications/read-all - Mark all notifications as read (requires auth + ownership)
+router.put('/:id/notifications/read-all', authMiddleware_1.requireAuth, (0, authMiddleware_1.requireOwnership)(), usersController_1.usersController.markAllNotificationsRead);
 // GET /api/users/:id - Get user by ID (public)
 router.get('/:id', authMiddleware_1.optionalAuth, usersController_1.usersController.getUserById);
 // PUT /api/users/:id - Update user (requires auth + ownership)

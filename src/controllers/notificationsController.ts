@@ -1,41 +1,18 @@
 import { Request, Response } from 'express';
-
-// Mock data - in production this would come from database
-const mockNotifications = [
-  {
-    id: 'notif-1',
-    userId: '1',
-    type: 'like',
-    fromUser: {
-      id: '2',
-      firstName: 'Sarah',
-      lastName: 'Williams',
-      name: 'Sarah Williams',
-      handle: '@sarahwilliams',
-      avatar: 'https://picsum.photos/id/25/150/150'
-    },
-    message: 'liked your post',
-    timestamp: Date.now() - 3600000,
-    isRead: false,
-    postId: 'post-1'
-  }
-];
+import { getDB } from '../db';
 
 // Helper function to create a notification in the database
 export const createNotificationInDB = async (userId: string, type: string, fromUserId: string, message: string, postId?: string, connectionId?: string) => {
-  // In production, this would save to the database
-  // For now, we'll add to the mock array
-  
-  // In production, fetch fromUser from database
-  const { getDB } = require('../db');
   const db = getDB();
+  
+  // Fetch fromUser from database
   const fromUserDoc = await db.collection('users').findOne({ id: fromUserId });
   
   const fromUser = fromUserDoc ? {
     id: fromUserDoc.id,
     firstName: fromUserDoc.firstName || '',
     lastName: fromUserDoc.lastName || '',
-    name: fromUserDoc.name,
+    name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
     handle: fromUserDoc.handle,
     avatar: fromUserDoc.avatar
   } : {
@@ -48,7 +25,7 @@ export const createNotificationInDB = async (userId: string, type: string, fromU
   };
   
   const newNotification = {
-    id: `notif-${type}-${Date.now()}-${Math.random()}`,
+    id: `notif-${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     userId,
     type,
     fromUser,
@@ -59,26 +36,16 @@ export const createNotificationInDB = async (userId: string, type: string, fromU
     connectionId: connectionId || undefined
   };
   
-  // In production, save to database
-  mockNotifications.push(newNotification);
-  
-  // Also update the user's notification array in the database
   try {
-    const userDoc = await db.collection('users').findOne({ id: userId });
-    if (userDoc) {
-      const updatedNotifications = [newNotification, ...(userDoc.notifications || [])];
-      await db.collection('users').updateOne(
-        { id: userId },
-        { 
-          $set: { 
-            notifications: updatedNotifications,
-            updatedAt: new Date().toISOString()
-          }
-        }
-      );
-    }
+    // Add to user's notifications
+    await db.collection('users').updateOne(
+      { id: userId },
+      { 
+        $push: { notifications: { $each: [newNotification], $position: 0 } }
+      } as any
+    );
   } catch (error) {
-    console.error('Error updating user notifications:', error);
+    console.error('Error creating notification in DB:', error);
   }
   
   return newNotification;
@@ -90,21 +57,30 @@ export const notificationsController = {
     try {
       const { userId } = req.params;
       const { page = 1, limit = 20, unreadOnly } = req.query;
+      const db = getDB();
       
-      let filteredNotifications = mockNotifications.filter(notif => notif.userId === userId);
+      const user = await db.collection('users').findOne({ id: userId });
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found'
+        });
+      }
+
+      let notifications = user.notifications || [];
       
       // Filter unread only if specified
       if (unreadOnly === 'true') {
-        filteredNotifications = filteredNotifications.filter(notif => !notif.isRead);
+        notifications = notifications.filter((notif: any) => !notif.isRead);
       }
       
       // Sort by timestamp (newest first)
-      filteredNotifications.sort((a, b) => b.timestamp - a.timestamp);
+      notifications.sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
       
       // Pagination
       const startIndex = (Number(page) - 1) * Number(limit);
       const endIndex = startIndex + Number(limit);
-      const paginatedNotifications = filteredNotifications.slice(startIndex, endIndex);
+      const paginatedNotifications = notifications.slice(startIndex, endIndex);
       
       res.json({
         success: true,
@@ -112,10 +88,10 @@ export const notificationsController = {
         pagination: {
           page: Number(page),
           limit: Number(limit),
-          total: filteredNotifications.length,
-          pages: Math.ceil(filteredNotifications.length / Number(limit))
+          total: notifications.length,
+          pages: Math.ceil(notifications.length / Number(limit))
         },
-        unreadCount: mockNotifications.filter(n => n.userId === userId && !n.isRead).length
+        unreadCount: (user.notifications || []).filter((n: any) => !n.isRead).length
       });
     } catch (error) {
       console.error('Error fetching notifications:', error);
@@ -131,6 +107,7 @@ export const notificationsController = {
   createNotification: async (req: Request, res: Response) => {
     try {
       const { userId, type, fromUserId, message, postId, connectionId } = req.body;
+      const db = getDB();
       
       // Validate required fields
       if (!userId || !type || !fromUserId || !message) {
@@ -141,8 +118,17 @@ export const notificationsController = {
         });
       }
 
-      // In production, fetch fromUser from database
-      const fromUser = {
+      // Fetch fromUser from database
+      const fromUserDoc = await db.collection('users').findOne({ id: fromUserId });
+      
+      const fromUser = fromUserDoc ? {
+        id: fromUserDoc.id,
+        firstName: fromUserDoc.firstName || '',
+        lastName: fromUserDoc.lastName || '',
+        name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
+        handle: fromUserDoc.handle,
+        avatar: fromUserDoc.avatar
+      } : {
         id: fromUserId,
         firstName: 'User',
         lastName: '',
@@ -152,7 +138,7 @@ export const notificationsController = {
       };
 
       const newNotification = {
-        id: `notif-${Date.now()}`,
+        id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         userId,
         type,
         fromUser,
@@ -163,8 +149,13 @@ export const notificationsController = {
         connectionId: connectionId || undefined
       };
 
-      // In production, save to database
-      mockNotifications.push(newNotification);
+      // Save to database
+      await db.collection('users').updateOne(
+        { id: userId },
+        { 
+          $push: { notifications: { $each: [newNotification], $position: 0 } }
+        } as any
+      );
 
       res.status(201).json({
         success: true,
@@ -185,9 +176,15 @@ export const notificationsController = {
   markAsRead: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const db = getDB();
       
-      const notificationIndex = mockNotifications.findIndex(n => n.id === id);
-      if (notificationIndex === -1) {
+      // Find user with this notification and update it
+      const result = await db.collection('users').updateOne(
+        { "notifications.id": id },
+        { $set: { "notifications.$.isRead": true } }
+      );
+
+      if (result.matchedCount === 0) {
         return res.status(404).json({
           success: false,
           error: 'Notification not found',
@@ -195,12 +192,8 @@ export const notificationsController = {
         });
       }
 
-      // Mark as read
-      mockNotifications[notificationIndex].isRead = true;
-
       res.json({
         success: true,
-        data: mockNotifications[notificationIndex],
         message: 'Notification marked as read'
       });
     } catch (error) {
@@ -217,13 +210,25 @@ export const notificationsController = {
   markAllAsRead: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
+      const db = getDB();
       
-      // Mark all user's notifications as read
-      mockNotifications.forEach(notif => {
-        if (notif.userId === userId) {
-          notif.isRead = true;
-        }
-      });
+      const user = await db.collection('users').findOne({ id: userId });
+      if (!user) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+      
+      if (!user.notifications || user.notifications.length === 0) {
+        return res.json({ success: true, message: 'No notifications to mark as read' });
+      }
+
+      // Update all notifications in memory then save, or use array filters
+      // Simpler to just map and replace for now
+      const updatedNotifications = user.notifications.map((n: any) => ({ ...n, isRead: true }));
+      
+      await db.collection('users').updateOne(
+        { id: userId },
+        { $set: { notifications: updatedNotifications } }
+      );
 
       res.json({
         success: true,
@@ -243,18 +248,20 @@ export const notificationsController = {
   deleteNotification: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const db = getDB();
       
-      const notificationIndex = mockNotifications.findIndex(n => n.id === id);
-      if (notificationIndex === -1) {
+      const result = await db.collection('users').updateOne(
+        { "notifications.id": id },
+        { $pull: { notifications: { id: id } } } as any
+      );
+
+      if (result.matchedCount === 0) {
         return res.status(404).json({
           success: false,
           error: 'Notification not found',
           message: `Notification with ID ${id} does not exist`
         });
       }
-
-      // Remove notification
-      mockNotifications.splice(notificationIndex, 1);
 
       res.json({
         success: true,

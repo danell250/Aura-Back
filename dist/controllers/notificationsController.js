@@ -10,39 +10,17 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.notificationsController = exports.createNotificationInDB = void 0;
-// Mock data - in production this would come from database
-const mockNotifications = [
-    {
-        id: 'notif-1',
-        userId: '1',
-        type: 'like',
-        fromUser: {
-            id: '2',
-            firstName: 'Sarah',
-            lastName: 'Williams',
-            name: 'Sarah Williams',
-            handle: '@sarahwilliams',
-            avatar: 'https://picsum.photos/id/25/150/150'
-        },
-        message: 'liked your post',
-        timestamp: Date.now() - 3600000,
-        isRead: false,
-        postId: 'post-1'
-    }
-];
+const db_1 = require("../db");
 // Helper function to create a notification in the database
 const createNotificationInDB = (userId, type, fromUserId, message, postId, connectionId) => __awaiter(void 0, void 0, void 0, function* () {
-    // In production, this would save to the database
-    // For now, we'll add to the mock array
-    // In production, fetch fromUser from database
-    const { getDB } = require('../db');
-    const db = getDB();
+    const db = (0, db_1.getDB)();
+    // Fetch fromUser from database
     const fromUserDoc = yield db.collection('users').findOne({ id: fromUserId });
     const fromUser = fromUserDoc ? {
         id: fromUserDoc.id,
         firstName: fromUserDoc.firstName || '',
         lastName: fromUserDoc.lastName || '',
-        name: fromUserDoc.name,
+        name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
         handle: fromUserDoc.handle,
         avatar: fromUserDoc.avatar
     } : {
@@ -54,7 +32,7 @@ const createNotificationInDB = (userId, type, fromUserId, message, postId, conne
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`
     };
     const newNotification = {
-        id: `notif-${type}-${Date.now()}-${Math.random()}`,
+        id: `notif-${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         userId,
         type,
         fromUser,
@@ -64,23 +42,14 @@ const createNotificationInDB = (userId, type, fromUserId, message, postId, conne
         postId: postId || '',
         connectionId: connectionId || undefined
     };
-    // In production, save to database
-    mockNotifications.push(newNotification);
-    // Also update the user's notification array in the database
     try {
-        const userDoc = yield db.collection('users').findOne({ id: userId });
-        if (userDoc) {
-            const updatedNotifications = [newNotification, ...(userDoc.notifications || [])];
-            yield db.collection('users').updateOne({ id: userId }, {
-                $set: {
-                    notifications: updatedNotifications,
-                    updatedAt: new Date().toISOString()
-                }
-            });
-        }
+        // Add to user's notifications
+        yield db.collection('users').updateOne({ id: userId }, {
+            $push: { notifications: { $each: [newNotification], $position: 0 } }
+        });
     }
     catch (error) {
-        console.error('Error updating user notifications:', error);
+        console.error('Error creating notification in DB:', error);
     }
     return newNotification;
 });
@@ -91,27 +60,35 @@ exports.notificationsController = {
         try {
             const { userId } = req.params;
             const { page = 1, limit = 20, unreadOnly } = req.query;
-            let filteredNotifications = mockNotifications.filter(notif => notif.userId === userId);
+            const db = (0, db_1.getDB)();
+            const user = yield db.collection('users').findOne({ id: userId });
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found'
+                });
+            }
+            let notifications = user.notifications || [];
             // Filter unread only if specified
             if (unreadOnly === 'true') {
-                filteredNotifications = filteredNotifications.filter(notif => !notif.isRead);
+                notifications = notifications.filter((notif) => !notif.isRead);
             }
             // Sort by timestamp (newest first)
-            filteredNotifications.sort((a, b) => b.timestamp - a.timestamp);
+            notifications.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
             // Pagination
             const startIndex = (Number(page) - 1) * Number(limit);
             const endIndex = startIndex + Number(limit);
-            const paginatedNotifications = filteredNotifications.slice(startIndex, endIndex);
+            const paginatedNotifications = notifications.slice(startIndex, endIndex);
             res.json({
                 success: true,
                 data: paginatedNotifications,
                 pagination: {
                     page: Number(page),
                     limit: Number(limit),
-                    total: filteredNotifications.length,
-                    pages: Math.ceil(filteredNotifications.length / Number(limit))
+                    total: notifications.length,
+                    pages: Math.ceil(notifications.length / Number(limit))
                 },
-                unreadCount: mockNotifications.filter(n => n.userId === userId && !n.isRead).length
+                unreadCount: (user.notifications || []).filter((n) => !n.isRead).length
             });
         }
         catch (error) {
@@ -127,6 +104,7 @@ exports.notificationsController = {
     createNotification: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId, type, fromUserId, message, postId, connectionId } = req.body;
+            const db = (0, db_1.getDB)();
             // Validate required fields
             if (!userId || !type || !fromUserId || !message) {
                 return res.status(400).json({
@@ -135,8 +113,16 @@ exports.notificationsController = {
                     message: 'userId, type, fromUserId, and message are required'
                 });
             }
-            // In production, fetch fromUser from database
-            const fromUser = {
+            // Fetch fromUser from database
+            const fromUserDoc = yield db.collection('users').findOne({ id: fromUserId });
+            const fromUser = fromUserDoc ? {
+                id: fromUserDoc.id,
+                firstName: fromUserDoc.firstName || '',
+                lastName: fromUserDoc.lastName || '',
+                name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
+                handle: fromUserDoc.handle,
+                avatar: fromUserDoc.avatar
+            } : {
                 id: fromUserId,
                 firstName: 'User',
                 lastName: '',
@@ -145,7 +131,7 @@ exports.notificationsController = {
                 avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`
             };
             const newNotification = {
-                id: `notif-${Date.now()}`,
+                id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
                 userId,
                 type,
                 fromUser,
@@ -155,8 +141,10 @@ exports.notificationsController = {
                 postId: postId || undefined,
                 connectionId: connectionId || undefined
             };
-            // In production, save to database
-            mockNotifications.push(newNotification);
+            // Save to database
+            yield db.collection('users').updateOne({ id: userId }, {
+                $push: { notifications: { $each: [newNotification], $position: 0 } }
+            });
             res.status(201).json({
                 success: true,
                 data: newNotification,
@@ -176,19 +164,18 @@ exports.notificationsController = {
     markAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
-            const notificationIndex = mockNotifications.findIndex(n => n.id === id);
-            if (notificationIndex === -1) {
+            const db = (0, db_1.getDB)();
+            // Find user with this notification and update it
+            const result = yield db.collection('users').updateOne({ "notifications.id": id }, { $set: { "notifications.$.isRead": true } });
+            if (result.matchedCount === 0) {
                 return res.status(404).json({
                     success: false,
                     error: 'Notification not found',
                     message: `Notification with ID ${id} does not exist`
                 });
             }
-            // Mark as read
-            mockNotifications[notificationIndex].isRead = true;
             res.json({
                 success: true,
-                data: mockNotifications[notificationIndex],
                 message: 'Notification marked as read'
             });
         }
@@ -205,12 +192,18 @@ exports.notificationsController = {
     markAllAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
-            // Mark all user's notifications as read
-            mockNotifications.forEach(notif => {
-                if (notif.userId === userId) {
-                    notif.isRead = true;
-                }
-            });
+            const db = (0, db_1.getDB)();
+            const user = yield db.collection('users').findOne({ id: userId });
+            if (!user) {
+                return res.status(404).json({ success: false, error: 'User not found' });
+            }
+            if (!user.notifications || user.notifications.length === 0) {
+                return res.json({ success: true, message: 'No notifications to mark as read' });
+            }
+            // Update all notifications in memory then save, or use array filters
+            // Simpler to just map and replace for now
+            const updatedNotifications = user.notifications.map((n) => (Object.assign(Object.assign({}, n), { isRead: true })));
+            yield db.collection('users').updateOne({ id: userId }, { $set: { notifications: updatedNotifications } });
             res.json({
                 success: true,
                 message: 'All notifications marked as read'
@@ -229,16 +222,15 @@ exports.notificationsController = {
     deleteNotification: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
-            const notificationIndex = mockNotifications.findIndex(n => n.id === id);
-            if (notificationIndex === -1) {
+            const db = (0, db_1.getDB)();
+            const result = yield db.collection('users').updateOne({ "notifications.id": id }, { $pull: { notifications: { id: id } } });
+            if (result.matchedCount === 0) {
                 return res.status(404).json({
                     success: false,
                     error: 'Notification not found',
                     message: `Notification with ID ${id} does not exist`
                 });
             }
-            // Remove notification
-            mockNotifications.splice(notificationIndex, 1);
             res.json({
                 success: true,
                 message: 'Notification deleted successfully'

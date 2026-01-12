@@ -281,7 +281,7 @@ export const postsController = {
           userId,          // user who liked the post
           'liked your post', // message
           id               // post ID
-        ).catch(err => console.error('Error creating like notification:', err));
+        ).catch((err: any) => console.error('Error creating like notification:', err));
       }
 
       res.json({
@@ -356,7 +356,7 @@ export const postsController = {
           userId,         // user who shared the post
           'shared your post', // message
           id              // post ID
-        ).catch(err => console.error('Error creating share notification:', err));
+        ).catch((err: any) => console.error('Error creating share notification:', err));
       }
 
       res.json({
