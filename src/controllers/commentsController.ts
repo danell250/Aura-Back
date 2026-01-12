@@ -11,7 +11,7 @@ const mockComments: any[] = [
       lastName: 'Williams',
       name: 'Sarah Williams',
       handle: '@sarahwilliams',
-      avatar: 'https://picsum.photos/id/65/150/150'
+      avatar: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjE1MCIgdmlld0JveD0iMCAwIDE1MCAxNTAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNTAiIGhlaWdodD0iMTUwIiBmaWxsPSIjRTNFNUU3Ii8+Cjx0ZXh0IHg9Ijc1IiB5PSI3NSIgZm9udC1zaXplPSI0MCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzk4QjNDRCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPlNNPC90ZXh0Pgo8L3N2Zz4='
     },
     text: 'Great insights! This really resonates with my experience in executive coaching.',
     timestamp: Date.now() - 1800000,
