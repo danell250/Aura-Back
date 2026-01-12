@@ -53,6 +53,12 @@ router.get('/google/callback',
             { $set: updateData }
           );
           console.log('Updated existing user after OAuth:', existingUser.id);
+          
+          // Successful authentication, redirect to frontend with user data
+          const frontendUrl = process.env.VITE_FRONTEND_URL || 'http://localhost:5000';
+          const redirectUrl = `${frontendUrl}?auth_success=true&user_id=${existingUser.id}&email=${encodeURIComponent(existingUser.email)}`;
+          console.log('Redirecting to frontend after successful OAuth:', redirectUrl);
+          res.redirect(redirectUrl);
         } else {
           // Create new user - generate handle only now
           const baseHandle = `@${userData.firstName?.toLowerCase() || 'user'}${userData.lastName?.toLowerCase()?.replace(/\s+/g, '') || ''}`;
@@ -80,12 +86,14 @@ router.get('/google/callback',
           
           await db.collection('users').insertOne(newUser);
           console.log('Created new user after OAuth:', newUser.id);
+          
+          // Successful authentication, redirect to frontend with user data
+          const frontendUrl = process.env.VITE_FRONTEND_URL || 'http://localhost:5000';
+          const redirectUrl = `${frontendUrl}?auth_success=true&user_id=${newUser.id}&email=${encodeURIComponent(newUser.email)}`;
+          console.log('Redirecting to frontend after successful OAuth:', redirectUrl);
+          res.redirect(redirectUrl);
         }
       }
-      
-      // Successful authentication, redirect to frontend
-      const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
-      res.redirect(frontendUrl);
     } catch (error) {
       console.error('Error in OAuth callback:', error);
       res.redirect('/login?error=oauth_failed');
