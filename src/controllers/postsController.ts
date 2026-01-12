@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { getDB } from '../db';
 import { getHashtagsFromText, getTrendingHashtags, filterByHashtags } from '../utils/hashtagUtils';
 import { createNotificationInDB } from './notificationsController';
 

@@ -101,6 +101,34 @@ export const commentsController = {
         });
       }
 
+      // Check for tagged users and their privacy settings
+      const mentionedHandles = (text.match(/@(\w+)/g) || []).map((h: string) => h.substring(1));
+      
+      if (mentionedHandles.length > 0) {
+        const db = getDB();
+        // Find users with these handles
+        const taggedUsers = await db.collection('users').find({ 
+          handle: { $in: mentionedHandles.map((h: string) => new RegExp(`^@?${h}$`, 'i')) } 
+        }).toArray();
+        
+        // Check if any tagged user has disabled tagging
+        const blockedTags = taggedUsers.filter((user: any) => {
+          const privacySettings = user.privacySettings || {};
+          // If allowTagging is explicitly false, they cannot be tagged
+          // Default is true if undefined
+          return privacySettings.allowTagging === false;
+        });
+
+        if (blockedTags.length > 0) {
+          const blockedHandles = blockedTags.map((u: any) => u.handle).join(', ');
+          return res.status(403).json({
+            success: false,
+            error: 'Tagging not allowed',
+            message: `The following users do not allow tagging: ${blockedHandles}`
+          });
+        }
+      }
+
       // In production, fetch author from database
       const author = {
         id: authorId,

@@ -2,11 +2,20 @@ import { Request, Response } from 'express';
 import { getDB } from '../db';
 
 export const usersController = {
-  // GET /api/users - Get all users
+  // GET /api/users - Get all users (respects showInSearch privacy setting)
   getAllUsers: async (req: Request, res: Response) => {
     try {
       const db = getDB();
-      const users = await db.collection('users').find({}).toArray();
+      // Filter out users who have explicitly set showInSearch to false
+      // Users without the setting (undefined) default to true (visible)
+      const query = {
+        $or: [
+          { 'privacySettings.showInSearch': { $ne: false } },
+          { 'privacySettings.showInSearch': { $exists: false } }
+        ]
+      };
+      
+      const users = await db.collection('users').find(query).toArray();
       
       res.json({
         success: true,
