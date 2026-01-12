@@ -1,11 +1,11 @@
 import { Router, Request, Response } from 'express';
 import passport from 'passport';
 import { getDB } from '../db';
-import { generateToken, generateRefreshToken } from '../utils/authUtils';
+import { generateToken } from '../utils/jwtUtils';
 
 const router = Router();
 
-// Google OAuth routes - JWT version
+// Google OAuth routes - Fresh JWT version
 router.get('/google',
   passport.authenticate('google', { scope: ['profile', 'email'] })
 );
@@ -65,18 +65,23 @@ router.get('/google/callback',
       
         // Generate JWT token
         const token = generateToken(finalUser);
-        const refreshToken = generateRefreshToken(finalUser);
-        
-        // Store refresh token in database for this user
-        await db.collection('users').updateOne(
-          { id: finalUser.id },
-          { $set: { refreshToken } }
-        );
         
         // Redirect to frontend with token
-        const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
+        // Use the referer host if available, otherwise use environment variable, fallback to production URL
+        const referer = req.get('referer');
+        let frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
+        
+        // Check if we're in development and coming from localhost
+        if (referer && referer.includes('localhost')) {
+          frontendUrl = 'http://localhost:5001'; // Updated to match the actual dev server port
+        } else if (referer && referer.includes('192.168.')) {
+          // For local network access
+          const refererUrl = new URL(referer);
+          frontendUrl = `${refererUrl.protocol}//${refererUrl.host}`;
+        }
+        
         // Append the token to the URL as a query parameter
-        const redirectUrl = `${frontendUrl}?token=${token}&refreshToken=${refreshToken}`;
+        const redirectUrl = `${frontendUrl}?token=${token}`;
         res.redirect(redirectUrl);
       }
     } catch (error) {
@@ -86,68 +91,7 @@ router.get('/google/callback',
   }
 );
 
-// Token refresh endpoint
-router.post('/refresh-token', async (req: Request, res: Response) => {
-  try {
-    const { refreshToken } = req.body;
-    
-    if (!refreshToken) {
-      return res.status(401).json({
-        success: false,
-        error: 'Refresh token required',
-        message: 'No refresh token provided'
-      });
-    }
-    
-    // Verify the refresh token
-    const decoded = await import('../utils/authUtils').then(utils => utils.verifyRefreshToken(refreshToken));
-    
-    if (!decoded) {
-      return res.status(403).json({
-        success: false,
-        error: 'Invalid refresh token',
-        message: 'The refresh token is invalid or has expired'
-      });
-    }
-    
-    const db = getDB();
-    const user = await db.collection('users').findOne({ 
-      id: decoded.id,
-      refreshToken: refreshToken // Verify the refresh token matches the one stored
-    });
-    
-    if (!user) {
-      return res.status(403).json({
-        success: false,
-        error: 'Invalid refresh token',
-        message: 'The refresh token does not match the user record'
-      });
-    }
-    
-    // Generate new tokens
-    const newToken = generateToken(user as any);
-    const newRefreshToken = generateRefreshToken(user as any);
-    
-    // Update the refresh token in the database
-    await db.collection('users').updateOne(
-      { id: user.id },
-      { $set: { refreshToken: newRefreshToken } }
-    );
-    
-    res.json({
-      success: true,
-      token: newToken,
-      refreshToken: newRefreshToken
-    });
-  } catch (error) {
-    console.error('Error refreshing token:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Token refresh failed',
-      message: 'An error occurred while refreshing the token'
-    });
-  }
-});
+
 
 // Logout route - JWT version (just clears client-side token)
 router.post('/logout', (req: Request, res: Response) => {
@@ -247,19 +191,11 @@ router.post('/login', async (req: Request, res: Response) => {
     
     // Generate JWT token
     const token = generateToken(user as any);
-    const refreshToken = generateRefreshToken(user as any);
-    
-    // Store refresh token in database for this user
-    await db.collection('users').updateOne(
-      { id: user.id },
-      { $set: { refreshToken } }
-    );
     
     res.json({
       success: true,
       user: user,
       token: token, // Include token in response
-      refreshToken: refreshToken, // Include refresh token in response
       message: 'Login successful'
     });
   } catch (error) {
@@ -336,19 +272,11 @@ router.post('/register', async (req: Request, res: Response) => {
     
     // Generate JWT token
     const token = generateToken(newUser as any);
-    const refreshToken = generateRefreshToken(newUser as any);
-    
-    // Store refresh token in database for this user
-    await db.collection('users').updateOne(
-      { id: newUser.id },
-      { $set: { refreshToken } }
-    );
     
     res.status(201).json({
       success: true,
       user: newUser,
       token: token, // Include token in response
-      refreshToken: refreshToken, // Include refresh token in response
       message: 'Registration successful'
     });
   } catch (error) {
