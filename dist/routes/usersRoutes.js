@@ -31,11 +31,11 @@ router.post('/:id/clear-data', authMiddleware_1.requireAuth, (0, authMiddleware_
 router.get('/:id/privacy-settings', authMiddleware_1.requireAuth, (0, authMiddleware_1.requireOwnership)(), usersController_1.usersController.getPrivacySettings);
 // PUT /api/users/:id/privacy-settings - Update user's privacy settings
 router.put('/:id/privacy-settings', authMiddleware_1.requireAuth, (0, authMiddleware_1.requireOwnership)(), usersController_1.usersController.updatePrivacySettings);
-// Social interaction routes (require auth)
+// Social interaction routes (optional auth for now)
 // POST /api/users/:id/connect - Send connection request
-router.post('/:id/connect', authMiddleware_1.requireAuth, usersController_1.usersController.sendConnectionRequest);
+router.post('/:id/connect', authMiddleware_1.optionalAuth, usersController_1.usersController.sendConnectionRequest);
 // POST /api/users/:id/accept-connection - Accept connection request
-router.post('/:id/accept-connection', authMiddleware_1.requireAuth, usersController_1.usersController.acceptConnectionRequest);
+router.post('/:id/accept-connection', authMiddleware_1.optionalAuth, usersController_1.usersController.acceptConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', authMiddleware_1.requireAuth, usersController_1.usersController.blockUser);
 // POST /api/users/:id/record-profile-view - Record profile view

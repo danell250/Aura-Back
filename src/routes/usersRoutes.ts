@@ -41,12 +41,12 @@ router.get('/:id/privacy-settings', requireAuth, requireOwnership(), usersContro
 // PUT /api/users/:id/privacy-settings - Update user's privacy settings
 router.put('/:id/privacy-settings', requireAuth, requireOwnership(), usersController.updatePrivacySettings);
 
-// Social interaction routes (require auth)
+// Social interaction routes (optional auth for now)
 // POST /api/users/:id/connect - Send connection request
-router.post('/:id/connect', requireAuth, usersController.sendConnectionRequest);
+router.post('/:id/connect', optionalAuth, usersController.sendConnectionRequest);
 
 // POST /api/users/:id/accept-connection - Accept connection request
-router.post('/:id/accept-connection', requireAuth, usersController.acceptConnectionRequest);
+router.post('/:id/accept-connection', optionalAuth, usersController.acceptConnectionRequest);
 
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', requireAuth, usersController.blockUser);

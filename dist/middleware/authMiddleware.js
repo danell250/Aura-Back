@@ -110,7 +110,7 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
             }
             return next();
         }
-        // 2. Bearer Token Auth
+        // 2. Bearer Token Auth (Firebase)
         const authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith('Bearer ')) {
             const token = authHeader.split(' ')[1];
@@ -135,6 +135,22 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
             }
             catch (e) {
                 console.warn('Failed to verify token in attachUser:', e);
+            }
+        }
+        // 3. Simple User ID Auth (for manually registered users)
+        const userIdHeader = req.headers['x-user-id'];
+        if (userIdHeader && !req.user) {
+            try {
+                const db = (0, db_1.getDB)();
+                const user = yield db.collection('users').findOne({ id: userIdHeader });
+                if (user) {
+                    req.user = Object.assign(Object.assign({}, user), { id: user.id });
+                    // Mock isAuthenticated
+                    req.isAuthenticated = (() => true);
+                }
+            }
+            catch (e) {
+                console.warn('Failed to get user by ID in attachUser:', e);
             }
         }
         next();
