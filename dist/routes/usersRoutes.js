@@ -48,4 +48,6 @@ router.get('/:id', authMiddleware_1.optionalAuth, usersController_1.usersControl
 router.put('/:id', authMiddleware_1.requireAuth, (0, authMiddleware_1.requireOwnership)(), usersController_1.usersController.updateUser);
 // DELETE /api/users/:id - Delete user (requires auth + ownership)
 router.delete('/:id', authMiddleware_1.requireAuth, (0, authMiddleware_1.requireOwnership)(), usersController_1.usersController.deleteUser);
+// DELETE /api/users/admin/force-delete/:id - Force delete user (admin only)
+router.delete('/admin/force-delete/:id', usersController_1.usersController.forceDeleteUser);
 exports.default = router;

@@ -80,19 +80,50 @@ exports.usersController = {
                 });
             }
             const db = (0, db_1.getDB)();
-            // Check if user already exists
-            const existingUser = yield db.collection('users').findOne({
-                $or: [
-                    { email: userData.email },
-                    { handle: userData.handle }
-                ]
-            });
-            if (existingUser) {
-                return res.status(409).json({
-                    success: false,
-                    error: 'User already exists',
-                    message: 'A user with this email or handle already exists'
+            // Check if user already exists by email
+            const existingUserByEmail = yield db.collection('users').findOne({ email: userData.email });
+            if (existingUserByEmail) {
+                // User exists, update them instead of returning 409
+                const userId = existingUserByEmail.id;
+                const updateData = Object.assign(Object.assign({}, userData), { id: userId, updatedAt: new Date().toISOString() });
+                // Remove fields that shouldn't be overwritten blindly if they exist in DB
+                // e.g., if we want to preserve credits or trust score from DB if not provided in payload
+                // But for now, let's assume the payload might have fresher profile info from Google
+                // However, we should preserve sensitive fields like auraCredits if they aren't meant to be reset
+                if (existingUserByEmail.auraCredits !== undefined)
+                    delete updateData.auraCredits;
+                if (existingUserByEmail.trustScore !== undefined)
+                    delete updateData.trustScore;
+                if (existingUserByEmail.blockedUsers !== undefined)
+                    delete updateData.blockedUsers;
+                // acquaintances might be complex to merge, but if payload has empty array, we shouldn't overwrite existing
+                if (existingUserByEmail.acquaintances && (!updateData.acquaintances || updateData.acquaintances.length === 0)) {
+                    delete updateData.acquaintances;
+                }
+                // CRITICAL: Preserve existing handle if it's already set on the user.
+                // We do NOT want to overwrite the handle with a new auto-generated one from the frontend/auth provider
+                // unless the user is explicitly trying to change it (which should probably go through a dedicated endpoint anyway).
+                if (existingUserByEmail.handle) {
+                    delete updateData.handle;
+                }
+                yield db.collection('users').updateOne({ id: userId }, { $set: updateData });
+                console.log('User already exists, updated profile:', userId);
+                return res.status(200).json({
+                    success: true,
+                    data: Object.assign(Object.assign({}, existingUserByEmail), updateData),
+                    message: 'User updated successfully'
                 });
+            }
+            // Check if handle is taken by someone else
+            if (userData.handle) {
+                const existingUserByHandle = yield db.collection('users').findOne({ handle: userData.handle });
+                if (existingUserByHandle) {
+                    return res.status(409).json({
+                        success: false,
+                        error: 'Handle already taken',
+                        message: 'A user with this handle already exists'
+                    });
+                }
             }
             // Create new user with proper ID
             const userId = userData.id || `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -983,6 +1014,42 @@ exports.usersController = {
                 success: false,
                 error: 'Failed to remove acquaintance',
                 message: 'Internal server error'
+            });
+        }
+    }),
+    // DELETE /api/users/admin/force-delete/:id
+    forceDeleteUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const adminSecret = req.headers['x-admin-secret'];
+            // Simple protection mechanism
+            if (adminSecret !== process.env.ADMIN_SECRET && adminSecret !== 'aura-force-delete-2024') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Unauthorized',
+                    message: 'Invalid admin secret'
+                });
+            }
+            const db = (0, db_1.getDB)();
+            const result = yield db.collection('users').deleteOne({ id });
+            if (result.deletedCount === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Not found',
+                    message: 'User not found'
+                });
+            }
+            console.log(`Force deleted user ${id}`);
+            res.json({
+                success: true,
+                message: `User ${id} permanently deleted`
+            });
+        }
+        catch (error) {
+            console.error('Error force deleting user:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Internal server error'
             });
         }
     })

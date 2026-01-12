@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const postsController_1 = require("../controllers/postsController");
 const router = (0, express_1.Router)();
+// GET /api/posts/search - Search posts
+router.get('/search', postsController_1.postsController.searchPosts);
 // GET /api/posts - Get all posts
 router.get('/', postsController_1.postsController.getAllPosts);
 // GET /api/posts/hashtags/trending - Get trending hashtags

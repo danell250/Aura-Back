@@ -175,37 +175,6 @@ app.use('/api/users', (req, res, next) => {
     console.log(`Users route hit: ${req.method} ${req.path}`);
     next();
 }, usersRoutes_1.default);
-// Google OAuth routes (legacy - moved to /auth)
-app.get('/auth/google', passport_1.default.authenticate('google', { scope: ['profile', 'email'] }));
-app.get('/auth/google/callback', passport_1.default.authenticate('google', { failureRedirect: '/login' }), (req, res) => {
-    // Successful authentication, redirect to frontend
-    res.redirect(process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app');
-});
-// Logout route (legacy - moved to /auth)
-app.get('/auth/logout', (req, res) => {
-    req.logout((err) => {
-        if (err) {
-            console.error('Error during logout:', err);
-        }
-        req.session.destroy((err) => {
-            if (err) {
-                console.error('Error destroying session:', err);
-            }
-            // Clear the session object properly
-            req.session = undefined;
-            res.json({ success: true, message: 'Logged out successfully' });
-        });
-    });
-});
-// Get current user info (legacy - moved to /auth)
-app.get('/auth/user', (req, res) => {
-    if (req.isAuthenticated && req.isAuthenticated()) {
-        res.json({ user: req.user });
-    }
-    else {
-        res.status(401).json({ error: 'Not authenticated' });
-    }
-});
 // Debug endpoint to check environment variables
 app.get('/api/debug/env', (req, res) => {
     res.json({

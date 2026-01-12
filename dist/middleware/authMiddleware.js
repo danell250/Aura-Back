@@ -15,14 +15,39 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireAdmin = exports.requireOwnership = exports.attachUser = exports.optionalAuth = exports.requireAuth = void 0;
 const db_1 = require("../db");
 const firebaseAdmin_1 = __importDefault(require("../firebaseAdmin"));
-// Middleware to check if user is authenticated via session or Bearer token
+const authUtils_1 = require("../utils/authUtils");
+// Middleware to check if user is authenticated via JWT or Firebase
 const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    // 1. Check Session Auth
+    // 1. Check JWT Token
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split(' ')[1];
+        const decoded = (0, authUtils_1.verifyToken)(token);
+        if (decoded) {
+            try {
+                const db = (0, db_1.getDB)();
+                const user = yield db.collection('users').findOne({ id: decoded.id });
+                if (user) {
+                    req.user = user;
+                    req.isAuthenticated = (() => true);
+                    return next();
+                }
+            }
+            catch (error) {
+                console.error('Error retrieving user from database:', error);
+            }
+        }
+        return res.status(403).json({
+            success: false,
+            error: 'Invalid token',
+            message: 'The provided token is invalid or expired'
+        });
+    }
+    // 2. Check Session Auth (fallback)
     if (req.isAuthenticated && req.isAuthenticated()) {
         return next();
     }
-    // 2. Check Bearer Token (Firebase)
-    const authHeader = req.headers.authorization;
+    // 3. Check Bearer Token (Firebase)
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
         try {
@@ -68,12 +93,30 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
 exports.requireAuth = requireAuth;
 // Middleware to check if user is authenticated (optional - doesn't block)
 const optionalAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    // Try JWT first
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split(' ')[1];
+        const decoded = (0, authUtils_1.verifyToken)(token);
+        if (decoded) {
+            try {
+                const db = (0, db_1.getDB)();
+                const user = yield db.collection('users').findOne({ id: decoded.id });
+                if (user) {
+                    req.user = user;
+                    req.isAuthenticated = (() => true);
+                }
+            }
+            catch (error) {
+                console.error('Error retrieving user from database in optional auth:', error);
+            }
+        }
+    }
     // Check if already authenticated via session
     if (req.isAuthenticated && req.isAuthenticated()) {
         return next();
     }
     // Try to authenticate via Bearer token
-    const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
         try {
@@ -94,10 +137,24 @@ const optionalAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, funct
     next();
 });
 exports.optionalAuth = optionalAuth;
-// Middleware to get user data from session and attach to request
+// Middleware to get user data from JWT and attach to request
 const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // 1. Session Auth
+        // 1. JWT Token Auth
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.split(' ')[1];
+            const decoded = (0, authUtils_1.verifyToken)(token);
+            if (decoded) {
+                const db = (0, db_1.getDB)();
+                const user = yield db.collection('users').findOne({ id: decoded.id });
+                if (user) {
+                    req.user = Object.assign(Object.assign({}, user), { id: user.id });
+                    req.isAuthenticated = (() => true);
+                }
+            }
+        }
+        // 2. Session Auth (fallback)
         if (req.isAuthenticated && req.isAuthenticated() && req.user) {
             // If we have a session user, try to get full user data from database
             const db = (0, db_1.getDB)();
@@ -110,8 +167,7 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
             }
             return next();
         }
-        // 2. Bearer Token Auth (Firebase)
-        const authHeader = req.headers.authorization;
+        // 3. Bearer Token Auth (Firebase)
         if (authHeader && authHeader.startsWith('Bearer ')) {
             const token = authHeader.split(' ')[1];
             try {
@@ -137,7 +193,7 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
                 console.warn('Failed to verify token in attachUser:', e);
             }
         }
-        // 3. Simple User ID Auth (for manually registered users)
+        // 4. Simple User ID Auth (for manually registered users)
         const userIdHeader = req.headers['x-user-id'];
         if (userIdHeader && !req.user) {
             try {

@@ -2,16 +2,45 @@ import { Request, Response, NextFunction } from 'express';
 import { getDB } from '../db';
 import { User } from '../types';
 import admin from '../firebaseAdmin';
+import { verifyToken } from '../utils/authUtils';
 
-// Middleware to check if user is authenticated via session or Bearer token
+// Middleware to check if user is authenticated via JWT or Firebase
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
-  // 1. Check Session Auth
+  // 1. Check JWT Token
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    
+    const decoded = verifyToken(token);
+    
+    if (decoded) {
+      try {
+        const db = getDB();
+        const user = await db.collection('users').findOne({ id: decoded.id });
+        
+        if (user) {
+          req.user = user as unknown as User;
+          req.isAuthenticated = (() => true) as any;
+          return next();
+        }
+      } catch (error) {
+        console.error('Error retrieving user from database:', error);
+      }
+    }
+    
+    return res.status(403).json({
+      success: false,
+      error: 'Invalid token',
+      message: 'The provided token is invalid or expired'
+    });
+  }
+  
+  // 2. Check Session Auth (fallback)
   if (req.isAuthenticated && req.isAuthenticated()) {
     return next();
   }
-  
-  // 2. Check Bearer Token (Firebase)
-  const authHeader = req.headers.authorization;
+
+  // 3. Check Bearer Token (Firebase)
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
     
@@ -60,13 +89,34 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
 
 // Middleware to check if user is authenticated (optional - doesn't block)
 export const optionalAuth = async (req: Request, res: Response, next: NextFunction) => {
+  // Try JWT first
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    
+    const decoded = verifyToken(token);
+    
+    if (decoded) {
+      try {
+        const db = getDB();
+        const user = await db.collection('users').findOne({ id: decoded.id });
+        
+        if (user) {
+          req.user = user as unknown as User;
+          req.isAuthenticated = (() => true) as any;
+        }
+      } catch (error) {
+        console.error('Error retrieving user from database in optional auth:', error);
+      }
+    }
+  }
+
   // Check if already authenticated via session
   if (req.isAuthenticated && req.isAuthenticated()) {
     return next();
   }
 
   // Try to authenticate via Bearer token
-  const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
     
@@ -90,10 +140,32 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
   next();
 };
 
-// Middleware to get user data from session and attach to request
+// Middleware to get user data from JWT and attach to request
 export const attachUser = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // 1. Session Auth
+    // 1. JWT Token Auth
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      
+      const decoded = verifyToken(token);
+      
+      if (decoded) {
+        const db = getDB();
+        const user = await db.collection('users').findOne({ id: decoded.id });
+        
+        if (user) {
+          req.user = {
+            ...user,
+            id: user.id
+          } as unknown as User;
+          
+          req.isAuthenticated = (() => true) as any;
+        }
+      }
+    }
+
+    // 2. Session Auth (fallback)
     if (req.isAuthenticated && req.isAuthenticated() && req.user) {
       // If we have a session user, try to get full user data from database
       const db = getDB();
@@ -111,8 +183,7 @@ export const attachUser = async (req: Request, res: Response, next: NextFunction
       return next();
     }
 
-    // 2. Bearer Token Auth (Firebase)
-    const authHeader = req.headers.authorization;
+    // 3. Bearer Token Auth (Firebase)
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1];
       
@@ -144,7 +215,7 @@ export const attachUser = async (req: Request, res: Response, next: NextFunction
       }
     }
 
-    // 3. Simple User ID Auth (for manually registered users)
+    // 4. Simple User ID Auth (for manually registered users)
     const userIdHeader = req.headers['x-user-id'] as string;
     if (userIdHeader && !req.user) {
       try {
