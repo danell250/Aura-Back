@@ -101,6 +101,13 @@ export const usersController = {
            delete updateData.acquaintances;
         }
 
+        // CRITICAL: Preserve existing handle if it's already set on the user.
+        // We do NOT want to overwrite the handle with a new auto-generated one from the frontend/auth provider
+        // unless the user is explicitly trying to change it (which should probably go through a dedicated endpoint anyway).
+        if (existingUserByEmail.handle) {
+          delete updateData.handle;
+        }
+
         await db.collection('users').updateOne(
           { id: userId },
           { $set: updateData }
@@ -129,12 +136,27 @@ export const usersController = {
 
       // Create new user with proper ID
       const userId = userData.id || `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Generate handle deterministically if not provided
+      let finalHandle = userData.handle;
+      if (!finalHandle) {
+        const baseHandle = `@${userData.firstName?.toLowerCase() || 'user'}${userData.lastName?.toLowerCase() || ''}`;
+        finalHandle = baseHandle;
+        let counter = 1;
+        
+        // Ensure handle uniqueness
+        while (await db.collection('users').findOne({ handle: finalHandle })) {
+          finalHandle = `${baseHandle}${counter}`;
+          counter++;
+        }
+      }
+      
       const newUser = {
         id: userId,
         firstName: userData.firstName,
         lastName: userData.lastName,
         name: userData.name || `${userData.firstName} ${userData.lastName}`,
-        handle: userData.handle || `@${userData.firstName.toLowerCase()}${userData.lastName.toLowerCase()}`,
+        handle: finalHandle,
         avatar: userData.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
         avatarType: userData.avatarType || 'image',
         email: userData.email,

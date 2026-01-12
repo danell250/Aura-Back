@@ -51,7 +51,6 @@ async (_accessToken, _refreshToken, profile, done) => {
       email: email.toLowerCase().trim(),
       avatar: profile.photos?.[0]?.value || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
       avatarType: 'image' as const,
-      handle: `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`,
       bio: 'New to Aura',
       industry: 'Other',
       companyName: '',
