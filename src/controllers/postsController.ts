@@ -1,58 +1,17 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
-import { getHashtagsFromText, getTrendingHashtags, filterByHashtags } from '../utils/hashtagUtils';
+import { getHashtagsFromText } from '../utils/hashtagUtils';
 import { createNotificationInDB } from './notificationsController';
 
-// Mock data - in production this would come from database
-const mockPosts: any[] = [
-  {
-    id: 'post-1',
-    author: {
-      id: '1',
-      firstName: 'James',
-      lastName: 'Mitchell',
-      name: 'James Mitchell',
-      handle: '@jamesmitchell',
-      avatar: 'https://picsum.photos/id/7/150/150'
-    },
-    content: 'Strategic leadership requires a balance of vision and execution. The most successful leaders don\'t just set direction—they create systems that sustain momentum through uncertainty. #leadership #strategy #execution #vision',
-    energy: '💡 Deep Dive',
-    radiance: 156,
-    timestamp: Date.now() - 3600000,
-    reactions: { '👍': 45, '💡': 23, '🚀': 12 },
-    userReactions: [],
-    comments: [],
-    isBoosted: false,
-    hashtags: ['leadership', 'strategy', 'execution', 'vision']
-  },
-  {
-    id: 'post-2',
-    author: {
-      id: '2',
-      firstName: 'Sarah',
-      lastName: 'Williams',
-      name: 'Sarah Williams',
-      handle: '@sarahwilliams',
-      avatar: 'https://picsum.photos/id/25/150/150'
-    },
-    content: 'Innovation isn\'t just about technology—it\'s about reimagining how we solve problems. The best innovations often come from questioning assumptions we didn\'t even know we had. #innovation #problemsolving #creativity #mindset',
-    energy: '🚀 Breakthrough',
-    radiance: 203,
-    timestamp: Date.now() - 7200000,
-    reactions: { '🚀': 67, '💡': 34, '🔥': 21 },
-    userReactions: [],
-    comments: [],
-    isBoosted: true,
-    hashtags: ['innovation', 'problemsolving', 'creativity', 'mindset']
-  }
-];
+// MongoDB collection names
+const POSTS_COLLECTION = 'posts';
+const USERS_COLLECTION = 'users';
 
 export const postsController = {
   // GET /api/posts/search - Search posts
   searchPosts: async (req: Request, res: Response) => {
     try {
       const { q } = req.query;
-      
       if (!q || typeof q !== 'string') {
         return res.status(400).json({
           success: false,
@@ -61,79 +20,68 @@ export const postsController = {
         });
       }
 
-      const searchTerms = q.toLowerCase().split(' ').filter(term => term.length > 0);
-      
-      const filteredPosts = mockPosts.filter(post => {
-        const contentMatch = post.content && searchTerms.some(term => post.content.toLowerCase().includes(term));
-        const authorNameMatch = post.author.name && searchTerms.some(term => post.author.name.toLowerCase().includes(term));
-        const authorHandleMatch = post.author.handle && searchTerms.some(term => post.author.handle.toLowerCase().includes(term));
-        const hashtagMatch = post.hashtags && post.hashtags.some((tag: string) => searchTerms.some(term => tag.toLowerCase().includes(term)));
-        
-        return contentMatch || authorNameMatch || authorHandleMatch || hashtagMatch;
-      });
+      const db = getDB();
+      const query = q.toLowerCase().trim();
 
-      res.json({
-        success: true,
-        data: filteredPosts
-      });
+      // Basic search across content, author fields, and hashtags
+      const posts = await db.collection(POSTS_COLLECTION)
+        .find({
+          $or: [
+            { content: { $regex: query, $options: 'i' } },
+            { 'author.name': { $regex: query, $options: 'i' } },
+            { 'author.handle': { $regex: query, $options: 'i' } },
+            { hashtags: { $elemMatch: { $regex: query, $options: 'i' } } }
+          ]
+        })
+        .sort({ timestamp: -1 })
+        .limit(100)
+        .toArray();
+
+      res.json({ success: true, data: posts });
     } catch (error) {
       console.error('Error searching posts:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to search posts',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to search posts', message: 'Internal server error' });
     }
   },
 
-  // GET /api/posts - Get all posts
+  // GET /api/posts - Get all posts (with filters & pagination)
   getAllPosts: async (req: Request, res: Response) => {
     try {
-      const { page = 1, limit = 20, userId, energy, hashtags } = req.query;
-      
-      let filteredPosts = [...mockPosts];
-      
-      // Filter by user if specified
-      if (userId) {
-        filteredPosts = filteredPosts.filter(post => post.author.id === userId);
-      }
-      
-      // Filter by energy type if specified
-      if (energy) {
-        filteredPosts = filteredPosts.filter(post => post.energy === energy);
-      }
-      
-      // Filter by hashtags if specified
+      const { page = 1, limit = 20, userId, energy, hashtags } = req.query as Record<string, any>;
+      const db = getDB();
+
+      const query: any = {};
+      if (userId) query['author.id'] = userId;
+      if (energy) query.energy = energy;
       if (hashtags) {
-        const searchTags = Array.isArray(hashtags) ? hashtags : [hashtags];
-        filteredPosts = filterByHashtags(filteredPosts, searchTags as string[]);
+        const tags = Array.isArray(hashtags) ? hashtags : [hashtags];
+        query.hashtags = { $in: tags };
       }
-      
-      // Sort by timestamp (newest first)
-      filteredPosts.sort((a, b) => b.timestamp - a.timestamp);
-      
-      // Pagination
-      const startIndex = (Number(page) - 1) * Number(limit);
-      const endIndex = startIndex + Number(limit);
-      const paginatedPosts = filteredPosts.slice(startIndex, endIndex);
-      
+
+      const pageNum = Math.max(parseInt(String(page), 10) || 1, 1);
+      const limitNum = Math.min(Math.max(parseInt(String(limit), 10) || 20, 1), 100);
+
+      const total = await db.collection(POSTS_COLLECTION).countDocuments(query);
+      const data = await db.collection(POSTS_COLLECTION)
+        .find(query)
+        .sort({ timestamp: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .toArray();
+
       res.json({
         success: true,
-        data: paginatedPosts,
+        data,
         pagination: {
-          page: Number(page),
-          limit: Number(limit),
-          total: filteredPosts.length,
-          pages: Math.ceil(filteredPosts.length / Number(limit))
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum)
         }
       });
     } catch (error) {
       console.error('Error fetching posts:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to fetch posts',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to fetch posts', message: 'Internal server error' });
     }
   },
 
@@ -141,27 +89,17 @@ export const postsController = {
   getPostById: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const post = mockPosts.find(p => p.id === id);
-      
+      const db = getDB();
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+
       if (!post) {
-        return res.status(404).json({
-          success: false,
-          error: 'Post not found',
-          message: `Post with ID ${id} does not exist`
-        });
+        return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
       }
-      
-      res.json({
-        success: true,
-        data: post
-      });
+
+      res.json({ success: true, data: post });
     } catch (error) {
       console.error('Error fetching post:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to fetch post',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to fetch post', message: 'Internal server error' });
     }
   },
 
@@ -169,32 +107,37 @@ export const postsController = {
   createPost: async (req: Request, res: Response) => {
     try {
       const { content, mediaUrl, mediaType, energy, authorId } = req.body;
-      
-      // Validate required fields
       if (!content || !authorId) {
-        return res.status(400).json({
-          success: false,
-          error: 'Missing required fields',
-          message: 'content and authorId are required'
-        });
+        return res.status(400).json({ success: false, error: 'Missing required fields', message: 'content and authorId are required' });
       }
 
-      // Extract hashtags from content
-      const hashtags = getHashtagsFromText(content);
-
-      // In production, fetch author from database
-      const author = {
+      const db = getDB();
+      // Try to fetch full author from DB
+      const author = await db.collection(USERS_COLLECTION).findOne({ id: authorId });
+      const authorEmbed = author ? {
+        id: author.id,
+        firstName: author.firstName,
+        lastName: author.lastName,
+        name: author.name,
+        handle: author.handle,
+        avatar: author.avatar,
+        avatarType: author.avatarType || 'image',
+        activeGlow: author.activeGlow
+      } : {
         id: authorId,
         firstName: 'User',
         lastName: '',
         name: 'User',
         handle: '@user',
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`,
+        avatarType: 'image',
+        activeGlow: 'none'
       };
 
+      const hashtags = getHashtagsFromText(content);
       const newPost = {
         id: `post-${Date.now()}`,
-        author,
+        author: authorEmbed,
         content,
         mediaUrl: mediaUrl || undefined,
         mediaType: mediaType || undefined,
@@ -202,91 +145,79 @@ export const postsController = {
         radiance: 0,
         timestamp: Date.now(),
         reactions: {} as Record<string, number>,
-        userReactions: [],
-        comments: [],
+        userReactions: [] as string[], // optional per-user reaction tracking placeholder
+        comments: [] as any[],
         isBoosted: false,
         hashtags
       };
 
-      // In production, save to database
-      mockPosts.unshift(newPost);
-
-      res.status(201).json({
-        success: true,
-        data: newPost,
-        message: 'Post created successfully'
-      });
+      await db.collection(POSTS_COLLECTION).insertOne(newPost);
+      res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
     } catch (error) {
       console.error('Error creating post:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to create post',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to create post', message: 'Internal server error' });
     }
   },
 
-  // PUT /api/posts/:id - Update post
+  // PUT /api/posts/:id - Update post (author only)
   updatePost: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const updates = req.body;
-      
-      const postIndex = mockPosts.findIndex(p => p.id === id);
-      if (postIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Post not found',
-          message: `Post with ID ${id} does not exist`
-        });
+      const updates = req.body || {};
+      const db = getDB();
+
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!post) {
+        return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
       }
 
-      // Update post
-      mockPosts[postIndex] = { ...mockPosts[postIndex], ...updates };
+      // Auth check: only author can update
+      const user = (req as any).user;
+      if (!user || user.id !== post.author.id) {
+        return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can update this post' });
+      }
 
-      res.json({
-        success: true,
-        data: mockPosts[postIndex],
-        message: 'Post updated successfully'
-      });
+      // Prevent changing immutable fields
+      delete updates.id; delete updates.author; delete updates.timestamp;
+
+      if (typeof updates.content === 'string') {
+        updates.hashtags = getHashtagsFromText(updates.content);
+      }
+
+      const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
+        { id },
+        { $set: { ...updates, updatedAt: new Date().toISOString() } },
+        { returnDocument: 'after' }
+      );
+
+      res.json({ success: true, data: result.value, message: 'Post updated successfully' });
     } catch (error) {
       console.error('Error updating post:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to update post',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to update post', message: 'Internal server error' });
     }
   },
 
-  // DELETE /api/posts/:id - Delete post
+  // DELETE /api/posts/:id - Delete post (author only)
   deletePost: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      
-      const postIndex = mockPosts.findIndex(p => p.id === id);
-      if (postIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Post not found',
-          message: `Post with ID ${id} does not exist`
-        });
+      const db = getDB();
+
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!post) {
+        return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
       }
 
-      // Remove post
-      mockPosts.splice(postIndex, 1);
+      const user = (req as any).user;
+      if (!user || user.id !== post.author.id) {
+        return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can delete this post' });
+      }
 
-      res.json({
-        success: true,
-        message: 'Post deleted successfully'
-      });
+      await db.collection(POSTS_COLLECTION).deleteOne({ id });
+      res.json({ success: true, message: 'Post deleted successfully' });
     } catch (error) {
       console.error('Error deleting post:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to delete post',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to delete post', message: 'Internal server error' });
     }
   },
 
@@ -295,78 +226,102 @@ export const postsController = {
     try {
       const { id } = req.params;
       const { reaction, userId } = req.body;
-      
-      const postIndex = mockPosts.findIndex(p => p.id === id);
-      if (postIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Post not found'
-        });
+      if (!reaction) {
+        return res.status(400).json({ success: false, error: 'Missing reaction' });
       }
 
-      // In production, handle reaction logic with database
-      const post = mockPosts[postIndex];
-      if (!(post.reactions as any)[reaction]) {
-        (post.reactions as any)[reaction] = 0;
+      const db = getDB();
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!post) {
+        return res.status(404).json({ success: false, error: 'Post not found' });
       }
-      (post.reactions as any)[reaction]++;
-      
-      // Create notification for post author if it's a like reaction and not from the author themselves
+
+      // Increment reaction counter
+      const incField: any = {};
+      incField[`reactions.${reaction}`] = 1;
+      const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
+        { id },
+        { $inc: incField },
+        { returnDocument: 'after' }
+      );
+
+      // Notify author for a special reaction (example: '✨')
       if (reaction === '✨' && post.author.id !== userId) {
         await createNotificationInDB(
-          post.author.id,  // recipient user ID
-          'like',          // notification type
-          userId,          // user who liked the post
-          'liked your post', // message
-          id               // post ID
+          post.author.id,
+          'like',
+          userId,
+          'liked your post',
+          id
         ).catch((err: any) => console.error('Error creating like notification:', err));
       }
 
-      res.json({
-        success: true,
-        data: post,
-        message: 'Reaction added successfully'
-      });
+      res.json({ success: true, data: result.value, message: 'Reaction added successfully' });
     } catch (error) {
       console.error('Error adding reaction:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to add reaction',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to add reaction', message: 'Internal server error' });
     }
   },
 
-  // POST /api/posts/:id/boost - Boost post
+  // POST /api/posts/:id/boost - Boost post and deduct credits server-side
   boostPost: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { userId } = req.body;
-      
-      const postIndex = mockPosts.findIndex(p => p.id === id);
-      if (postIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Post not found'
-        });
+      const { userId, credits } = req.body as { userId: string; credits?: number };
+      const db = getDB();
+
+      if (!userId) {
+        return res.status(400).json({ success: false, error: 'Missing userId' });
       }
 
-      // In production, deduct credits and boost post
-      mockPosts[postIndex].radiance += 100;
-      mockPosts[postIndex].isBoosted = true;
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!post) {
+        return res.status(404).json({ success: false, error: 'Post not found' });
+      }
 
-      res.json({
-        success: true,
-        data: mockPosts[postIndex],
-        message: 'Post boosted successfully'
-      });
+      // Determine credits to spend, default to 100 if not provided
+      const creditsToSpend = typeof credits === 'number' && credits > 0 ? credits : 100;
+
+      // Fetch user and ensure enough credits
+      const user = await db.collection(USERS_COLLECTION).findOne({ id: userId });
+      if (!user) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+      const currentCredits = user.auraCredits || 0;
+      if (currentCredits < creditsToSpend) {
+        return res.status(400).json({ success: false, error: 'Insufficient credits' });
+      }
+
+      // Deduct credits
+      const decRes = await db.collection(USERS_COLLECTION).updateOne(
+        { id: userId, auraCredits: { $gte: creditsToSpend } },
+        { $inc: { auraCredits: -creditsToSpend }, $set: { updatedAt: new Date().toISOString() } }
+      );
+      if (decRes.matchedCount === 0) {
+        return res.status(400).json({ success: false, error: 'Insufficient credits' });
+      }
+
+      // Apply boost to post (radiance proportional to credits)
+      const incRadiance = creditsToSpend * 2; // keep same multiplier as UI
+      try {
+        const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
+          { id },
+          { $set: { isBoosted: true, updatedAt: new Date().toISOString() }, $inc: { radiance: incRadiance } },
+          { returnDocument: 'after' }
+        );
+
+        return res.json({ success: true, data: result.value, message: 'Post boosted successfully' });
+      } catch (e) {
+        // Rollback user credits if boost failed
+        await db.collection(USERS_COLLECTION).updateOne(
+          { id: userId },
+          { $inc: { auraCredits: creditsToSpend }, $set: { updatedAt: new Date().toISOString() } }
+        );
+        throw e;
+      }
     } catch (error) {
       console.error('Error boosting post:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to boost post',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to boost post', message: 'Internal server error' });
     }
   },
 
@@ -375,66 +330,57 @@ export const postsController = {
     try {
       const { id } = req.params;
       const { userId } = req.body;
-      
-      const postIndex = mockPosts.findIndex(p => p.id === id);
-      if (postIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Post not found'
-        });
+      const db = getDB();
+
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!post) {
+        return res.status(404).json({ success: false, error: 'Post not found' });
       }
 
-      const post = mockPosts[postIndex];
-      
-      // Create notification for post author if not shared by the author themselves
+      // Optionally increment a share counter on the post
+      await db.collection(POSTS_COLLECTION).updateOne(
+        { id },
+        { $inc: { shares: 1 } }
+      );
+
       if (post.author.id !== userId) {
         await createNotificationInDB(
-          post.author.id,  // recipient user ID
-          'share',         // notification type
-          userId,         // user who shared the post
-          'shared your post', // message
-          id              // post ID
+          post.author.id,
+          'share',
+          userId,
+          'shared your post',
+          id
         ).catch((err: any) => console.error('Error creating share notification:', err));
       }
 
-      res.json({
-        success: true,
-        data: post,
-        message: 'Post shared successfully'
-      });
+      const updated = await db.collection(POSTS_COLLECTION).findOne({ id });
+      res.json({ success: true, data: updated, message: 'Post shared successfully' });
     } catch (error) {
       console.error('Error sharing post:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to share post',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to share post', message: 'Internal server error' });
     }
   },
 
   // GET /api/posts/hashtags/trending - Get trending hashtags
   getTrendingHashtags: async (req: Request, res: Response) => {
     try {
-      const { limit = 10, hours = 24 } = req.query;
-      
-      const trendingTags = getTrendingHashtags(
-        mockPosts,
-        Number(limit),
-        Number(hours)
-      );
-      
-      res.json({
-        success: true,
-        data: trendingTags,
-        message: 'Trending hashtags retrieved successfully'
-      });
+      const { limit = 10, hours = 24 } = req.query as Record<string, any>;
+      const db = getDB();
+      const since = Date.now() - (parseInt(String(hours), 10) || 24) * 60 * 60 * 1000;
+
+      const pipeline = [
+        { $match: { timestamp: { $gte: since } } },
+        { $unwind: '$hashtags' },
+        { $group: { _id: { $toLower: '$hashtags' }, count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: Math.min(parseInt(String(limit), 10) || 10, 100) }
+      ];
+
+      const tags = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
+      res.json({ success: true, data: tags, message: 'Trending hashtags retrieved successfully' });
     } catch (error) {
       console.error('Error fetching trending hashtags:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to fetch trending hashtags',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to fetch trending hashtags', message: 'Internal server error' });
     }
   }
 };
