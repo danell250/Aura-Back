@@ -31,22 +31,33 @@ router.get('/google/callback',
         });
         
         if (existingUser) {
-          // Update existing user
+          // Preserve immutable fields like handle; only update mutable profile fields and timestamps
+          const preservedHandle = existingUser.handle;
+          const updates: any = {
+            // only update selected fields from OAuth
+            firstName: userData.firstName,
+            lastName: userData.lastName,
+            name: userData.name,
+            email: userData.email,
+            avatar: userData.avatar,
+            avatarType: userData.avatarType,
+            googleId: userData.googleId,
+            lastLogin: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          // Ensure handle never changes once assigned
+          updates.handle = preservedHandle || existingUser.handle || userData.handle;
+
           await db.collection('users').updateOne(
             { id: existingUser.id },
-            { 
-              $set: {
-                ...userData,
-                lastLogin: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-              }
-            }
+            { $set: updates }
           );
           console.log('Updated existing user after OAuth:', existingUser.id);
         } else {
-          // Create new user
+          // Create new user; generate and persist a handle once
           const newUser = {
             ...userData,
+            handle: userData.handle, // assigned once here
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             lastLogin: new Date().toISOString(),
