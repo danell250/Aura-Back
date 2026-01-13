@@ -378,6 +378,68 @@ async function startServer() {
       }
     }, 60000); // Check every minute
     
+    // Set up Time Capsule unlock checker
+    setInterval(async () => {
+      try {
+        if (!isDBConnected()) return;
+        
+        const db = getDB();
+        const now = Date.now();
+        
+        // Find Time Capsules that just unlocked (within the last 5 minutes)
+        const recentlyUnlocked = await db.collection('posts').find({
+          isTimeCapsule: true,
+          unlockDate: { 
+            $lte: now,
+            $gte: now - (5 * 60 * 1000) // Within last 5 minutes
+          },
+          unlockNotificationSent: { $ne: true }
+        }).toArray();
+        
+        // Send notifications for newly unlocked Time Capsules
+        for (const post of recentlyUnlocked) {
+          try {
+            // Import notification controller
+            const { createNotificationInDB } = await import('./controllers/notificationsController');
+            
+            // Notify the author
+            await createNotificationInDB(
+              post.author.id,
+              'time_capsule_unlocked',
+              'system',
+              `Your Time Capsule "${post.timeCapsuleTitle || 'Untitled'}" has been unlocked!`,
+              post.id
+            );
+            
+            // For group Time Capsules, notify invited users
+            if (post.timeCapsuleType === 'group' && post.invitedUsers) {
+              for (const userId of post.invitedUsers) {
+                await createNotificationInDB(
+                  userId,
+                  'time_capsule_unlocked',
+                  post.author.id,
+                  `A Time Capsule from ${post.author.name} has been unlocked!`,
+                  post.id
+                );
+              }
+            }
+            
+            // Mark as notification sent
+            await db.collection('posts').updateOne(
+              { id: post.id },
+              { $set: { unlockNotificationSent: true } }
+            );
+            
+            console.log(`📬 Sent unlock notifications for Time Capsule: ${post.id}`);
+          } catch (error) {
+            console.error(`Failed to send notification for Time Capsule ${post.id}:`, error);
+          }
+        }
+      } catch (error) {
+        console.error('Error checking Time Capsule unlocks:', error);
+      }
+    }, 5 * 60 * 1000); // Check every 5 minutes
+    
     // Graceful shutdown handling
     const gracefulShutdown = (signal: string) => {
       console.log(`\n🔄 Received ${signal}. Shutting down gracefully...`);

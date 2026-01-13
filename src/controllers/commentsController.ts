@@ -11,6 +11,7 @@ export const commentsController = {
       const { postId } = req.params;
       const { page = 1, limit = 50 } = req.query as Record<string, any>;
       const db = getDB();
+      const currentUserId = (req as any).user?.id;
 
       const pageNum = Math.max(parseInt(String(page), 10) || 1, 1);
       const limitNum = Math.min(Math.max(parseInt(String(limit), 10) || 50, 1), 200);
@@ -23,6 +24,19 @@ export const commentsController = {
         .skip((pageNum - 1) * limitNum)
         .limit(limitNum)
         .toArray();
+
+      // Post-process to add userReactions for the current user
+      if (currentUserId) {
+        data.forEach((comment: any) => {
+          if (comment.reactionUsers) {
+            comment.userReactions = Object.keys(comment.reactionUsers).filter(emoji => 
+              Array.isArray(comment.reactionUsers[emoji]) && comment.reactionUsers[emoji].includes(currentUserId)
+            );
+          } else {
+            comment.userReactions = [];
+          }
+        });
+      }
 
       res.json({
         success: true,
@@ -93,7 +107,8 @@ export const commentsController = {
         timestamp: Date.now(),
         parentId: parentId || null,
         reactions: {} as Record<string, number>,
-        userReactions: [] as string[]
+        reactionUsers: {} as Record<string, string[]>, // Store who reacted with what
+        userReactions: [] as string[] // placeholder for response
       };
 
       await db.collection(COMMENTS_COLLECTION).insertOne(newComment);
@@ -163,22 +178,63 @@ export const commentsController = {
     try {
       const { id } = req.params;
       const { reaction } = req.body as { reaction: string };
+      const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
 
       if (!reaction) {
         return res.status(400).json({ success: false, error: 'Missing reaction' });
       }
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
+      }
 
       const db = getDB();
-      const existing = await db.collection(COMMENTS_COLLECTION).findOne({ id });
-      if (!existing) {
+      const comment = await db.collection(COMMENTS_COLLECTION).findOne({ id });
+      if (!comment) {
         return res.status(404).json({ success: false, error: 'Comment not found' });
       }
 
-      const incField: any = {}; incField[`reactions.${reaction}`] = 1;
-      await db.collection(COMMENTS_COLLECTION).updateOne({ id }, { $inc: incField });
-      const updated = await db.collection(COMMENTS_COLLECTION).findOne({ id });
+      // Check if user already reacted with this emoji
+      const currentReactionUsers = comment.reactionUsers || {};
+      const usersForEmoji = currentReactionUsers[reaction] || [];
+      const hasReacted = usersForEmoji.includes(userId);
+      let action = 'added';
 
-      res.json({ success: true, data: updated, message: 'Reaction added successfully' });
+      if (hasReacted) {
+        // Remove reaction
+        action = 'removed';
+        await db.collection(COMMENTS_COLLECTION).updateOne(
+          { id },
+          {
+            $pull: { [`reactionUsers.${reaction}`]: userId },
+            $inc: { [`reactions.${reaction}`]: -1 }
+          }
+        );
+      } else {
+        // Add reaction
+        await db.collection(COMMENTS_COLLECTION).updateOne(
+          { id },
+          {
+            $addToSet: { [`reactionUsers.${reaction}`]: userId },
+            $inc: { [`reactions.${reaction}`]: 1 }
+          }
+        );
+      }
+
+      // Fetch updated comment to return consistent state
+      const updatedCommentDoc = await db.collection(COMMENTS_COLLECTION).findOne({ id });
+      if (!updatedCommentDoc) {
+        return res.status(500).json({ success: false, error: 'Failed to update reaction' });
+      }
+      const updatedComment = updatedCommentDoc as any;
+      if (updatedComment.reactionUsers) {
+        updatedComment.userReactions = Object.keys(updatedComment.reactionUsers).filter(emoji => 
+          Array.isArray(updatedComment.reactionUsers[emoji]) && updatedComment.reactionUsers[emoji].includes(userId)
+        );
+      } else {
+        updatedComment.userReactions = [];
+      }
+
+      res.json({ success: true, data: updatedComment, message: `Reaction ${action} successfully` });
     } catch (error) {
       console.error('Error adding reaction:', error);
       res.status(500).json({ success: false, error: 'Failed to add reaction', message: 'Internal server error' });

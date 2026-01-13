@@ -16,6 +16,7 @@ const express_1 = require("express");
 const passport_1 = __importDefault(require("passport"));
 const db_1 = require("../db");
 const authMiddleware_1 = require("../middleware/authMiddleware");
+const jwtUtils_1 = require("../utils/jwtUtils");
 const router = (0, express_1.Router)();
 // Google OAuth routes
 router.get('/google', passport_1.default.authenticate('google', { scope: ['profile', 'email'] }));
@@ -34,21 +35,35 @@ router.get('/google/callback', passport_1.default.authenticate('google', { failu
                 ]
             });
             if (existingUser) {
-                // Update existing user
-                yield db.collection('users').updateOne({ id: existingUser.id }, {
-                    $set: Object.assign(Object.assign({}, userData), { lastLogin: new Date().toISOString(), updatedAt: new Date().toISOString() })
-                });
+                // Preserve immutable fields like handle; only update mutable profile fields and timestamps
+                const preservedHandle = existingUser.handle;
+                const updates = {
+                    // only update selected fields from OAuth
+                    firstName: userData.firstName,
+                    lastName: userData.lastName,
+                    name: userData.name,
+                    email: userData.email,
+                    avatar: userData.avatar,
+                    avatarType: userData.avatarType,
+                    googleId: userData.googleId,
+                    lastLogin: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+                // Ensure handle never changes once assigned
+                updates.handle = preservedHandle || existingUser.handle || userData.handle;
+                yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
                 console.log('Updated existing user after OAuth:', existingUser.id);
             }
             else {
-                // Create new user
-                const newUser = Object.assign(Object.assign({}, userData), { createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [] });
+                // Create new user; generate and persist a handle once
+                const newUser = Object.assign(Object.assign({}, userData), { handle: userData.handle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [] });
                 yield db.collection('users').insertOne(newUser);
                 console.log('Created new user after OAuth:', newUser.id);
             }
-            // Successful authentication, redirect to frontend
+            // Successful authentication, redirect to frontend with token
             const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
-            res.redirect(frontendUrl);
+            const token = (0, jwtUtils_1.generateToken)(req.user);
+            res.redirect(`${frontendUrl}/feed?token=${token}`);
         }
     }
     catch (error) {
@@ -159,6 +174,7 @@ router.post('/login', (req, res) => __awaiter(void 0, void 0, void 0, function* 
             res.json({
                 success: true,
                 user: user,
+                token: (0, jwtUtils_1.generateToken)(user),
                 message: 'Login successful'
             });
         });
@@ -239,6 +255,7 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             res.status(201).json({
                 success: true,
                 user: newUser,
+                token: (0, jwtUtils_1.generateToken)(newUser),
                 message: 'Registration successful'
             });
         });

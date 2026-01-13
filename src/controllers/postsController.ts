@@ -59,6 +59,20 @@ export const postsController = {
         query.hashtags = { $in: tags };
       }
 
+      // Filter out locked Time Capsules (unless viewing own profile)
+      const now = Date.now();
+      if (!userId || userId !== currentUserId) {
+        // For public feed or other users' profiles, hide locked time capsules
+        query.$or = [
+          { isTimeCapsule: { $ne: true } }, // Regular posts
+          { isTimeCapsule: true, unlockDate: { $lte: now } }, // Unlocked time capsules
+          { isTimeCapsule: true, 'author.id': currentUserId } // Own time capsules (always visible to author)
+        ];
+      } else {
+        // When viewing own profile, show all posts including locked time capsules
+        // No additional filtering needed
+      }
+
       const pageNum = Math.max(parseInt(String(page), 10) || 1, 1);
       const limitNum = Math.min(Math.max(parseInt(String(limit), 10) || 20, 1), 100);
 
@@ -83,7 +97,15 @@ export const postsController = {
             commentCount: { $size: '$fetchedComments' },
             // Populate comments with all fetched comments so they load immediately
             // If there are too many, we might want to slice, but for now this solves "immediate load"
-            comments: '$fetchedComments' 
+            comments: '$fetchedComments',
+            // Calculate if time capsule is unlocked
+            isUnlocked: {
+              $cond: {
+                if: { $eq: ['$isTimeCapsule', true] },
+                then: { $lte: ['$unlockDate', now] },
+                else: true
+              }
+            }
           }
         },
         {
@@ -146,7 +168,15 @@ export const postsController = {
         {
           $addFields: {
             commentCount: { $size: '$fetchedComments' },
-            comments: '$fetchedComments'
+            comments: '$fetchedComments',
+            // Calculate if time capsule is unlocked
+            isUnlocked: {
+              $cond: {
+                if: { $eq: ['$isTimeCapsule', true] },
+                then: { $lte: ['$unlockDate', Date.now()] },
+                else: true
+              }
+            }
           }
         },
         { $project: { fetchedComments: 0 } }
@@ -157,6 +187,14 @@ export const postsController = {
 
       if (!post) {
         return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
+      }
+
+      // Check if this is a locked Time Capsule that the user shouldn't see
+      if (post.isTimeCapsule && post.unlockDate && Date.now() < post.unlockDate) {
+        // Only allow the author to see their own locked time capsules
+        if (!currentUserId || currentUserId !== post.author.id) {
+          return res.status(404).json({ success: false, error: 'Post not found', message: 'Time Capsule is not yet unlocked' });
+        }
       }
 
       // Post-process to add userReactions for the current user
@@ -180,7 +218,20 @@ export const postsController = {
   // POST /api/posts - Create new post
   createPost: async (req: Request, res: Response) => {
     try {
-      const { content, mediaUrl, mediaType, energy, authorId } = req.body;
+      const { 
+        content, 
+        mediaUrl, 
+        mediaType, 
+        energy, 
+        authorId,
+        // Time Capsule specific fields
+        isTimeCapsule,
+        unlockDate,
+        timeCapsuleType,
+        invitedUsers,
+        timeCapsuleTitle
+      } = req.body;
+      
       if (!content || !authorId) {
         return res.status(400).json({ success: false, error: 'Missing required fields', message: 'content and authorId are required' });
       }
@@ -209,8 +260,10 @@ export const postsController = {
       };
 
       const hashtags = getHashtagsFromText(content);
+      const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
+      
       const newPost = {
-        id: `post-${Date.now()}`,
+        id: postId,
         author: authorEmbed,
         content,
         mediaUrl: mediaUrl || undefined,
@@ -223,7 +276,16 @@ export const postsController = {
         userReactions: [] as string[], // placeholder for response
         comments: [] as any[],
         isBoosted: false,
-        hashtags
+        hashtags,
+        // Time Capsule specific fields
+        ...(isTimeCapsule && {
+          isTimeCapsule: true,
+          unlockDate: unlockDate || null,
+          isUnlocked: unlockDate ? Date.now() >= unlockDate : true,
+          timeCapsuleType: timeCapsuleType || null,
+          invitedUsers: invitedUsers || [],
+          timeCapsuleTitle: timeCapsuleTitle || null
+        })
       };
 
       await db.collection(POSTS_COLLECTION).insertOne(newPost);

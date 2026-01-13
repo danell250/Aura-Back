@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -38,7 +71,7 @@ dotenv_1.default.config();
 passport_1.default.use(new passport_google_oauth20_1.Strategy({
     clientID: process.env.GOOGLE_CLIENT_ID || '63639970194-r83ifit3giq02jd1rgfq84uea5tbgv6h.apps.googleusercontent.com',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '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',
-    callbackURL: "/auth/google/callback"
+    callbackURL: "https://aura-back-s1bw.onrender.com/api/auth/google/callback"
 }, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c, _d;
     try {
@@ -141,6 +174,7 @@ app.use((0, express_session_1.default)({
     saveUninitialized: false,
     cookie: {
         secure: process.env.NODE_ENV === 'production', // Set to true in production with HTTPS
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
         maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
 }));
@@ -166,7 +200,7 @@ app.use('/uploads', express_1.default.static(uploadsDir));
 // Routes
 console.log('Registering routes...');
 // Authentication routes (should come first)
-app.use('/auth', authRoutes_1.default);
+app.use('/api/auth', authRoutes_1.default);
 // Privacy routes
 app.use('/api/privacy', privacyRoutes_1.default);
 // Apply user attachment middleware to all API routes
@@ -175,14 +209,8 @@ app.use('/api/users', (req, res, next) => {
     console.log(`Users route hit: ${req.method} ${req.path}`);
     next();
 }, usersRoutes_1.default);
-// Google OAuth routes (legacy - moved to /auth)
-app.get('/auth/google', passport_1.default.authenticate('google', { scope: ['profile', 'email'] }));
-app.get('/auth/google/callback', passport_1.default.authenticate('google', { failureRedirect: '/login' }), (req, res) => {
-    // Successful authentication, redirect to frontend
-    res.redirect(process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app');
-});
 // Logout route (legacy - moved to /auth)
-app.get('/auth/logout', (req, res) => {
+app.get('/api/auth/logout', (req, res) => {
     req.logout((err) => {
         if (err) {
             console.error('Error during logout:', err);
@@ -196,6 +224,12 @@ app.get('/auth/logout', (req, res) => {
             res.json({ success: true, message: 'Logged out successfully' });
         });
     });
+});
+// Google OAuth routes
+app.get('/login', passport_1.default.authenticate('google', { scope: ['profile', 'email'] }));
+app.get('/login/callback', passport_1.default.authenticate('google', { failureRedirect: '/login' }), (req, res) => {
+    // Successful authentication, redirect to frontend
+    res.redirect(process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app');
 });
 // Get current user info (legacy - moved to /auth)
 app.get('/auth/user', (req, res) => {
@@ -228,7 +262,8 @@ app.use('/api/gemini', geminiRoutes_1.default);
 app.use('/api/upload', uploadRoutes_1.default);
 app.use('/api/posts', postsRoutes_1.default);
 app.use('/api/ads', adsRoutes_1.default);
-app.use('/api/comments', commentsRoutes_1.default);
+// Mount comments routes at /api so routes like /api/posts/:postId/comments work
+app.use('/api', commentsRoutes_1.default);
 app.use('/api/notifications', notificationsRoutes_1.default);
 app.use('/api/messages', messagesRoutes_1.default);
 app.use('/api/subscriptions', subscriptionsRoutes_1.default);
@@ -344,6 +379,48 @@ function startServer() {
                     console.warn('⚠️  Database health check failed - connection may be unstable');
                 }
             }), 60000); // Check every minute
+            // Set up Time Capsule unlock checker
+            setInterval(() => __awaiter(this, void 0, void 0, function* () {
+                try {
+                    if (!(0, db_1.isDBConnected)())
+                        return;
+                    const db = (0, db_1.getDB)();
+                    const now = Date.now();
+                    // Find Time Capsules that just unlocked (within the last 5 minutes)
+                    const recentlyUnlocked = yield db.collection('posts').find({
+                        isTimeCapsule: true,
+                        unlockDate: {
+                            $lte: now,
+                            $gte: now - (5 * 60 * 1000) // Within last 5 minutes
+                        },
+                        unlockNotificationSent: { $ne: true }
+                    }).toArray();
+                    // Send notifications for newly unlocked Time Capsules
+                    for (const post of recentlyUnlocked) {
+                        try {
+                            // Import notification controller
+                            const { createNotificationInDB } = yield Promise.resolve().then(() => __importStar(require('./controllers/notificationsController')));
+                            // Notify the author
+                            yield createNotificationInDB(post.author.id, 'time_capsule_unlocked', 'system', `Your Time Capsule "${post.timeCapsuleTitle || 'Untitled'}" has been unlocked!`, post.id);
+                            // For group Time Capsules, notify invited users
+                            if (post.timeCapsuleType === 'group' && post.invitedUsers) {
+                                for (const userId of post.invitedUsers) {
+                                    yield createNotificationInDB(userId, 'time_capsule_unlocked', post.author.id, `A Time Capsule from ${post.author.name} has been unlocked!`, post.id);
+                                }
+                            }
+                            // Mark as notification sent
+                            yield db.collection('posts').updateOne({ id: post.id }, { $set: { unlockNotificationSent: true } });
+                            console.log(`📬 Sent unlock notifications for Time Capsule: ${post.id}`);
+                        }
+                        catch (error) {
+                            console.error(`Failed to send notification for Time Capsule ${post.id}:`, error);
+                        }
+                    }
+                }
+                catch (error) {
+                    console.error('Error checking Time Capsule unlocks:', error);
+                }
+            }), 5 * 60 * 1000); // Check every 5 minutes
             // Graceful shutdown handling
             const gracefulShutdown = (signal) => {
                 console.log(`\n🔄 Received ${signal}. Shutting down gracefully...`);

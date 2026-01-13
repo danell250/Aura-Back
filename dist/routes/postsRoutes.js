@@ -2,25 +2,26 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const postsController_1 = require("../controllers/postsController");
+const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = (0, express_1.Router)();
 // GET /api/posts/search - Search posts
-router.get('/search', postsController_1.postsController.searchPosts);
+router.get('/search', authMiddleware_1.optionalAuth, postsController_1.postsController.searchPosts);
 // GET /api/posts - Get all posts
-router.get('/', postsController_1.postsController.getAllPosts);
+router.get('/', authMiddleware_1.optionalAuth, postsController_1.postsController.getAllPosts);
 // GET /api/posts/hashtags/trending - Get trending hashtags
 router.get('/hashtags/trending', postsController_1.postsController.getTrendingHashtags);
 // GET /api/posts/:id - Get post by ID
-router.get('/:id', postsController_1.postsController.getPostById);
+router.get('/:id', authMiddleware_1.optionalAuth, postsController_1.postsController.getPostById);
 // POST /api/posts - Create new post
-router.post('/', postsController_1.postsController.createPost);
+router.post('/', authMiddleware_1.requireAuth, postsController_1.postsController.createPost);
 // PUT /api/posts/:id - Update post
-router.put('/:id', postsController_1.postsController.updatePost);
+router.put('/:id', authMiddleware_1.requireAuth, postsController_1.postsController.updatePost);
 // DELETE /api/posts/:id - Delete post
-router.delete('/:id', postsController_1.postsController.deletePost);
+router.delete('/:id', authMiddleware_1.requireAuth, postsController_1.postsController.deletePost);
 // POST /api/posts/:id/react - Add reaction to post
-router.post('/:id/react', postsController_1.postsController.reactToPost);
+router.post('/:id/react', authMiddleware_1.requireAuth, postsController_1.postsController.reactToPost);
 // POST /api/posts/:id/boost - Boost post
-router.post('/:id/boost', postsController_1.postsController.boostPost);
+router.post('/:id/boost', authMiddleware_1.requireAuth, postsController_1.postsController.boostPost);
 // POST /api/posts/:id/share - Share post
-router.post('/:id/share', postsController_1.postsController.sharePost);
+router.post('/:id/share', authMiddleware_1.requireAuth, postsController_1.postsController.sharePost);
 exports.default = router;
