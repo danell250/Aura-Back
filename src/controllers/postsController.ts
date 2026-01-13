@@ -62,12 +62,37 @@ export const postsController = {
       const limitNum = Math.min(Math.max(parseInt(String(limit), 10) || 20, 1), 100);
 
       const total = await db.collection(POSTS_COLLECTION).countDocuments(query);
-      const data = await db.collection(POSTS_COLLECTION)
-        .find(query)
-        .sort({ timestamp: -1 })
-        .skip((pageNum - 1) * limitNum)
-        .limit(limitNum)
-        .toArray();
+      
+      const pipeline = [
+        { $match: query },
+        { $sort: { timestamp: -1 } },
+        { $skip: (pageNum - 1) * limitNum },
+        { $limit: limitNum },
+        // Lookup comments to get count and preview
+        {
+          $lookup: {
+            from: 'comments',
+            localField: 'id',
+            foreignField: 'postId',
+            as: 'fetchedComments'
+          }
+        },
+        {
+          $addFields: {
+            commentCount: { $size: '$fetchedComments' },
+            // Populate comments with all fetched comments so they load immediately
+            // If there are too many, we might want to slice, but for now this solves "immediate load"
+            comments: '$fetchedComments' 
+          }
+        },
+        {
+          $project: {
+            fetchedComments: 0
+          }
+        }
+      ];
+
+      const data = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
 
       res.json({
         success: true,
@@ -90,7 +115,28 @@ export const postsController = {
     try {
       const { id } = req.params;
       const db = getDB();
-      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+      
+      const pipeline = [
+        { $match: { id } },
+        {
+          $lookup: {
+            from: 'comments',
+            localField: 'id',
+            foreignField: 'postId',
+            as: 'fetchedComments'
+          }
+        },
+        {
+          $addFields: {
+            commentCount: { $size: '$fetchedComments' },
+            comments: '$fetchedComments'
+          }
+        },
+        { $project: { fetchedComments: 0 } }
+      ];
+
+      const posts = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
+      const post = posts[0];
 
       if (!post) {
         return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
