@@ -255,6 +255,90 @@ app.use('/api/messages', messagesRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
 console.log('Routes registered successfully');
 
+app.get('/share/post/:id', async (req, res) => {
+  try {
+    const db = getDB();
+    const post = await db.collection('posts').findOne({ id: req.params.id });
+    if (!post) {
+      res.status(404).send('Not found');
+      return;
+    }
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const shareUrl = `${protocol}://${host}/share/post/${post.id}`;
+    const author = post.author || {};
+    const title = `${author.name || 'Post'} on Aura`;
+    const description = String(post.content || '').slice(0, 300);
+    const mediaUrl = post.mediaUrl || '';
+    const avatarUrl = author.avatar || '';
+    const isImage = mediaUrl && (post.mediaType === 'image' || /\.(png|jpg|jpeg|webp|gif)$/i.test(mediaUrl));
+    const isVideo = mediaUrl && (post.mediaType === 'video' || /\.(mp4|webm|ogg|mov)$/i.test(mediaUrl));
+    const imageForOg = isImage ? mediaUrl : avatarUrl || '';
+    const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${title}</title>
+    <meta property="og:title" content="${title}">
+    <meta property="og:description" content="${description}">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="${shareUrl}">
+    ${imageForOg ? `<meta property="og:image" content="${imageForOg}">` : ''}
+    ${isVideo ? `<meta property="og:video" content="${mediaUrl}">` : ''}
+    <meta name="twitter:title" content="${title}">
+    <meta name="twitter:description" content="${description}">
+    ${imageForOg ? `<meta name="twitter:image" content="${imageForOg}">` : ''}
+    <meta name="twitter:card" content="${imageForOg ? 'summary_large_image' : 'summary'}">
+    <style>
+      body{margin:0;background:#0f172a;color:#fff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
+      .container{max-width:680px;margin:0 auto;padding:24px}
+      .card{background:#0b1220;border:1px solid #1f2937;border-radius:24px;box-shadow:0 12px 30px rgba(0,0,0,.35);overflow:hidden}
+      .header{display:flex;gap:12px;align-items:center;padding:20px}
+      .avatar{width:44px;height:44px;border-radius:12px;border:1px solid #334155;overflow:hidden;background:#0f172a}
+      .avatar img{width:100%;height:100%;object-fit:cover}
+      .names{flex:1;min-width:0}
+      .name{font-weight:700;font-size:14px;letter-spacing:-.01em}
+      .handle{font-size:12px;color:#94a3b8}
+      .content{padding:0 20px 20px;font-size:15px;line-height:1.6;color:#e2e8f0;white-space:pre-wrap}
+      .media{margin:0 20px 20px;border-radius:16px;overflow:hidden;background:#0f172a;border:1px solid #1f2937;display:flex;align-items:center;justify-content:center}
+      .media img{width:100%;height:auto;max-height:600px;object-fit:cover}
+      .media video{width:100%;height:auto;max-height:600px}
+      .footer{display:flex;gap:12px;align-items:center;padding:16px 20px;border-top:1px solid #1f2937}
+      .badge{padding:6px 10px;border-radius:12px;font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+      .energy{background:#022c22;color:#34d399;border:1px solid #065f46}
+      .date{color:#94a3b8;font-size:11px;margin-left:auto}
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <div class="header">
+          <div class="avatar">${avatarUrl ? `<img src="${avatarUrl}" alt="${author.name || ''}">` : ''}</div>
+          <div class="names">
+            <div class="name">${author.name || ''}</div>
+            <div class="handle">${author.handle || ''}</div>
+          </div>
+          ${post.isBoosted ? `<span class="badge" style="background:#064e3b;color:#a7f3d0;border:1px solid #10b981">Boosted</span>` : ``}
+          ${post.isTimeCapsule ? `<span class="badge" style="background:#3b0764;color:#e9d5ff;border:1px solid #8b5cf6">${post.isUnlocked ? 'Unlocked' : 'Time Capsule'}</span>` : ``}
+        </div>
+        <div class="content">${String(post.content || '').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+        ${mediaUrl ? `<div class="media">${isImage ? `<img src="${mediaUrl}" alt="">` : isVideo ? `<video src="${mediaUrl}" controls playsinline></video>` : ``}</div>` : ``}
+        <div class="footer">
+          ${post.energy ? `<span class="badge energy">${post.energy}</span>` : ``}
+          <span class="date">${new Date(post.timestamp || Date.now()).toLocaleDateString()}</span>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.status(200).send(html);
+  } catch (e) {
+    res.status(500).send('Server error');
+  }
+});
+
 // Health check endpoints
 app.get('/health', async (_req, res) => {
   const dbHealthy = await checkDBHealth();

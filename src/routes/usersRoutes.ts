@@ -47,6 +47,9 @@ router.post('/:id/connect', usersController.sendConnectionRequest);
 // POST /api/users/:id/accept-connection - Accept connection request
 router.post('/:id/accept-connection', usersController.acceptConnectionRequest);
 
+// POST /api/users/:id/reject-connection - Reject connection request
+router.post('/:id/reject-connection', usersController.rejectConnectionRequest);
+
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', usersController.blockUser);
 

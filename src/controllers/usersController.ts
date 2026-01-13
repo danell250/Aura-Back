@@ -1108,5 +1108,106 @@ export const usersController = {
         message: 'Internal server error'
       });
     }
+  },
+
+  // POST /api/users/:id/reject-connection - Reject connection request
+  rejectConnectionRequest: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params; // The ID of the user rejecting the request (rejecter)
+      const { requesterId } = req.body; // The ID of the user who sent the request
+
+      const db = getDB();
+
+      // Find both users
+      const rejecter = await db.collection('users').findOne({ id });
+      if (!rejecter) {
+        return res.status(404).json({
+          success: false,
+          error: 'Rejecter not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      const requester = await db.collection('users').findOne({ id: requesterId });
+      if (!requester) {
+        return res.status(404).json({
+          success: false,
+          error: 'Requester not found',
+          message: `User with ID ${requesterId} does not exist`
+        });
+      }
+
+      // Mark the specific request notification as read (rejected)
+      const updatedNotifications = (rejecter.notifications || []).map((n: any) => {
+        if (n.type === 'acquaintance_request' && n.fromUser.id === requesterId) {
+          return { ...n, isRead: true };
+        }
+        return n;
+      });
+
+      await db.collection('users').updateOne(
+        { id },
+        { 
+          $set: { 
+            notifications: updatedNotifications,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+
+      // Remove the sent request from requester's sentAcquaintanceRequests
+      const requesterSentRequests = (requester.sentAcquaintanceRequests || []).filter((rid: string) => rid !== id);
+      
+      // Create a rejection notification for the requester
+      const rejectionNotification = {
+        id: `notif-reject-${Date.now()}-${Math.random()}`,
+        type: 'acquaintance_rejected',
+        fromUser: {
+          id: rejecter.id,
+          name: rejecter.name,
+          handle: rejecter.handle,
+          avatar: rejecter.avatar,
+          avatarType: rejecter.avatarType
+        },
+        message: 'declined your connection request',
+        timestamp: Date.now(),
+        isRead: false,
+        connectionId: id
+      };
+
+      await db.collection('users').updateOne(
+        { id: requesterId },
+        { 
+          $set: { 
+            sentAcquaintanceRequests: requesterSentRequests,
+            updatedAt: new Date().toISOString()
+          },
+          $push: {
+            notifications: {
+              $each: [rejectionNotification],
+              $position: 0
+            }
+          } as any
+        }
+      );
+
+      res.json({
+        success: true,
+        data: {
+          rejecterId: id,
+          requesterId: requesterId,
+          timestamp: new Date().toISOString()
+        },
+        message: 'Connection request rejected successfully'
+      });
+
+    } catch (error) {
+      console.error('Error rejecting connection request:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to reject connection request',
+        message: 'Internal server error'
+      });
+    }
   }
 };
