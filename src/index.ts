@@ -255,6 +255,70 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
 app.use('/api/ad-subscriptions', adSubscriptionsRoutes);
+
+// Payment return routes for PayPal
+app.get('/payment-success', async (req, res) => {
+  console.log('💰 Payment success callback received');
+  const { paymentId, token, PayerID } = req.query;
+  
+  try {
+    // For Personal Pulse one-time payment
+    if (paymentId) {
+      console.log('Activating 14-day access for Personal Pulse payment:', paymentId);
+      
+      // TODO: Verify payment with PayPal API
+      // TODO: Create ad subscription record with 14-day expiry
+      
+      res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Payment Successful - Aura</title>
+          <meta http-equiv="refresh" content="3;url=/">
+          <style>
+            body { font-family: system-ui; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; padding: 4rem; }
+            .success { font-size: 3rem; margin-bottom: 1rem; }
+            .message { font-size: 1.2rem; opacity: 0.9; }
+          </style>
+        </head>
+        <body>
+          <div class="success">✅ Payment Successful!</div>
+          <div class="message">Your 14-day Personal Pulse access is now active. Returning to app...</div>
+        </body>
+        </html>
+      `);
+    } else {
+      res.redirect('/?payment=success');
+    }
+  } catch (error) {
+    console.error('Payment success error:', error);
+    res.redirect('/?payment=error');
+  }
+});
+
+app.get('/payment-cancelled', async (req, res) => {
+  console.log('❌ Payment cancelled by user');
+  
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Payment Cancelled - Aura</title>
+      <meta http-equiv="refresh" content="3;url=/">
+      <style>
+        body { font-family: system-ui; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; text-align: center; padding: 4rem; }
+        .cancelled { font-size: 3rem; margin-bottom: 1rem; }
+        .message { font-size: 1.2rem; opacity: 0.9; }
+      </style>
+    </head>
+    <body>
+      <div class="cancelled">❌ Payment Cancelled</div>
+      <div class="message">You can return to the app anytime to complete your purchase.</div>
+    </body>
+    </html>
+  `);
+});
+
 console.log('Routes registered successfully');
 
 app.get('/share/post/:id', async (req, res) => {
