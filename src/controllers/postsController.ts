@@ -358,9 +358,11 @@ export const postsController = {
       }
 
       // Fetch updated post to return consistent state
-      const updatedPost = await db.collection(POSTS_COLLECTION).findOne({ id });
-      
-      // Compute userReactions for response
+      const updatedPostDoc = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!updatedPostDoc) {
+        return res.status(500).json({ success: false, error: 'Failed to update reaction' });
+      }
+      const updatedPost = updatedPostDoc as any;
       if (updatedPost.reactionUsers) {
         updatedPost.userReactions = Object.keys(updatedPost.reactionUsers).filter(emoji => 
           Array.isArray(updatedPost.reactionUsers[emoji]) && updatedPost.reactionUsers[emoji].includes(userId)
