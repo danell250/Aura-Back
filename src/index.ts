@@ -202,6 +202,19 @@ app.get('/auth/logout', (req, res) => {
   });
 });
 
+// Google OAuth routes
+app.get('/login',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+app.get('/login/callback',
+  passport.authenticate('google', { failureRedirect: '/login' }),
+  (req, res) => {
+    // Successful authentication, redirect to frontend
+    res.redirect(process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app');
+  }
+);
+
 // Get current user info (legacy - moved to /auth)
 app.get('/auth/user', (req, res) => {
   if (req.isAuthenticated && req.isAuthenticated()) {
