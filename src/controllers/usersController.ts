@@ -1014,10 +1014,10 @@ export const usersController = {
   sendConnectionRequest: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { requesterId } = req.body;
+      const { fromUserId } = req.body;
       const db = getDB();
 
-      if (id === requesterId) {
+      if (id === fromUserId) {
         return res.status(400).json({
           success: false,
           error: 'Invalid request',
@@ -1036,18 +1036,18 @@ export const usersController = {
       }
 
       // Find the requester
-      const requester = await db.collection('users').findOne({ id: requesterId });
+      const requester = await db.collection('users').findOne({ id: fromUserId });
       if (!requester) {
         return res.status(404).json({
           success: false,
           error: 'Requester not found',
-          message: `User with ID ${requesterId} does not exist`
+          message: `User with ID ${fromUserId} does not exist`
         });
       }
 
       // Check if already connected or requested
       const targetAcquaintances = targetUser.acquaintances || [];
-      if (targetAcquaintances.includes(requesterId)) {
+      if (targetAcquaintances.includes(fromUserId)) {
         return res.status(400).json({
           success: false,
           error: 'Already connected',
@@ -1087,7 +1087,7 @@ export const usersController = {
 
       // Update requester's sentAcquaintanceRequests
       await db.collection('users').updateOne(
-        { id: requesterId },
+        { id: fromUserId },
         {
           $addToSet: { sentAcquaintanceRequests: id },
           $set: { updatedAt: new Date().toISOString() }
