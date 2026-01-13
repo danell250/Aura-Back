@@ -28,6 +28,8 @@ const mockAds = [
         status: 'active',
         subscriptionTier: 'Leadership Pulse',
         reactions: { '🎯': 45, '💼': 28 },
+        reactionUsers: { '🎯': ['user1', 'user2'], '💼': ['user3'] },
+        userReactions: [],
         expiryDate: Date.now() + (30 * 24 * 60 * 60 * 1000), // 30 days from now
         hashtags: ['leadership', 'conference', 'networking', 'executives'],
         timestamp: Date.now() - 1800000
@@ -47,6 +49,8 @@ const mockAds = [
         status: 'active',
         subscriptionTier: 'Career Growth',
         reactions: { '🚀': 67, '💡': 34 },
+        reactionUsers: { '🚀': ['user4', 'user5'], '💡': ['user6'] },
+        userReactions: [],
         expiryDate: Date.now() + (15 * 24 * 60 * 60 * 1000), // 15 days from now
         hashtags: ['coaching', 'career', 'transformation', 'growth'],
         timestamp: Date.now() - 3600000
@@ -55,8 +59,10 @@ const mockAds = [
 exports.adsController = {
     // GET /api/ads - Get all ads
     getAllAds: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { page = 1, limit = 10, placement, status, ownerId, hashtags } = req.query;
+            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             let filteredAds = [...mockAds];
             // Filter by placement if specified
             if (placement) {
@@ -78,6 +84,17 @@ exports.adsController = {
             // Filter out expired ads
             const now = Date.now();
             filteredAds = filteredAds.filter(ad => !ad.expiryDate || ad.expiryDate > now);
+            // Add userReactions for current user
+            if (currentUserId) {
+                filteredAds.forEach((ad) => {
+                    if (ad.reactionUsers) {
+                        ad.userReactions = Object.keys(ad.reactionUsers).filter(emoji => Array.isArray(ad.reactionUsers[emoji]) && ad.reactionUsers[emoji].includes(currentUserId));
+                    }
+                    else {
+                        ad.userReactions = [];
+                    }
+                });
+            }
             // Pagination
             const startIndex = (Number(page) - 1) * Number(limit);
             const endIndex = startIndex + Number(limit);
@@ -104,8 +121,10 @@ exports.adsController = {
     }),
     // GET /api/ads/:id - Get ad by ID
     getAdById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
+            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             const ad = mockAds.find(a => a.id === id);
             if (!ad) {
                 return res.status(404).json({
@@ -114,9 +133,19 @@ exports.adsController = {
                     message: `Ad with ID ${id} does not exist`
                 });
             }
+            // Add userReactions for current user
+            const adWithUserReactions = Object.assign({}, ad);
+            if (currentUserId) {
+                if (adWithUserReactions.reactionUsers) {
+                    adWithUserReactions.userReactions = Object.keys(adWithUserReactions.reactionUsers).filter(emoji => Array.isArray(adWithUserReactions.reactionUsers[emoji]) && adWithUserReactions.reactionUsers[emoji].includes(currentUserId));
+                }
+                else {
+                    adWithUserReactions.userReactions = [];
+                }
+            }
             res.json({
                 success: true,
-                data: ad
+                data: adWithUserReactions
             });
         }
         catch (error) {
@@ -160,6 +189,7 @@ exports.adsController = {
                 status: 'active',
                 subscriptionTier: subscriptionTier || 'Basic',
                 reactions: {},
+                reactionUsers: {},
                 userReactions: [],
                 hashtags,
                 timestamp: Date.now(),
@@ -242,9 +272,17 @@ exports.adsController = {
     }),
     // POST /api/ads/:id/react - Add reaction to ad
     reactToAd: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
-            const { reaction, userId } = req.body;
+            const { reaction } = req.body;
+            const userId = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id) || req.body.userId; // Prefer authenticated user
+            if (!reaction) {
+                return res.status(400).json({ success: false, error: 'Missing reaction' });
+            }
+            if (!userId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
+            }
             const adIndex = mockAds.findIndex(a => a.id === id);
             if (adIndex === -1) {
                 return res.status(404).json({
@@ -252,18 +290,46 @@ exports.adsController = {
                     error: 'Ad not found'
                 });
             }
-            // In production, handle reaction logic with database
             const ad = mockAds[adIndex];
+            // Initialize reaction tracking if not exists
             if (!ad.reactions)
                 ad.reactions = {};
-            if (!ad.reactions[reaction]) {
-                ad.reactions[reaction] = 0;
+            if (!ad.reactionUsers)
+                ad.reactionUsers = {};
+            if (!ad.userReactions)
+                ad.userReactions = [];
+            // Check if user already reacted with this emoji
+            const usersForEmoji = (ad.reactionUsers[reaction] || []);
+            const hasReacted = usersForEmoji.includes(userId);
+            let action = 'added';
+            if (hasReacted) {
+                // Remove reaction
+                action = 'removed';
+                ad.reactionUsers[reaction] = usersForEmoji.filter((uid) => uid !== userId);
+                ad.reactions[reaction] = Math.max(0, (ad.reactions[reaction] || 0) - 1);
+                // Remove from reactions object if count reaches 0
+                if (ad.reactions[reaction] === 0) {
+                    delete ad.reactions[reaction];
+                }
+                // Clean up empty reaction users array
+                if (ad.reactionUsers[reaction].length === 0) {
+                    delete ad.reactionUsers[reaction];
+                }
             }
-            ad.reactions[reaction]++;
+            else {
+                // Add reaction
+                if (!ad.reactionUsers[reaction]) {
+                    ad.reactionUsers[reaction] = [];
+                }
+                ad.reactionUsers[reaction].push(userId);
+                ad.reactions[reaction] = (ad.reactions[reaction] || 0) + 1;
+            }
+            // Update userReactions for response
+            ad.userReactions = Object.keys(ad.reactionUsers).filter(emoji => Array.isArray(ad.reactionUsers[emoji]) && ad.reactionUsers[emoji].includes(userId));
             res.json({
                 success: true,
                 data: ad,
-                message: 'Reaction added successfully'
+                message: `Reaction ${action} successfully`
             });
         }
         catch (error) {

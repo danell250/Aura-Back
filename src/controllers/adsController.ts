@@ -18,6 +18,8 @@ const mockAds: any[] = [
     status: 'active',
     subscriptionTier: 'Leadership Pulse',
     reactions: { '🎯': 45, '💼': 28 },
+    reactionUsers: { '🎯': ['user1', 'user2'], '💼': ['user3'] },
+    userReactions: [],
     expiryDate: Date.now() + (30 * 24 * 60 * 60 * 1000), // 30 days from now
     hashtags: ['leadership', 'conference', 'networking', 'executives'],
     timestamp: Date.now() - 1800000
@@ -37,6 +39,8 @@ const mockAds: any[] = [
     status: 'active',
     subscriptionTier: 'Career Growth',
     reactions: { '🚀': 67, '💡': 34 },
+    reactionUsers: { '🚀': ['user4', 'user5'], '💡': ['user6'] },
+    userReactions: [],
     expiryDate: Date.now() + (15 * 24 * 60 * 60 * 1000), // 15 days from now
     hashtags: ['coaching', 'career', 'transformation', 'growth'],
     timestamp: Date.now() - 3600000
@@ -48,6 +52,7 @@ export const adsController = {
   getAllAds: async (req: Request, res: Response) => {
     try {
       const { page = 1, limit = 10, placement, status, ownerId, hashtags } = req.query;
+      const currentUserId = (req as any).user?.id;
       
       let filteredAds = [...mockAds];
       
@@ -75,6 +80,19 @@ export const adsController = {
       // Filter out expired ads
       const now = Date.now();
       filteredAds = filteredAds.filter(ad => !ad.expiryDate || ad.expiryDate > now);
+      
+      // Add userReactions for current user
+      if (currentUserId) {
+        filteredAds.forEach((ad: any) => {
+          if (ad.reactionUsers) {
+            ad.userReactions = Object.keys(ad.reactionUsers).filter(emoji => 
+              Array.isArray(ad.reactionUsers[emoji]) && ad.reactionUsers[emoji].includes(currentUserId)
+            );
+          } else {
+            ad.userReactions = [];
+          }
+        });
+      }
       
       // Pagination
       const startIndex = (Number(page) - 1) * Number(limit);
@@ -105,6 +123,7 @@ export const adsController = {
   getAdById: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const currentUserId = (req as any).user?.id;
       const ad = mockAds.find(a => a.id === id);
       
       if (!ad) {
@@ -115,9 +134,21 @@ export const adsController = {
         });
       }
       
+      // Add userReactions for current user
+      const adWithUserReactions = { ...ad };
+      if (currentUserId) {
+        if (adWithUserReactions.reactionUsers) {
+          adWithUserReactions.userReactions = Object.keys(adWithUserReactions.reactionUsers).filter(emoji => 
+            Array.isArray(adWithUserReactions.reactionUsers[emoji]) && adWithUserReactions.reactionUsers[emoji].includes(currentUserId)
+          );
+        } else {
+          adWithUserReactions.userReactions = [];
+        }
+      }
+      
       res.json({
         success: true,
-        data: ad
+        data: adWithUserReactions
       });
     } catch (error) {
       console.error('Error fetching ad:', error);
@@ -176,7 +207,8 @@ export const adsController = {
         status: 'active',
         subscriptionTier: subscriptionTier || 'Basic',
         reactions: {} as Record<string, number>,
-        userReactions: [],
+        reactionUsers: {} as Record<string, string[]>,
+        userReactions: [] as string[],
         hashtags,
         timestamp: Date.now(),
         expiryDate: durationDays ? Date.now() + (durationDays * 24 * 60 * 60 * 1000) : undefined
@@ -268,7 +300,15 @@ export const adsController = {
   reactToAd: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { reaction, userId } = req.body;
+      const { reaction } = req.body;
+      const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
+      
+      if (!reaction) {
+        return res.status(400).json({ success: false, error: 'Missing reaction' });
+      }
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
+      }
       
       const adIndex = mockAds.findIndex(a => a.id === id);
       if (adIndex === -1) {
@@ -278,18 +318,50 @@ export const adsController = {
         });
       }
 
-      // In production, handle reaction logic with database
       const ad = mockAds[adIndex];
+      
+      // Initialize reaction tracking if not exists
       if (!ad.reactions) ad.reactions = {} as Record<string, number>;
-      if (!(ad.reactions as any)[reaction]) {
-        (ad.reactions as any)[reaction] = 0;
+      if (!ad.reactionUsers) ad.reactionUsers = {} as Record<string, string[]>;
+      if (!ad.userReactions) ad.userReactions = [] as string[];
+      
+      // Check if user already reacted with this emoji
+      const usersForEmoji: string[] = (ad.reactionUsers[reaction] || []) as string[];
+      const hasReacted = usersForEmoji.includes(userId);
+      let action = 'added';
+
+      if (hasReacted) {
+        // Remove reaction
+        action = 'removed';
+        ad.reactionUsers[reaction] = usersForEmoji.filter((uid: string) => uid !== userId);
+        ad.reactions[reaction] = Math.max(0, (ad.reactions[reaction] || 0) - 1);
+        
+        // Remove from reactions object if count reaches 0
+        if (ad.reactions[reaction] === 0) {
+          delete ad.reactions[reaction];
+        }
+        // Clean up empty reaction users array
+        if (ad.reactionUsers[reaction].length === 0) {
+          delete ad.reactionUsers[reaction];
+        }
+      } else {
+        // Add reaction
+        if (!ad.reactionUsers[reaction]) {
+          ad.reactionUsers[reaction] = [];
+        }
+        ad.reactionUsers[reaction].push(userId);
+        ad.reactions[reaction] = (ad.reactions[reaction] || 0) + 1;
       }
-      (ad.reactions as any)[reaction]++;
+      
+      // Update userReactions for response
+      ad.userReactions = Object.keys(ad.reactionUsers).filter(emoji => 
+        Array.isArray(ad.reactionUsers[emoji]) && ad.reactionUsers[emoji].includes(userId)
+      );
 
       res.json({
         success: true,
         data: ad,
-        message: 'Reaction added successfully'
+        message: `Reaction ${action} successfully`
       });
     } catch (error) {
       console.error('Error adding reaction:', error);
