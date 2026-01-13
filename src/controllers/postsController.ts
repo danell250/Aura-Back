@@ -190,7 +190,11 @@ export const postsController = {
         { returnDocument: 'after' }
       );
 
-      res.json({ success: true, data: result.value, message: 'Post updated successfully' });
+      const updatedDoc = result.value || await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!updatedDoc) {
+        return res.status(500).json({ success: false, error: 'Failed to update post' });
+      }
+      res.json({ success: true, data: updatedDoc, message: 'Post updated successfully' });
     } catch (error) {
       console.error('Error updating post:', error);
       res.status(500).json({ success: false, error: 'Failed to update post', message: 'Internal server error' });
@@ -245,6 +249,11 @@ export const postsController = {
         { returnDocument: 'after' }
       );
 
+      const updatedAfterReaction = result.value || await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!updatedAfterReaction) {
+        return res.status(500).json({ success: false, error: 'Failed to apply reaction' });
+      }
+
       // Notify author for a special reaction (example: '✨')
       if (reaction === '✨' && post.author.id !== userId) {
         await createNotificationInDB(
@@ -256,7 +265,7 @@ export const postsController = {
         ).catch((err: any) => console.error('Error creating like notification:', err));
       }
 
-      res.json({ success: true, data: result.value, message: 'Reaction added successfully' });
+      res.json({ success: true, data: updatedAfterReaction, message: 'Reaction added successfully' });
     } catch (error) {
       console.error('Error adding reaction:', error);
       res.status(500).json({ success: false, error: 'Failed to add reaction', message: 'Internal server error' });
@@ -310,7 +319,17 @@ export const postsController = {
           { returnDocument: 'after' }
         );
 
-        return res.json({ success: true, data: result.value, message: 'Post boosted successfully' });
+        const boostedDoc = result.value || await db.collection(POSTS_COLLECTION).findOne({ id });
+        if (!boostedDoc) {
+          // Rollback credits if somehow no doc
+          await db.collection(USERS_COLLECTION).updateOne(
+            { id: userId },
+            { $inc: { auraCredits: creditsToSpend }, $set: { updatedAt: new Date().toISOString() } }
+          );
+          return res.status(500).json({ success: false, error: 'Failed to boost post' });
+        }
+
+        return res.json({ success: true, data: boostedDoc, message: 'Post boosted successfully' });
       } catch (e) {
         // Rollback user credits if boost failed
         await db.collection(USERS_COLLECTION).updateOne(
