@@ -61,7 +61,7 @@ router.get('/google/callback',
       
       // Successful authentication, redirect to frontend
       const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
-      res.redirect(frontendUrl);
+      res.redirect(`${frontendUrl}/feed`);
       }
     } catch (error) {
       console.error('Error in OAuth callback:', error);
