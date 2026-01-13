@@ -13,6 +13,7 @@ import commentsRoutes from './routes/commentsRoutes';
 import notificationsRoutes from './routes/notificationsRoutes';
 import messagesRoutes from './routes/messagesRoutes';
 import subscriptionsRoutes from './routes/subscriptionsRoutes';
+import adSubscriptionsRoutes from './routes/adSubscriptionsRoutes';
 import authRoutes from './routes/authRoutes';
 import privacyRoutes from './routes/privacyRoutes';
 import { attachUser } from './middleware/authMiddleware';
@@ -253,6 +254,7 @@ app.use('/api', commentsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
+app.use('/api/ad-subscriptions', adSubscriptionsRoutes);
 console.log('Routes registered successfully');
 
 app.get('/share/post/:id', async (req, res) => {
