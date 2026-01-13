@@ -184,13 +184,12 @@ export const postsController = {
         updates.hashtags = getHashtagsFromText(updates.content);
       }
 
-      const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
+      await db.collection(POSTS_COLLECTION).updateOne(
         { id },
-        { $set: { ...updates, updatedAt: new Date().toISOString() } },
-        { returnDocument: 'after' }
+        { $set: { ...updates, updatedAt: new Date().toISOString() } }
       );
 
-      const updatedDoc = result.value || await db.collection(POSTS_COLLECTION).findOne({ id });
+      const updatedDoc = await db.collection(POSTS_COLLECTION).findOne({ id });
       if (!updatedDoc) {
         return res.status(500).json({ success: false, error: 'Failed to update post' });
       }
@@ -243,13 +242,12 @@ export const postsController = {
       // Increment reaction counter
       const incField: any = {};
       incField[`reactions.${reaction}`] = 1;
-      const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
+      await db.collection(POSTS_COLLECTION).updateOne(
         { id },
-        { $inc: incField },
-        { returnDocument: 'after' }
+        { $inc: incField }
       );
 
-      const updatedAfterReaction = result.value || await db.collection(POSTS_COLLECTION).findOne({ id });
+      const updatedAfterReaction = await db.collection(POSTS_COLLECTION).findOne({ id });
       if (!updatedAfterReaction) {
         return res.status(500).json({ success: false, error: 'Failed to apply reaction' });
       }
@@ -313,13 +311,12 @@ export const postsController = {
       // Apply boost to post (radiance proportional to credits)
       const incRadiance = creditsToSpend * 2; // keep same multiplier as UI
       try {
-        const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
+        await db.collection(POSTS_COLLECTION).updateOne(
           { id },
-          { $set: { isBoosted: true, updatedAt: new Date().toISOString() }, $inc: { radiance: incRadiance } },
-          { returnDocument: 'after' }
+          { $set: { isBoosted: true, updatedAt: new Date().toISOString() }, $inc: { radiance: incRadiance } }
         );
 
-        const boostedDoc = result.value || await db.collection(POSTS_COLLECTION).findOne({ id });
+        const boostedDoc = await db.collection(POSTS_COLLECTION).findOne({ id });
         if (!boostedDoc) {
           // Rollback credits if somehow no doc
           await db.collection(USERS_COLLECTION).updateOne(
