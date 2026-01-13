@@ -49,6 +49,7 @@ export const postsController = {
     try {
       const { page = 1, limit = 20, userId, energy, hashtags } = req.query as Record<string, any>;
       const db = getDB();
+      const currentUserId = (req as any).user?.id;
 
       const query: any = {};
       if (userId) query['author.id'] = userId;
@@ -94,6 +95,21 @@ export const postsController = {
 
       const data = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
 
+      // Post-process to add userReactions for the current user
+      if (currentUserId) {
+        data.forEach((post: any) => {
+          if (post.reactionUsers) {
+            post.userReactions = Object.keys(post.reactionUsers).filter(emoji => 
+              Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId)
+            );
+          } else {
+             post.userReactions = [];
+          }
+          // Optional: Remove reactionUsers from response to save bandwidth/privacy
+          // delete post.reactionUsers; 
+        });
+      }
+
       res.json({
         success: true,
         data,
@@ -115,6 +131,7 @@ export const postsController = {
     try {
       const { id } = req.params;
       const db = getDB();
+      const currentUserId = (req as any).user?.id;
       
       const pipeline = [
         { $match: { id } },
@@ -140,6 +157,17 @@ export const postsController = {
 
       if (!post) {
         return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
+      }
+
+      // Post-process to add userReactions for the current user
+      if (currentUserId) {
+        if (post.reactionUsers) {
+          post.userReactions = Object.keys(post.reactionUsers).filter(emoji => 
+            Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId)
+          );
+        } else {
+            post.userReactions = [];
+        }
       }
 
       res.json({ success: true, data: post });
@@ -191,7 +219,8 @@ export const postsController = {
         radiance: 0,
         timestamp: Date.now(),
         reactions: {} as Record<string, number>,
-        userReactions: [] as string[], // optional per-user reaction tracking placeholder
+        reactionUsers: {} as Record<string, string[]>, // Store who reacted with what
+        userReactions: [] as string[], // placeholder for response
         comments: [] as any[],
         isBoosted: false,
         hashtags
@@ -274,9 +303,14 @@ export const postsController = {
   reactToPost: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { reaction, userId } = req.body;
+      const { reaction } = req.body;
+      const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
+
       if (!reaction) {
         return res.status(400).json({ success: false, error: 'Missing reaction' });
+      }
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
       }
 
       const db = getDB();
@@ -285,31 +319,57 @@ export const postsController = {
         return res.status(404).json({ success: false, error: 'Post not found' });
       }
 
-      // Increment reaction counter
-      const incField: any = {};
-      incField[`reactions.${reaction}`] = 1;
-      await db.collection(POSTS_COLLECTION).updateOne(
-        { id },
-        { $inc: incField }
-      );
+      // Check if user already reacted with this emoji
+      const currentReactionUsers = post.reactionUsers || {};
+      const usersForEmoji = currentReactionUsers[reaction] || [];
+      const hasReacted = usersForEmoji.includes(userId);
+      let action = 'added';
 
-      const updatedAfterReaction = await db.collection(POSTS_COLLECTION).findOne({ id });
-      if (!updatedAfterReaction) {
-        return res.status(500).json({ success: false, error: 'Failed to apply reaction' });
+      if (hasReacted) {
+         // Remove reaction
+         action = 'removed';
+         await db.collection(POSTS_COLLECTION).updateOne(
+           { id },
+           {
+             $pull: { [`reactionUsers.${reaction}`]: userId },
+             $inc: { [`reactions.${reaction}`]: -1 }
+           }
+         );
+      } else {
+         // Add reaction
+         await db.collection(POSTS_COLLECTION).updateOne(
+           { id },
+           {
+             $addToSet: { [`reactionUsers.${reaction}`]: userId },
+             $inc: { [`reactions.${reaction}`]: 1 }
+           }
+         );
       }
 
-      // Notify author for a special reaction (example: '✨')
-      if (reaction === '✨' && post.author.id !== userId) {
+      // Notify author only if adding a reaction and it's not self-reaction
+      if (action === 'added' && post.author.id !== userId) {
         await createNotificationInDB(
           post.author.id,
           'like',
           userId,
-          'liked your post',
+          `reacted ${reaction} to your post`,
           id
-        ).catch((err: any) => console.error('Error creating like notification:', err));
+        ).catch((err: any) => console.error('Error creating reaction notification:', err));
       }
 
-      res.json({ success: true, data: updatedAfterReaction, message: 'Reaction added successfully' });
+      // Fetch updated post to return consistent state
+      const updatedPost = await db.collection(POSTS_COLLECTION).findOne({ id });
+      
+      // Compute userReactions for response
+      if (updatedPost.reactionUsers) {
+        updatedPost.userReactions = Object.keys(updatedPost.reactionUsers).filter(emoji => 
+          Array.isArray(updatedPost.reactionUsers[emoji]) && updatedPost.reactionUsers[emoji].includes(userId)
+        );
+      } else {
+        updatedPost.userReactions = [];
+      }
+
+      res.json({ success: true, data: updatedPost, message: `Reaction ${action} successfully` });
     } catch (error) {
       console.error('Error adding reaction:', error);
       res.status(500).json({ success: false, error: 'Failed to add reaction', message: 'Internal server error' });
