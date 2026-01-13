@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import passport from 'passport';
 import { getDB } from '../db';
 import { requireAuth, attachUser } from '../middleware/authMiddleware';
+import { generateToken } from '../utils/jwtUtils';
 
 const router = Router();
 
@@ -59,9 +60,10 @@ router.get('/google/callback',
           console.log('Created new user after OAuth:', newUser.id);
         }
       
-      // Successful authentication, redirect to frontend
+      // Successful authentication, redirect to frontend with token
       const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
-      res.redirect(`${frontendUrl}/feed`);
+      const token = generateToken(req.user as any);
+      res.redirect(`${frontendUrl}/feed?token=${token}`);
       }
     } catch (error) {
       console.error('Error in OAuth callback:', error);
@@ -188,6 +190,7 @@ router.post('/login', async (req: Request, res: Response) => {
       res.json({
         success: true,
         user: user,
+        token: generateToken(user),
         message: 'Login successful'
       });
     });
