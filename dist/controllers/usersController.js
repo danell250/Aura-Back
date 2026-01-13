@@ -80,50 +80,19 @@ exports.usersController = {
                 });
             }
             const db = (0, db_1.getDB)();
-            // Check if user already exists by email
-            const existingUserByEmail = yield db.collection('users').findOne({ email: userData.email });
-            if (existingUserByEmail) {
-                // User exists, update them instead of returning 409
-                const userId = existingUserByEmail.id;
-                const updateData = Object.assign(Object.assign({}, userData), { id: userId, updatedAt: new Date().toISOString() });
-                // Remove fields that shouldn't be overwritten blindly if they exist in DB
-                // e.g., if we want to preserve credits or trust score from DB if not provided in payload
-                // But for now, let's assume the payload might have fresher profile info from Google
-                // However, we should preserve sensitive fields like auraCredits if they aren't meant to be reset
-                if (existingUserByEmail.auraCredits !== undefined)
-                    delete updateData.auraCredits;
-                if (existingUserByEmail.trustScore !== undefined)
-                    delete updateData.trustScore;
-                if (existingUserByEmail.blockedUsers !== undefined)
-                    delete updateData.blockedUsers;
-                // acquaintances might be complex to merge, but if payload has empty array, we shouldn't overwrite existing
-                if (existingUserByEmail.acquaintances && (!updateData.acquaintances || updateData.acquaintances.length === 0)) {
-                    delete updateData.acquaintances;
-                }
-                // CRITICAL: Preserve existing handle if it's already set on the user.
-                // We do NOT want to overwrite the handle with a new auto-generated one from the frontend/auth provider
-                // unless the user is explicitly trying to change it (which should probably go through a dedicated endpoint anyway).
-                if (existingUserByEmail.handle) {
-                    delete updateData.handle;
-                }
-                yield db.collection('users').updateOne({ id: userId }, { $set: updateData });
-                console.log('User already exists, updated profile:', userId);
-                return res.status(200).json({
-                    success: true,
-                    data: Object.assign(Object.assign({}, existingUserByEmail), updateData),
-                    message: 'User updated successfully'
+            // Check if user already exists
+            const existingUser = yield db.collection('users').findOne({
+                $or: [
+                    { email: userData.email },
+                    { handle: userData.handle }
+                ]
+            });
+            if (existingUser) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'User already exists',
+                    message: 'A user with this email or handle already exists'
                 });
-            }
-            // Check if handle is taken by someone else
-            if (userData.handle) {
-                const existingUserByHandle = yield db.collection('users').findOne({ handle: userData.handle });
-                if (existingUserByHandle) {
-                    return res.status(409).json({
-                        success: false,
-                        error: 'Handle already taken',
-                        message: 'A user with this handle already exists'
-                    });
-                }
             }
             // Create new user with proper ID
             const userId = userData.id || `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -226,6 +195,69 @@ exports.usersController = {
             res.status(500).json({
                 success: false,
                 error: 'Failed to delete user',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // DELETE /api/users/admin/force-delete/:id - Force delete user (admin)
+    forceDeleteUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const result = yield db.collection('users').deleteOne({ id });
+            if (result.deletedCount === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: `User with ID ${id} does not exist`
+                });
+            }
+            res.json({
+                success: true,
+                message: 'User force-deleted successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error force-deleting user:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to force-delete user',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // POST /api/users/:id/remove-acquaintance - Remove an acquaintance
+    removeAcquaintance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const { targetUserId } = req.body;
+            const db = (0, db_1.getDB)();
+            const user = yield db.collection('users').findOne({ id });
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: `User with ID ${id} does not exist`
+                });
+            }
+            const acquaintances = user.acquaintances || [];
+            const updatedAcquaintances = acquaintances.filter(aid => aid !== targetUserId);
+            yield db.collection('users').updateOne({ id }, {
+                $set: {
+                    acquaintances: updatedAcquaintances,
+                    updatedAt: new Date().toISOString()
+                }
+            });
+            res.json({
+                success: true,
+                message: 'Acquaintance removed successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error removing acquaintance:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to remove acquaintance',
                 message: 'Internal server error'
             });
         }
@@ -946,110 +978,6 @@ exports.usersController = {
                 success: false,
                 error: 'Failed to send connection request',
                 message: 'Internal server error'
-            });
-        }
-    }),
-    // POST /api/users/:id/remove-acquaintance - Remove acquaintance
-    removeAcquaintance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            const { id } = req.params; // The ID of the user removing the acquaintance
-            const { targetUserId } = req.body; // The ID of the user to remove
-            const db = (0, db_1.getDB)();
-            // Find both users
-            const currentUser = yield db.collection('users').findOne({ id });
-            if (!currentUser) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'Current user not found',
-                    message: `User with ID ${id} does not exist`
-                });
-            }
-            const targetUser = yield db.collection('users').findOne({ id: targetUserId });
-            if (!targetUser) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'Target user not found',
-                    message: `User with ID ${targetUserId} does not exist`
-                });
-            }
-            // Check if they are currently connected
-            const currentAcquaintances = currentUser.acquaintances || [];
-            if (!currentAcquaintances.includes(targetUserId)) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Not connected',
-                    message: 'Users are not connected'
-                });
-            }
-            // Remove target user from current user's acquaintances
-            const updatedCurrentUserAcquaintances = currentAcquaintances.filter((aid) => aid !== targetUserId);
-            yield db.collection('users').updateOne({ id }, {
-                $set: {
-                    acquaintances: updatedCurrentUserAcquaintances,
-                    updatedAt: new Date().toISOString()
-                }
-            });
-            // Remove current user from target user's acquaintances
-            const targetUserAcquaintances = targetUser.acquaintances || [];
-            const updatedTargetUserAcquaintances = targetUserAcquaintances.filter((aid) => aid !== id);
-            yield db.collection('users').updateOne({ id: targetUserId }, {
-                $set: {
-                    acquaintances: updatedTargetUserAcquaintances,
-                    updatedAt: new Date().toISOString()
-                }
-            });
-            res.json({
-                success: true,
-                data: {
-                    userId: id,
-                    removedUserId: targetUserId,
-                    timestamp: new Date().toISOString()
-                },
-                message: 'Acquaintance removed successfully'
-            });
-        }
-        catch (error) {
-            console.error('Error removing acquaintance:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to remove acquaintance',
-                message: 'Internal server error'
-            });
-        }
-    }),
-    // DELETE /api/users/admin/force-delete/:id
-    forceDeleteUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            const { id } = req.params;
-            const adminSecret = req.headers['x-admin-secret'];
-            // Simple protection mechanism
-            if (adminSecret !== process.env.ADMIN_SECRET && adminSecret !== 'aura-force-delete-2024') {
-                return res.status(403).json({
-                    success: false,
-                    error: 'Unauthorized',
-                    message: 'Invalid admin secret'
-                });
-            }
-            const db = (0, db_1.getDB)();
-            const result = yield db.collection('users').deleteOne({ id });
-            if (result.deletedCount === 0) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'Not found',
-                    message: 'User not found'
-                });
-            }
-            console.log(`Force deleted user ${id}`);
-            res.json({
-                success: true,
-                message: `User ${id} permanently deleted`
-            });
-        }
-        catch (error) {
-            console.error('Error force deleting user:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Internal server error'
             });
         }
     })

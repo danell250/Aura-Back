@@ -23,7 +23,7 @@ export interface User {
   isPrivate?: boolean;
   trustScore: number; 
   auraCredits: number;
-  activeGlow?: 'emerald' | 'cyan' | 'amber' | 'none';
+  activeGlow?: 'emerald' | 'cyan' | 'amber' | 'gold' | 'silver' | 'bronze' | 'none';
   companyName?: string;
   industry?: string;
   employeeCount?: number;
@@ -54,6 +54,7 @@ export interface PrivacySettings {
   personalizedAds: boolean;
   emailNotifications: boolean;
   pushNotifications: boolean;
+  dataExportConsent: boolean;
   updatedAt: string;
 }
 

@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -48,9 +15,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const passport_1 = __importDefault(require("passport"));
 const db_1 = require("../db");
-const authUtils_1 = require("../utils/authUtils");
+const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = (0, express_1.Router)();
-// Google OAuth routes - JWT version
+// Google OAuth routes
 router.get('/google', passport_1.default.authenticate('google', { scope: ['profile', 'email'] }));
 router.get('/google/callback', passport_1.default.authenticate('google', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -66,32 +33,22 @@ router.get('/google/callback', passport_1.default.authenticate('google', { failu
                     { email: userData.email }
                 ]
             });
-            let finalUser;
             if (existingUser) {
                 // Update existing user
                 yield db.collection('users').updateOne({ id: existingUser.id }, {
                     $set: Object.assign(Object.assign({}, userData), { lastLogin: new Date().toISOString(), updatedAt: new Date().toISOString() })
                 });
-                finalUser = Object.assign(Object.assign({}, existingUser), userData);
                 console.log('Updated existing user after OAuth:', existingUser.id);
             }
             else {
                 // Create new user
                 const newUser = Object.assign(Object.assign({}, userData), { createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [] });
                 yield db.collection('users').insertOne(newUser);
-                finalUser = newUser;
                 console.log('Created new user after OAuth:', newUser.id);
             }
-            // Generate JWT token
-            const token = (0, authUtils_1.generateToken)(finalUser);
-            const refreshToken = (0, authUtils_1.generateRefreshToken)(finalUser);
-            // Store refresh token in database for this user
-            yield db.collection('users').updateOne({ id: finalUser.id }, { $set: { refreshToken } });
-            // Redirect to frontend with token
+            // Successful authentication, redirect to frontend
             const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
-            // Append the token to the URL as a query parameter
-            const redirectUrl = `${frontendUrl}?token=${token}&refreshToken=${refreshToken}`;
-            res.redirect(redirectUrl);
+            res.redirect(frontendUrl);
         }
     }
     catch (error) {
@@ -99,81 +56,36 @@ router.get('/google/callback', passport_1.default.authenticate('google', { failu
         res.redirect('/login?error=oauth_failed');
     }
 }));
-// Token refresh endpoint
-router.post('/refresh-token', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const { refreshToken } = req.body;
-        if (!refreshToken) {
-            return res.status(401).json({
-                success: false,
-                error: 'Refresh token required',
-                message: 'No refresh token provided'
-            });
-        }
-        // Verify the refresh token
-        const decoded = yield Promise.resolve().then(() => __importStar(require('../utils/authUtils'))).then(utils => utils.verifyRefreshToken(refreshToken));
-        if (!decoded) {
-            return res.status(403).json({
-                success: false,
-                error: 'Invalid refresh token',
-                message: 'The refresh token is invalid or has expired'
-            });
-        }
-        const db = (0, db_1.getDB)();
-        const user = yield db.collection('users').findOne({
-            id: decoded.id,
-            refreshToken: refreshToken // Verify the refresh token matches the one stored
-        });
-        if (!user) {
-            return res.status(403).json({
-                success: false,
-                error: 'Invalid refresh token',
-                message: 'The refresh token does not match the user record'
-            });
-        }
-        // Generate new tokens
-        const newToken = (0, authUtils_1.generateToken)(user);
-        const newRefreshToken = (0, authUtils_1.generateRefreshToken)(user);
-        // Update the refresh token in the database
-        yield db.collection('users').updateOne({ id: user.id }, { $set: { refreshToken: newRefreshToken } });
-        res.json({
-            success: true,
-            token: newToken,
-            refreshToken: newRefreshToken
-        });
-    }
-    catch (error) {
-        console.error('Error refreshing token:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Token refresh failed',
-            message: 'An error occurred while refreshing the token'
-        });
-    }
-}));
-// Logout route - JWT version (just clears client-side token)
+// Logout route
 router.post('/logout', (req, res) => {
-    var _a;
-    // For JWT, logout is typically handled client-side by clearing the token
-    // But we can still invalidate sessions if they exist
     req.logout((err) => {
         if (err) {
             console.error('Error during logout:', err);
+            return res.status(500).json({
+                success: false,
+                error: 'Logout failed',
+                message: 'An error occurred during logout'
+            });
         }
-    });
-    (_a = req.session) === null || _a === void 0 ? void 0 : _a.destroy((err) => {
-        if (err) {
-            console.error('Error destroying session:', err);
-        }
-    });
-    res.json({
-        success: true,
-        message: 'Logged out successfully'
+        req.session.destroy((err) => {
+            if (err) {
+                console.error('Error destroying session:', err);
+                return res.status(500).json({
+                    success: false,
+                    error: 'Session cleanup failed',
+                    message: 'An error occurred cleaning up session'
+                });
+            }
+            res.json({
+                success: true,
+                message: 'Logged out successfully'
+            });
+        });
     });
 });
-// Get current user info - JWT version
-router.get('/user', (req, res) => {
-    if (req.user) {
+// Get current user info
+router.get('/user', authMiddleware_1.attachUser, (req, res) => {
+    if (req.isAuthenticated && req.isAuthenticated() && req.user) {
         res.json({
             success: true,
             user: req.user,
@@ -188,16 +100,16 @@ router.get('/user', (req, res) => {
         });
     }
 });
-// Check authentication status - JWT version
+// Check authentication status
 router.get('/status', (req, res) => {
-    const isAuthenticated = !!req.user;
+    const isAuthenticated = req.isAuthenticated && req.isAuthenticated();
     res.json({
         success: true,
         authenticated: isAuthenticated,
         user: isAuthenticated ? req.user : null
     });
 });
-// Manual login endpoint (for email/password authentication) - JWT version
+// Manual login endpoint (for email/password authentication)
 router.post('/login', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { identifier, password } = req.body;
@@ -234,17 +146,21 @@ router.post('/login', (req, res) => __awaiter(void 0, void 0, void 0, function* 
                 updatedAt: new Date().toISOString()
             }
         });
-        // Generate JWT token
-        const token = (0, authUtils_1.generateToken)(user);
-        const refreshToken = (0, authUtils_1.generateRefreshToken)(user);
-        // Store refresh token in database for this user
-        yield db.collection('users').updateOne({ id: user.id }, { $set: { refreshToken } });
-        res.json({
-            success: true,
-            user: user,
-            token: token, // Include token in response
-            refreshToken: refreshToken, // Include refresh token in response
-            message: 'Login successful'
+        // Create session
+        req.login(user, (err) => {
+            if (err) {
+                console.error('Error creating session:', err);
+                return res.status(500).json({
+                    success: false,
+                    error: 'Session creation failed',
+                    message: 'Failed to create user session'
+                });
+            }
+            res.json({
+                success: true,
+                user: user,
+                message: 'Login successful'
+            });
         });
     }
     catch (error) {
@@ -256,7 +172,7 @@ router.post('/login', (req, res) => __awaiter(void 0, void 0, void 0, function* 
         });
     }
 }));
-// Manual registration endpoint - JWT version
+// Manual registration endpoint
 router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { firstName, lastName, email, phone, dob, password } = req.body;
@@ -310,17 +226,21 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             // passwordHash: await bcrypt.hash(password, 10)
         };
         yield db.collection('users').insertOne(newUser);
-        // Generate JWT token
-        const token = (0, authUtils_1.generateToken)(newUser);
-        const refreshToken = (0, authUtils_1.generateRefreshToken)(newUser);
-        // Store refresh token in database for this user
-        yield db.collection('users').updateOne({ id: newUser.id }, { $set: { refreshToken } });
-        res.status(201).json({
-            success: true,
-            user: newUser,
-            token: token, // Include token in response
-            refreshToken: refreshToken, // Include refresh token in response
-            message: 'Registration successful'
+        // Create session for new user
+        req.login(newUser, (err) => {
+            if (err) {
+                console.error('Error creating session for new user:', err);
+                return res.status(500).json({
+                    success: false,
+                    error: 'Registration successful but session creation failed',
+                    message: 'Please try logging in manually'
+                });
+            }
+            res.status(201).json({
+                success: true,
+                user: newUser,
+                message: 'Registration successful'
+            });
         });
     }
     catch (error) {

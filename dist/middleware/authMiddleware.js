@@ -15,14 +15,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireAdmin = exports.requireOwnership = exports.attachUser = exports.optionalAuth = exports.requireAuth = void 0;
 const db_1 = require("../db");
 const firebaseAdmin_1 = __importDefault(require("../firebaseAdmin"));
-const authUtils_1 = require("../utils/authUtils");
+const jwtUtils_1 = require("../utils/jwtUtils");
 // Middleware to check if user is authenticated via JWT or Firebase
 const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     // 1. Check JWT Token
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
-        const decoded = (0, authUtils_1.verifyToken)(token);
+        const decoded = (0, jwtUtils_1.verifyToken)(token);
         if (decoded) {
             try {
                 const db = (0, db_1.getDB)();
@@ -97,7 +97,7 @@ const optionalAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, funct
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
-        const decoded = (0, authUtils_1.verifyToken)(token);
+        const decoded = (0, jwtUtils_1.verifyToken)(token);
         if (decoded) {
             try {
                 const db = (0, db_1.getDB)();
@@ -144,7 +144,7 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
         const authHeader = req.headers.authorization;
         if (authHeader && authHeader.startsWith('Bearer ')) {
             const token = authHeader.split(' ')[1];
-            const decoded = (0, authUtils_1.verifyToken)(token);
+            const decoded = (0, jwtUtils_1.verifyToken)(token);
             if (decoded) {
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decoded.id });
