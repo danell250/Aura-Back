@@ -157,7 +157,7 @@ app.use((req, res, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   res.setHeader('Content-Security-Policy', "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.paypal.com https://www.paypalobjects.com https://js.braintreegateway.com https://*.paypal.com;");
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Permissions-Policy', 'unload');
+  res.setHeader('Permissions-Policy', 'unload=*');
   next();
 });
 
@@ -166,6 +166,7 @@ app.use((req, res, next) => {
   // Set headers to fix Cross-Origin-Opener-Policy issues with popups
   res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
   res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  res.setHeader('Permissions-Policy', 'unload=*');
   next();
 });
 
