@@ -90,6 +90,45 @@ export const adsController = {
         return res.status(400).json({ success: false, error: 'Missing required fields' });
       }
       
+      // Check subscription limits if subscriptionId is provided
+      if (adData.subscriptionId) {
+        const subscription = await db.collection('adSubscriptions').findOne({ 
+          id: adData.subscriptionId 
+        });
+        
+        if (!subscription) {
+          return res.status(404).json({ 
+            success: false, 
+            error: 'Subscription not found' 
+          });
+        }
+        
+        if (subscription.status !== 'active') {
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Subscription is not active' 
+          });
+        }
+        
+        // Check if subscription has expired
+        if (subscription.endDate && Date.now() > subscription.endDate) {
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Subscription has expired' 
+          });
+        }
+        
+        // Check if user has reached ad limit
+        if (subscription.adsUsed >= subscription.adLimit) {
+          return res.status(400).json({ 
+            success: false, 
+            error: `Ad limit reached. You can create ${subscription.adLimit} ads with this plan.`,
+            limit: subscription.adLimit,
+            used: subscription.adsUsed
+          });
+        }
+      }
+      
       const newAd = {
         ...adData,
         id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -100,6 +139,17 @@ export const adsController = {
       };
       
       await db.collection('ads').insertOne(newAd);
+      
+      // Increment ads used count if subscription is linked
+      if (adData.subscriptionId) {
+        await db.collection('adSubscriptions').updateOne(
+          { id: adData.subscriptionId },
+          { 
+            $inc: { adsUsed: 1 },
+            $set: { updatedAt: Date.now() }
+          }
+        );
+      }
       
       res.status(201).json({
         success: true,
