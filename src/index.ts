@@ -26,7 +26,7 @@ dotenv.config();
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID || '63639970194-r83ifit3giq02jd1rgfq84uea5tbgv6h.apps.googleusercontent.com',
   clientSecret: process.env.GOOGLE_CLIENT_SECRET || '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',
-  callbackURL: "/auth/google/callback"
+  callbackURL: "/login/callback"
 },
 async (_accessToken, _refreshToken, profile, done) => {
   try {
@@ -184,19 +184,6 @@ app.use('/api/users', (req, res, next) => {
   console.log(`Users route hit: ${req.method} ${req.path}`);
   next();
 }, usersRoutes);
-
-// Google OAuth routes (legacy - moved to /auth)
-app.get('/auth/google',
-  passport.authenticate('google', { scope: ['profile', 'email'] })
-);
-
-app.get('/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: '/login' }),
-  (req, res) => {
-    // Successful authentication, redirect to frontend
-    res.redirect(process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app');
-  }
-);
 
 // Logout route (legacy - moved to /auth)
 app.get('/auth/logout', (req, res) => {
