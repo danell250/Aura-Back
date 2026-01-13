@@ -90,8 +90,12 @@ export const adsController = {
         return res.status(400).json({ success: false, error: 'Missing required fields' });
       }
       
-      // Check subscription limits if subscriptionId is provided
-      if (adData.subscriptionId) {
+      // Check if this is a special user (bypass subscription validation)
+      const isSpecialUser = adData.ownerId === '1' || 
+        (adData.ownerEmail && adData.ownerEmail.toLowerCase() === 'danelloosthuizen3@gmail.com');
+      
+      // Check subscription limits if subscriptionId is provided and not special user
+      if (adData.subscriptionId && !isSpecialUser) {
         const subscription = await db.collection('adSubscriptions').findOne({ 
           id: adData.subscriptionId 
         });
@@ -140,8 +144,8 @@ export const adsController = {
       
       await db.collection('ads').insertOne(newAd);
       
-      // Increment ads used count if subscription is linked
-      if (adData.subscriptionId) {
+      // Increment ads used count if subscription is linked and not special user
+      if (adData.subscriptionId && !isSpecialUser) {
         await db.collection('adSubscriptions').updateOne(
           { id: adData.subscriptionId },
           { 
