@@ -26,7 +26,7 @@ dotenv.config();
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID || '63639970194-r83ifit3giq02jd1rgfq84uea5tbgv6h.apps.googleusercontent.com',
   clientSecret: process.env.GOOGLE_CLIENT_SECRET || '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',
-  callbackURL: "https://aura-back-s1bw.onrender.com/auth/google/callback"
+  callbackURL: "https://aura-back-s1bw.onrender.com/api/auth/google/callback"
 },
 async (_accessToken, _refreshToken, profile, done) => {
   try {
@@ -173,7 +173,7 @@ app.use('/uploads', express.static(uploadsDir));
 console.log('Registering routes...');
 
 // Authentication routes (should come first)
-app.use('/auth', authRoutes);
+app.use('/api/auth', authRoutes);
 
 // Privacy routes
 app.use('/api/privacy', privacyRoutes);
@@ -187,7 +187,7 @@ app.use('/api/users', (req, res, next) => {
 }, usersRoutes);
 
 // Logout route (legacy - moved to /auth)
-app.get('/auth/logout', (req, res) => {
+app.get('/api/auth/logout', (req, res) => {
   req.logout((err) => {
     if (err) {
       console.error('Error during logout:', err);

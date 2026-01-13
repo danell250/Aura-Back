@@ -3,6 +3,7 @@ import passport from 'passport';
 import { getDB } from '../db';
 import { requireAuth, attachUser } from '../middleware/authMiddleware';
 import { generateToken } from '../utils/jwtUtils';
+import { User } from '../types';
 
 const router = Router();
 
@@ -151,7 +152,7 @@ router.post('/login', async (req: Request, res: Response) => {
         { email: normalizedIdentifier },
         { handle: normalizedIdentifier }
       ]
-    });
+    }) as unknown as User;
     
     if (!user) {
       return res.status(401).json({
@@ -281,6 +282,7 @@ router.post('/register', async (req: Request, res: Response) => {
       res.status(201).json({
         success: true,
         user: newUser,
+        token: generateToken(newUser as unknown as User),
         message: 'Registration successful'
       });
     });
