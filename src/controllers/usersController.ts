@@ -217,35 +217,7 @@ export const usersController = {
     }
   },
 
-  // DELETE /api/users/admin/force-delete/:id - Force delete user (admin)
-  forceDeleteUser: async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      const db = getDB();
-
-      const result = await db.collection('users').deleteOne({ id });
-
-      if (result.deletedCount === 0) {
-        return res.status(404).json({
-          success: false,
-          error: 'User not found',
-          message: `User with ID ${id} does not exist`
-        });
-      }
-
-      res.json({
-        success: true,
-        message: 'User force-deleted successfully'
-      });
-    } catch (error) {
-      console.error('Error force-deleting user:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to force-delete user',
-        message: 'Internal server error'
-      });
-    }
-  },
+ 
 
   // POST /api/users/:id/remove-acquaintance - Remove an acquaintance
   removeAcquaintance: async (req: Request, res: Response) => {
@@ -1207,6 +1179,77 @@ export const usersController = {
         success: false,
         error: 'Failed to reject connection request',
         message: 'Internal server error'
+      });
+    }
+  },
+
+  // DELETE /api/users/force-delete/:email - Force delete a user by email (Admin only)
+  forceDeleteUser: async (req: Request, res: Response) => {
+    try {
+      const { email } = req.params;
+      
+      // Basic security check - in production this should be protected by admin middleware
+      // For now, we'll just check if the email parameter is provided
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          error: 'Email required',
+          message: 'Please provide the email of the user to delete'
+        });
+      }
+
+      const db = getDB();
+      
+      // Find the user first to get their ID and handle
+      const user = await db.collection('users').findOne({ 
+        $or: [
+          { email: email },
+          { handle: email }, // Allow searching by handle too
+          { id: email }      // Allow searching by ID too
+        ]
+      });
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `No user found matching ${email}`
+        });
+      }
+
+      // Delete the user
+      const result = await db.collection('users').deleteOne({ _id: user._id });
+
+      if (result.deletedCount === 1) {
+        console.log(`Force deleted user: ${user.name} (${user.email})`);
+        
+        // Also clean up any posts or ads by this user if necessary
+        // await db.collection('posts').deleteMany({ 'author.id': user.id });
+        // await db.collection('ads').deleteMany({ ownerId: user.id });
+
+        return res.json({
+          success: true,
+          message: `Successfully deleted user ${user.name} (${user.email})`,
+          deletedUser: {
+            name: user.name,
+            email: user.email,
+            handle: user.handle,
+            id: user.id
+          }
+        });
+      } else {
+        return res.status(500).json({
+          success: false,
+          error: 'Delete failed',
+          message: 'Failed to delete the user from database'
+        });
+      }
+    } catch (error) {
+      console.error('Error force deleting user:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+        message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   }

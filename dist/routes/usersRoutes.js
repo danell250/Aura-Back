@@ -35,6 +35,8 @@ router.put('/:id/privacy-settings', usersController_1.usersController.updatePriv
 router.post('/:id/connect', usersController_1.usersController.sendConnectionRequest);
 // POST /api/users/:id/accept-connection - Accept connection request
 router.post('/:id/accept-connection', usersController_1.usersController.acceptConnectionRequest);
+// POST /api/users/:id/reject-connection - Reject connection request
+router.post('/:id/reject-connection', usersController_1.usersController.rejectConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', usersController_1.usersController.blockUser);
 // POST /api/users/:id/remove-acquaintance - Remove acquaintance
@@ -47,6 +49,6 @@ router.get('/:id', usersController_1.usersController.getUserById);
 router.put('/:id', usersController_1.usersController.updateUser);
 // DELETE /api/users/:id - Delete user
 router.delete('/:id', usersController_1.usersController.deleteUser);
-// DELETE /api/users/admin/force-delete/:id - Force delete user (admin only)
-router.delete('/admin/force-delete/:id', usersController_1.usersController.forceDeleteUser);
+// DELETE /api/users/force-delete/:email - Force delete a user (Admin)
+router.delete('/force-delete/:email', usersController_1.usersController.forceDeleteUser);
 exports.default = router;

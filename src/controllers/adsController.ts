@@ -1,51 +1,6 @@
 import { Request, Response } from 'express';
-import { getHashtagsFromText, getTrendingHashtags, filterByHashtags } from '../utils/hashtagUtils';
-
-// Mock data - in production this would come from database
-const mockAds: any[] = [
-  {
-    id: 'ad-leadership-summit',
-    ownerId: '1',
-    ownerName: 'James Mitchell',
-    ownerAvatar: 'https://picsum.photos/id/7/150/150',
-    headline: 'Global Leadership Summit 2025',
-    description: 'Join 500+ executives for premier leadership conference. Keynotes, workshops, and networking. #leadership #conference #networking #executives',
-    mediaUrl: 'https://images.unsplash.com/photo-1542744173-8e7e53415bb0?q=80&w=800&auto=format&fit=crop',
-    ctaText: 'Register Now',
-    ctaLink: '#',
-    isSponsored: true,
-    placement: 'feed',
-    status: 'active',
-    subscriptionTier: 'Leadership Pulse',
-    reactions: { '🎯': 45, '💼': 28 },
-    reactionUsers: { '🎯': ['user1', 'user2'], '💼': ['user3'] },
-    userReactions: [],
-    expiryDate: Date.now() + (30 * 24 * 60 * 60 * 1000), // 30 days from now
-    hashtags: ['leadership', 'conference', 'networking', 'executives'],
-    timestamp: Date.now() - 1800000
-  },
-  {
-    id: 'ad-career-coaching',
-    ownerId: '2',
-    ownerName: 'Sarah Williams',
-    ownerAvatar: 'https://picsum.photos/id/25/150/150',
-    headline: 'Executive Career Transformation',
-    description: '1-on-1 coaching to help you reach your next career milestone. Limited spots available. #coaching #career #transformation #growth',
-    mediaUrl: 'https://images.unsplash.com/photo-1515378791036-0648a3e77b4a?q=80&w=800&auto=format&fit=crop',
-    ctaText: 'Book Session',
-    ctaLink: '#',
-    isSponsored: true,
-    placement: 'feed',
-    status: 'active',
-    subscriptionTier: 'Career Growth',
-    reactions: { '🚀': 67, '💡': 34 },
-    reactionUsers: { '🚀': ['user4', 'user5'], '💡': ['user6'] },
-    userReactions: [],
-    expiryDate: Date.now() + (15 * 24 * 60 * 60 * 1000), // 15 days from now
-    hashtags: ['coaching', 'career', 'transformation', 'growth'],
-    timestamp: Date.now() - 3600000
-  }
-];
+import { getDB } from '../db';
+import { getHashtagsFromText, filterByHashtags } from '../utils/hashtagUtils';
 
 export const adsController = {
   // GET /api/ads - Get all ads
@@ -53,37 +8,49 @@ export const adsController = {
     try {
       const { page = 1, limit = 10, placement, status, ownerId, hashtags } = req.query;
       const currentUserId = (req as any).user?.id;
+      const db = getDB();
       
-      let filteredAds = [...mockAds];
+      const query: any = {};
       
       // Filter by placement if specified
       if (placement) {
-        filteredAds = filteredAds.filter(ad => ad.placement === placement);
+        query.placement = placement;
       }
       
       // Filter by status if specified
       if (status) {
-        filteredAds = filteredAds.filter(ad => ad.status === status);
+        query.status = status;
       }
       
       // Filter by owner if specified
       if (ownerId) {
-        filteredAds = filteredAds.filter(ad => ad.ownerId === ownerId);
+        query.ownerId = ownerId;
       }
       
       // Filter by hashtags if specified
       if (hashtags) {
         const searchTags = Array.isArray(hashtags) ? hashtags : [hashtags];
-        filteredAds = filterByHashtags(filteredAds, searchTags as string[]);
+        query.hashtags = { $in: searchTags };
       }
       
       // Filter out expired ads
       const now = Date.now();
-      filteredAds = filteredAds.filter(ad => !ad.expiryDate || ad.expiryDate > now);
+      query.$or = [
+        { expiryDate: { $exists: false } },
+        { expiryDate: { $gt: now } }
+      ];
+      
+      const skip = (Number(page) - 1) * Number(limit);
+      const ads = await db.collection('ads')
+        .find(query)
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .toArray();
       
       // Add userReactions for current user
       if (currentUserId) {
-        filteredAds.forEach((ad: any) => {
+        ads.forEach((ad: any) => {
           if (ad.reactionUsers) {
             ad.userReactions = Object.keys(ad.reactionUsers).filter(emoji => 
               Array.isArray(ad.reactionUsers[emoji]) && ad.reactionUsers[emoji].includes(currentUserId)
@@ -94,129 +61,46 @@ export const adsController = {
         });
       }
       
-      // Pagination
-      const startIndex = (Number(page) - 1) * Number(limit);
-      const endIndex = startIndex + Number(limit);
-      const paginatedAds = filteredAds.slice(startIndex, endIndex);
+      const total = await db.collection('ads').countDocuments(query);
       
       res.json({
         success: true,
-        data: paginatedAds,
+        data: ads,
         pagination: {
           page: Number(page),
           limit: Number(limit),
-          total: filteredAds.length,
-          pages: Math.ceil(filteredAds.length / Number(limit))
+          total,
+          pages: Math.ceil(total / Number(limit))
         }
       });
     } catch (error) {
       console.error('Error fetching ads:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to fetch ads',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to fetch ads' });
     }
   },
 
-  // GET /api/ads/:id - Get ad by ID
-  getAdById: async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      const currentUserId = (req as any).user?.id;
-      const ad = mockAds.find(a => a.id === id);
-      
-      if (!ad) {
-        return res.status(404).json({
-          success: false,
-          error: 'Ad not found',
-          message: `Ad with ID ${id} does not exist`
-        });
-      }
-      
-      // Add userReactions for current user
-      const adWithUserReactions = { ...ad };
-      if (currentUserId) {
-        if (adWithUserReactions.reactionUsers) {
-          adWithUserReactions.userReactions = Object.keys(adWithUserReactions.reactionUsers).filter(emoji => 
-            Array.isArray(adWithUserReactions.reactionUsers[emoji]) && adWithUserReactions.reactionUsers[emoji].includes(currentUserId)
-          );
-        } else {
-          adWithUserReactions.userReactions = [];
-        }
-      }
-      
-      res.json({
-        success: true,
-        data: adWithUserReactions
-      });
-    } catch (error) {
-      console.error('Error fetching ad:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to fetch ad',
-        message: 'Internal server error'
-      });
-    }
-  },
-
-  // POST /api/ads - Create new ad
+  // POST /api/ads - Create a new ad
   createAd: async (req: Request, res: Response) => {
     try {
-      const {
-        ownerId,
-        ownerName,
-        ownerAvatar,
-        headline,
-        description,
-        mediaUrl,
-        ctaText,
-        ctaLink,
-        placement,
-        subscriptionTier,
-        durationDays
-      } = req.body;
+      const adData = req.body;
+      const db = getDB();
       
-      // Validate required fields
-      if (!ownerId || !headline || !description || !ctaText || !ctaLink) {
-        return res.status(400).json({
-          success: false,
-          error: 'Missing required fields',
-          message: 'ownerId, headline, description, ctaText, and ctaLink are required'
-        });
+      // Ensure required fields
+      if (!adData.ownerId || !adData.headline) {
+        return res.status(400).json({ success: false, error: 'Missing required fields' });
       }
-
-      // Extract hashtags from headline and description
-      const hashtags = [
-        ...getHashtagsFromText(headline),
-        ...getHashtagsFromText(description)
-      ].filter((tag, index, arr) => arr.indexOf(tag) === index); // Remove duplicates
-
+      
       const newAd = {
-        id: `ad-${Date.now()}`,
-        ownerId,
-        ownerName: ownerName || 'Unknown',
-        ownerAvatar: ownerAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${ownerId}`,
-        headline,
-        description,
-        mediaUrl: mediaUrl || '',
-        ctaText,
-        ctaLink,
-        isSponsored: true,
-        placement: placement || 'feed',
-        status: 'active',
-        subscriptionTier: subscriptionTier || 'Basic',
-        reactions: {} as Record<string, number>,
-        reactionUsers: {} as Record<string, string[]>,
-        userReactions: [] as string[],
-        hashtags,
+        ...adData,
+        id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         timestamp: Date.now(),
-        expiryDate: durationDays ? Date.now() + (durationDays * 24 * 60 * 60 * 1000) : undefined
+        reactions: {},
+        reactionUsers: {},
+        hashtags: getHashtagsFromText(adData.description || '')
       };
-
-      // In production, save to database
-      mockAds.unshift(newAd);
-
+      
+      await db.collection('ads').insertOne(newAd);
+      
       res.status(201).json({
         success: true,
         data: newAd,
@@ -224,11 +108,85 @@ export const adsController = {
       });
     } catch (error) {
       console.error('Error creating ad:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to create ad',
-        message: 'Internal server error'
+      res.status(500).json({ success: false, error: 'Failed to create ad' });
+    }
+  },
+
+  // POST /api/ads/:id/react - React to an ad
+  reactToAd: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { reaction, userId } = req.body;
+      const db = getDB();
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      const reactionUsers = ad.reactionUsers || {};
+      const reactions = ad.reactions || {};
+      
+      // Initialize if needed
+      if (!reactionUsers[reaction]) reactionUsers[reaction] = [];
+      if (!reactions[reaction]) reactions[reaction] = 0;
+
+      // Toggle reaction
+      const userIndex = reactionUsers[reaction].indexOf(userId);
+      if (userIndex > -1) {
+        // Remove reaction
+        reactionUsers[reaction].splice(userIndex, 1);
+        reactions[reaction] = Math.max(0, reactions[reaction] - 1);
+        if (reactions[reaction] === 0) delete reactions[reaction];
+      } else {
+        // Add reaction
+        reactionUsers[reaction].push(userId);
+        reactions[reaction]++;
+      }
+
+      await db.collection('ads').updateOne(
+        { id },
+        { 
+          $set: { 
+            reactions,
+            reactionUsers
+          } 
+        }
+      );
+
+      // Calculate userReactions
+      const userReactions = Object.keys(reactionUsers).filter(emoji => 
+        reactionUsers[emoji].includes(userId)
+      );
+
+      res.json({
+        success: true,
+        data: {
+          reactions,
+          userReactions
+        }
       });
+    } catch (error) {
+      console.error('Error reacting to ad:', error);
+      res.status(500).json({ success: false, error: 'Failed to react to ad' });
+    }
+  },
+
+  // GET /api/ads/:id - Get ad by ID
+  getAdById: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+      const ad = await db.collection('ads').findOne({ id });
+      
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+      
+      res.json({ success: true, data: ad });
+    } catch (error) {
+      console.error('Error fetching ad:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch ad' });
     }
   },
 
@@ -237,31 +195,26 @@ export const adsController = {
     try {
       const { id } = req.params;
       const updates = req.body;
+      const db = getDB();
       
-      const adIndex = mockAds.findIndex(a => a.id === id);
-      if (adIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Ad not found',
-          message: `Ad with ID ${id} does not exist`
-        });
+      // Don't allow updating id or ownerId
+      delete updates.id;
+      delete updates.ownerId;
+      
+      const result = await db.collection('ads').findOneAndUpdate(
+        { id },
+        { $set: updates },
+        { returnDocument: 'after' }
+      );
+      
+      if (!result) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
       }
-
-      // Update ad
-      mockAds[adIndex] = { ...mockAds[adIndex], ...updates };
-
-      res.json({
-        success: true,
-        data: mockAds[adIndex],
-        message: 'Ad updated successfully'
-      });
+      
+      res.json({ success: true, data: result });
     } catch (error) {
       console.error('Error updating ad:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to update ad',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to update ad' });
     }
   },
 
@@ -269,107 +222,18 @@ export const adsController = {
   deleteAd: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const db = getDB();
       
-      const adIndex = mockAds.findIndex(a => a.id === id);
-      if (adIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Ad not found',
-          message: `Ad with ID ${id} does not exist`
-        });
+      const result = await db.collection('ads').deleteOne({ id });
+      
+      if (result.deletedCount === 0) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
       }
-
-      // Remove ad
-      mockAds.splice(adIndex, 1);
-
-      res.json({
-        success: true,
-        message: 'Ad deleted successfully'
-      });
+      
+      res.json({ success: true, message: 'Ad deleted successfully' });
     } catch (error) {
       console.error('Error deleting ad:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to delete ad',
-        message: 'Internal server error'
-      });
-    }
-  },
-
-  // POST /api/ads/:id/react - Add reaction to ad
-  reactToAd: async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      const { reaction } = req.body;
-      const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
-      
-      if (!reaction) {
-        return res.status(400).json({ success: false, error: 'Missing reaction' });
-      }
-      if (!userId) {
-        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
-      }
-      
-      const adIndex = mockAds.findIndex(a => a.id === id);
-      if (adIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Ad not found'
-        });
-      }
-
-      const ad = mockAds[adIndex];
-      
-      // Initialize reaction tracking if not exists
-      if (!ad.reactions) ad.reactions = {} as Record<string, number>;
-      if (!ad.reactionUsers) ad.reactionUsers = {} as Record<string, string[]>;
-      if (!ad.userReactions) ad.userReactions = [] as string[];
-      
-      // Check if user already reacted with this emoji
-      const usersForEmoji: string[] = (ad.reactionUsers[reaction] || []) as string[];
-      const hasReacted = usersForEmoji.includes(userId);
-      let action = 'added';
-
-      if (hasReacted) {
-        // Remove reaction
-        action = 'removed';
-        ad.reactionUsers[reaction] = usersForEmoji.filter((uid: string) => uid !== userId);
-        ad.reactions[reaction] = Math.max(0, (ad.reactions[reaction] || 0) - 1);
-        
-        // Remove from reactions object if count reaches 0
-        if (ad.reactions[reaction] === 0) {
-          delete ad.reactions[reaction];
-        }
-        // Clean up empty reaction users array
-        if (ad.reactionUsers[reaction].length === 0) {
-          delete ad.reactionUsers[reaction];
-        }
-      } else {
-        // Add reaction
-        if (!ad.reactionUsers[reaction]) {
-          ad.reactionUsers[reaction] = [];
-        }
-        ad.reactionUsers[reaction].push(userId);
-        ad.reactions[reaction] = (ad.reactions[reaction] || 0) + 1;
-      }
-      
-      // Update userReactions for response
-      ad.userReactions = Object.keys(ad.reactionUsers).filter(emoji => 
-        Array.isArray(ad.reactionUsers[emoji]) && ad.reactionUsers[emoji].includes(userId)
-      );
-
-      res.json({
-        success: true,
-        data: ad,
-        message: `Reaction ${action} successfully`
-      });
-    } catch (error) {
-      console.error('Error adding reaction:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to add reaction',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to delete ad' });
     }
   },
 
@@ -378,37 +242,22 @@ export const adsController = {
     try {
       const { id } = req.params;
       const { status } = req.body;
+      const db = getDB();
       
-      if (!['active', 'cancelled'].includes(status)) {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid status',
-          message: 'Status must be either "active" or "cancelled"'
-        });
+      const result = await db.collection('ads').findOneAndUpdate(
+        { id },
+        { $set: { status } },
+        { returnDocument: 'after' }
+      );
+      
+      if (!result) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
       }
       
-      const adIndex = mockAds.findIndex(a => a.id === id);
-      if (adIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Ad not found'
-        });
-      }
-
-      mockAds[adIndex].status = status;
-
-      res.json({
-        success: true,
-        data: mockAds[adIndex],
-        message: 'Ad status updated successfully'
-      });
+      res.json({ success: true, data: result });
     } catch (error) {
       console.error('Error updating ad status:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to update ad status',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to update ad status' });
     }
   }
 };

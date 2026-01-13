@@ -19,6 +19,7 @@ const USERS_COLLECTION = 'users';
 exports.postsController = {
     // GET /api/posts/search - Search posts
     searchPosts: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { q } = req.query;
             if (!q || typeof q !== 'string') {
@@ -30,19 +31,59 @@ exports.postsController = {
             }
             const db = (0, db_1.getDB)();
             const query = q.toLowerCase().trim();
-            // Basic search across content, author fields, and hashtags
-            const posts = yield db.collection(POSTS_COLLECTION)
-                .find({
-                $or: [
-                    { content: { $regex: query, $options: 'i' } },
-                    { 'author.name': { $regex: query, $options: 'i' } },
-                    { 'author.handle': { $regex: query, $options: 'i' } },
-                    { hashtags: { $elemMatch: { $regex: query, $options: 'i' } } }
-                ]
-            })
-                .sort({ timestamp: -1 })
-                .limit(100)
-                .toArray();
+            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            // Get current user's acquaintances for privacy filtering
+            let currentUserAcquaintances = [];
+            if (currentUserId) {
+                const currentUser = yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId });
+                currentUserAcquaintances = (currentUser === null || currentUser === void 0 ? void 0 : currentUser.acquaintances) || [];
+            }
+            // Basic search across content, author fields, and hashtags with privacy filtering
+            const pipeline = [
+                {
+                    $match: {
+                        $or: [
+                            { content: { $regex: query, $options: 'i' } },
+                            { 'author.name': { $regex: query, $options: 'i' } },
+                            { 'author.handle': { $regex: query, $options: 'i' } },
+                            { hashtags: { $elemMatch: { $regex: query, $options: 'i' } } }
+                        ]
+                    }
+                },
+                // Lookup author details to check privacy settings
+                {
+                    $lookup: {
+                        from: USERS_COLLECTION,
+                        localField: 'author.id',
+                        foreignField: 'id',
+                        as: 'authorDetails'
+                    }
+                },
+                // Filter based on privacy settings
+                {
+                    $match: {
+                        $or: [
+                            // Show posts from non-private users
+                            { 'authorDetails.isPrivate': { $ne: true } },
+                            // Show posts from private users who are acquaintances
+                            {
+                                'authorDetails.isPrivate': true,
+                                'author.id': { $in: currentUserAcquaintances }
+                            },
+                            // Always show own posts
+                            { 'author.id': currentUserId }
+                        ]
+                    }
+                },
+                { $sort: { timestamp: -1 } },
+                { $limit: 100 },
+                {
+                    $project: {
+                        authorDetails: 0 // Remove author details from response
+                    }
+                }
+            ];
+            const posts = yield db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
             res.json({ success: true, data: posts });
         }
         catch (error) {
@@ -52,7 +93,7 @@ exports.postsController = {
     }),
     // GET /api/posts - Get all posts (with filters & pagination)
     getAllPosts: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const { page = 1, limit = 20, userId, energy, hashtags } = req.query;
             const db = (0, db_1.getDB)();
@@ -82,9 +123,39 @@ exports.postsController = {
             }
             const pageNum = Math.max(parseInt(String(page), 10) || 1, 1);
             const limitNum = Math.min(Math.max(parseInt(String(limit), 10) || 20, 1), 100);
-            const total = yield db.collection(POSTS_COLLECTION).countDocuments(query);
+            // Get current user's acquaintances for privacy filtering
+            let currentUserAcquaintances = [];
+            if (currentUserId) {
+                const currentUser = yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId });
+                currentUserAcquaintances = (currentUser === null || currentUser === void 0 ? void 0 : currentUser.acquaintances) || [];
+            }
             const pipeline = [
                 { $match: query },
+                // Lookup author details to check privacy settings
+                {
+                    $lookup: {
+                        from: USERS_COLLECTION,
+                        localField: 'author.id',
+                        foreignField: 'id',
+                        as: 'authorDetails'
+                    }
+                },
+                // Filter based on privacy settings
+                {
+                    $match: {
+                        $or: [
+                            // Show posts from non-private users
+                            { 'authorDetails.isPrivate': { $ne: true } },
+                            // Show posts from private users who are acquaintances
+                            {
+                                'authorDetails.isPrivate': true,
+                                'author.id': { $in: currentUserAcquaintances }
+                            },
+                            // Always show own posts
+                            { 'author.id': currentUserId }
+                        ]
+                    }
+                },
                 { $sort: { timestamp: -1 } },
                 { $skip: (pageNum - 1) * limitNum },
                 { $limit: limitNum },
@@ -115,11 +186,39 @@ exports.postsController = {
                 },
                 {
                     $project: {
-                        fetchedComments: 0
+                        fetchedComments: 0,
+                        authorDetails: 0 // Remove author details from response
                     }
                 }
             ];
             const data = yield db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
+            // Get total count with privacy filtering
+            const countPipeline = [
+                { $match: query },
+                {
+                    $lookup: {
+                        from: USERS_COLLECTION,
+                        localField: 'author.id',
+                        foreignField: 'id',
+                        as: 'authorDetails'
+                    }
+                },
+                {
+                    $match: {
+                        $or: [
+                            { 'authorDetails.isPrivate': { $ne: true } },
+                            {
+                                'authorDetails.isPrivate': true,
+                                'author.id': { $in: currentUserAcquaintances }
+                            },
+                            { 'author.id': currentUserId }
+                        ]
+                    }
+                },
+                { $count: 'total' }
+            ];
+            const countResult = yield db.collection(POSTS_COLLECTION).aggregate(countPipeline).toArray();
+            const total = ((_b = countResult[0]) === null || _b === void 0 ? void 0 : _b.total) || 0;
             // Post-process to add userReactions for the current user
             if (currentUserId) {
                 data.forEach((post) => {
@@ -151,13 +250,22 @@ exports.postsController = {
     }),
     // GET /api/posts/:id - Get post by ID
     getPostById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
             const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             const pipeline = [
                 { $match: { id } },
+                // Lookup author details to check privacy settings
+                {
+                    $lookup: {
+                        from: USERS_COLLECTION,
+                        localField: 'author.id',
+                        foreignField: 'id',
+                        as: 'authorDetails'
+                    }
+                },
                 {
                     $lookup: {
                         from: 'comments',
@@ -187,6 +295,16 @@ exports.postsController = {
             if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
             }
+            // Check privacy settings
+            const authorDetails = (_b = post.authorDetails) === null || _b === void 0 ? void 0 : _b[0];
+            if ((authorDetails === null || authorDetails === void 0 ? void 0 : authorDetails.isPrivate) && currentUserId !== post.author.id) {
+                // Check if current user is an acquaintance of the author
+                const currentUser = currentUserId ? yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId }) : null;
+                const currentUserAcquaintances = (currentUser === null || currentUser === void 0 ? void 0 : currentUser.acquaintances) || [];
+                if (!currentUserAcquaintances.includes(post.author.id)) {
+                    return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+                }
+            }
             // Check if this is a locked Time Capsule that the user shouldn't see
             if (post.isTimeCapsule && post.unlockDate && Date.now() < post.unlockDate) {
                 // Only allow the author to see their own locked time capsules
@@ -194,6 +312,8 @@ exports.postsController = {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'Time Capsule is not yet unlocked' });
                 }
             }
+            // Remove author details from response
+            delete post.authorDetails;
             // Post-process to add userReactions for the current user
             if (currentUserId) {
                 if (post.reactionUsers) {

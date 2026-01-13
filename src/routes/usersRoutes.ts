@@ -68,7 +68,7 @@ router.put('/:id', usersController.updateUser);
 // DELETE /api/users/:id - Delete user
 router.delete('/:id', usersController.deleteUser);
 
-// DELETE /api/users/admin/force-delete/:id - Force delete user (admin only)
-router.delete('/admin/force-delete/:id', usersController.forceDeleteUser);
+// DELETE /api/users/force-delete/:email - Force delete a user (Admin)
+router.delete('/force-delete/:email', usersController.forceDeleteUser);
 
 export default router;

@@ -199,33 +199,6 @@ exports.usersController = {
             });
         }
     }),
-    // DELETE /api/users/admin/force-delete/:id - Force delete user (admin)
-    forceDeleteUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            const { id } = req.params;
-            const db = (0, db_1.getDB)();
-            const result = yield db.collection('users').deleteOne({ id });
-            if (result.deletedCount === 0) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'User not found',
-                    message: `User with ID ${id} does not exist`
-                });
-            }
-            res.json({
-                success: true,
-                message: 'User force-deleted successfully'
-            });
-        }
-        catch (error) {
-            console.error('Error force-deleting user:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to force-delete user',
-                message: 'Internal server error'
-            });
-        }
-    }),
     // POST /api/users/:id/remove-acquaintance - Remove an acquaintance
     removeAcquaintance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
@@ -978,6 +951,155 @@ exports.usersController = {
                 success: false,
                 error: 'Failed to send connection request',
                 message: 'Internal server error'
+            });
+        }
+    }),
+    // POST /api/users/:id/reject-connection - Reject connection request
+    rejectConnectionRequest: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params; // The ID of the user rejecting the request (rejecter)
+            const { requesterId } = req.body; // The ID of the user who sent the request
+            const db = (0, db_1.getDB)();
+            // Find both users
+            const rejecter = yield db.collection('users').findOne({ id });
+            if (!rejecter) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Rejecter not found',
+                    message: `User with ID ${id} does not exist`
+                });
+            }
+            const requester = yield db.collection('users').findOne({ id: requesterId });
+            if (!requester) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Requester not found',
+                    message: `User with ID ${requesterId} does not exist`
+                });
+            }
+            // Mark the specific request notification as read (rejected)
+            const updatedNotifications = (rejecter.notifications || []).map((n) => {
+                if (n.type === 'acquaintance_request' && n.fromUser.id === requesterId) {
+                    return Object.assign(Object.assign({}, n), { isRead: true });
+                }
+                return n;
+            });
+            yield db.collection('users').updateOne({ id }, {
+                $set: {
+                    notifications: updatedNotifications,
+                    updatedAt: new Date().toISOString()
+                }
+            });
+            // Remove the sent request from requester's sentAcquaintanceRequests
+            const requesterSentRequests = (requester.sentAcquaintanceRequests || []).filter((rid) => rid !== id);
+            // Create a rejection notification for the requester
+            const rejectionNotification = {
+                id: `notif-reject-${Date.now()}-${Math.random()}`,
+                type: 'acquaintance_rejected',
+                fromUser: {
+                    id: rejecter.id,
+                    name: rejecter.name,
+                    handle: rejecter.handle,
+                    avatar: rejecter.avatar,
+                    avatarType: rejecter.avatarType
+                },
+                message: 'declined your connection request',
+                timestamp: Date.now(),
+                isRead: false,
+                connectionId: id
+            };
+            yield db.collection('users').updateOne({ id: requesterId }, {
+                $set: {
+                    sentAcquaintanceRequests: requesterSentRequests,
+                    updatedAt: new Date().toISOString()
+                },
+                $push: {
+                    notifications: {
+                        $each: [rejectionNotification],
+                        $position: 0
+                    }
+                }
+            });
+            res.json({
+                success: true,
+                data: {
+                    rejecterId: id,
+                    requesterId: requesterId,
+                    timestamp: new Date().toISOString()
+                },
+                message: 'Connection request rejected successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error rejecting connection request:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to reject connection request',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // DELETE /api/users/force-delete/:email - Force delete a user by email (Admin only)
+    forceDeleteUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { email } = req.params;
+            // Basic security check - in production this should be protected by admin middleware
+            // For now, we'll just check if the email parameter is provided
+            if (!email) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Email required',
+                    message: 'Please provide the email of the user to delete'
+                });
+            }
+            const db = (0, db_1.getDB)();
+            // Find the user first to get their ID and handle
+            const user = yield db.collection('users').findOne({
+                $or: [
+                    { email: email },
+                    { handle: email }, // Allow searching by handle too
+                    { id: email } // Allow searching by ID too
+                ]
+            });
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: `No user found matching ${email}`
+                });
+            }
+            // Delete the user
+            const result = yield db.collection('users').deleteOne({ _id: user._id });
+            if (result.deletedCount === 1) {
+                console.log(`Force deleted user: ${user.name} (${user.email})`);
+                // Also clean up any posts or ads by this user if necessary
+                // await db.collection('posts').deleteMany({ 'author.id': user.id });
+                // await db.collection('ads').deleteMany({ ownerId: user.id });
+                return res.json({
+                    success: true,
+                    message: `Successfully deleted user ${user.name} (${user.email})`,
+                    deletedUser: {
+                        name: user.name,
+                        email: user.email,
+                        handle: user.handle,
+                        id: user.id
+                    }
+                });
+            }
+            else {
+                return res.status(500).json({
+                    success: false,
+                    error: 'Delete failed',
+                    message: 'Failed to delete the user from database'
+                });
+            }
+        }
+        catch (error) {
+            console.error('Error force deleting user:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Internal server error',
+                message: error instanceof Error ? error.message : 'Unknown error'
             });
         }
     })
