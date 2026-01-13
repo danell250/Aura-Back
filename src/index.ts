@@ -248,7 +248,8 @@ app.use('/api/gemini', geminiRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/posts', postsRoutes);
 app.use('/api/ads', adsRoutes);
-app.use('/api/comments', commentsRoutes);
+// Mount comments routes at /api so routes like /api/posts/:postId/comments work
+app.use('/api', commentsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
