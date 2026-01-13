@@ -1,61 +1,42 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
 
-// Mock data - in production this would come from database
-const mockComments: any[] = [
-  {
-    id: 'comment-1',
-    postId: 'post-1',
-    author: {
-      id: '2',
-      firstName: 'Sarah',
-      lastName: 'Williams',
-      name: 'Sarah Williams',
-      handle: '@sarahwilliams',
-      avatar: 'https://picsum.photos/id/25/150/150'
-    },
-    text: 'Great insights! This really resonates with my experience in executive coaching.',
-    timestamp: Date.now() - 1800000,
-    parentId: null,
-    reactions: { '👍': 5, '💡': 2 },
-    userReactions: []
-  }
-];
+const COMMENTS_COLLECTION = 'comments';
+const USERS_COLLECTION = 'users';
 
 export const commentsController = {
   // GET /api/posts/:postId/comments - Get comments for a post
   getCommentsByPost: async (req: Request, res: Response) => {
     try {
       const { postId } = req.params;
-      const { page = 1, limit = 20 } = req.query;
-      
-      let filteredComments = mockComments.filter(comment => comment.postId === postId);
-      
-      // Sort by timestamp (oldest first for comments)
-      filteredComments.sort((a, b) => a.timestamp - b.timestamp);
-      
-      // Pagination
-      const startIndex = (Number(page) - 1) * Number(limit);
-      const endIndex = startIndex + Number(limit);
-      const paginatedComments = filteredComments.slice(startIndex, endIndex);
-      
+      const { page = 1, limit = 50 } = req.query as Record<string, any>;
+      const db = getDB();
+
+      const pageNum = Math.max(parseInt(String(page), 10) || 1, 1);
+      const limitNum = Math.min(Math.max(parseInt(String(limit), 10) || 50, 1), 200);
+
+      const query = { postId };
+      const total = await db.collection(COMMENTS_COLLECTION).countDocuments(query);
+      const data = await db.collection(COMMENTS_COLLECTION)
+        .find(query)
+        .sort({ timestamp: 1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .toArray();
+
       res.json({
         success: true,
-        data: paginatedComments,
+        data,
         pagination: {
-          page: Number(page),
-          limit: Number(limit),
-          total: filteredComments.length,
-          pages: Math.ceil(filteredComments.length / Number(limit))
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum)
         }
       });
     } catch (error) {
       console.error('Error fetching comments:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to fetch comments',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to fetch comments', message: 'Internal server error' });
     }
   },
 
@@ -63,27 +44,15 @@ export const commentsController = {
   getCommentById: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const comment = mockComments.find(c => c.id === id);
-      
+      const db = getDB();
+      const comment = await db.collection(COMMENTS_COLLECTION).findOne({ id });
       if (!comment) {
-        return res.status(404).json({
-          success: false,
-          error: 'Comment not found',
-          message: `Comment with ID ${id} does not exist`
-        });
+        return res.status(404).json({ success: false, error: 'Comment not found', message: `Comment with ID ${id} does not exist` });
       }
-      
-      res.json({
-        success: true,
-        data: comment
-      });
+      res.json({ success: true, data: comment });
     } catch (error) {
       console.error('Error fetching comment:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to fetch comment',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to fetch comment', message: 'Internal server error' });
     }
   },
 
@@ -91,147 +60,101 @@ export const commentsController = {
   createComment: async (req: Request, res: Response) => {
     try {
       const { postId } = req.params;
-      const { text, authorId, parentId } = req.body;
-      
-      // Validate required fields
+      const { text, authorId, parentId } = req.body as { text: string; authorId: string; parentId?: string };
       if (!text || !authorId) {
-        return res.status(400).json({
-          success: false,
-          error: 'Missing required fields',
-          message: 'text and authorId are required'
-        });
+        return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text and authorId are required' });
       }
 
-      // Check for tagged users and their privacy settings
-      const mentionedHandles = (text.match(/@(\w+)/g) || []).map((h: string) => h.substring(1));
-      
-      if (mentionedHandles.length > 0) {
-        const db = getDB();
-        // Find users with these handles
-        const taggedUsers = await db.collection('users').find({ 
-          handle: { $in: mentionedHandles.map((h: string) => new RegExp(`^@?${h}$`, 'i')) } 
-        }).toArray();
-        
-        // Check if any tagged user has disabled tagging
-        const blockedTags = taggedUsers.filter((user: any) => {
-          const privacySettings = user.privacySettings || {};
-          // If allowTagging is explicitly false, they cannot be tagged
-          // Default is true if undefined
-          return privacySettings.allowTagging === false;
-        });
-
-        if (blockedTags.length > 0) {
-          const blockedHandles = blockedTags.map((u: any) => u.handle).join(', ');
-          return res.status(403).json({
-            success: false,
-            error: 'Tagging not allowed',
-            message: `The following users do not allow tagging: ${blockedHandles}`
-          });
-        }
-      }
-
-      // In production, fetch author from database
-      const author = {
+      const db = getDB();
+      const author = await db.collection(USERS_COLLECTION).findOne({ id: authorId });
+      const authorEmbed = author ? {
+        id: author.id,
+        firstName: author.firstName,
+        lastName: author.lastName,
+        name: author.name,
+        handle: author.handle,
+        avatar: author.avatar,
+        avatarType: author.avatarType || 'image'
+      } : {
         id: authorId,
         firstName: 'User',
         lastName: '',
         name: 'User',
         handle: '@user',
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`,
+        avatarType: 'image'
       };
 
       const newComment = {
         id: `comment-${Date.now()}`,
         postId,
-        author,
+        author: authorEmbed,
         text,
         timestamp: Date.now(),
         parentId: parentId || null,
         reactions: {} as Record<string, number>,
-        userReactions: []
+        userReactions: [] as string[]
       };
 
-      // In production, save to database
-      mockComments.push(newComment);
-
-      res.status(201).json({
-        success: true,
-        data: newComment,
-        message: 'Comment created successfully'
-      });
+      await db.collection(COMMENTS_COLLECTION).insertOne(newComment);
+      res.status(201).json({ success: true, data: newComment, message: 'Comment created successfully' });
     } catch (error) {
       console.error('Error creating comment:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to create comment',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to create comment', message: 'Internal server error' });
     }
   },
 
-  // PUT /api/comments/:id - Update comment
+  // PUT /api/comments/:id - Update comment (author-only)
   updateComment: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { text } = req.body;
-      
-      const commentIndex = mockComments.findIndex(c => c.id === id);
-      if (commentIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Comment not found',
-          message: `Comment with ID ${id} does not exist`
-        });
+      const { text } = req.body as { text?: string };
+      const db = getDB();
+
+      const existing = await db.collection(COMMENTS_COLLECTION).findOne({ id });
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'Comment not found', message: `Comment with ID ${id} does not exist` });
       }
 
-      // Update comment
-      if (text) {
-        mockComments[commentIndex].text = text;
+      const user = (req as any).user;
+      if (!user || user.id !== existing.author.id) {
+        return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can update this comment' });
       }
 
-      res.json({
-        success: true,
-        data: mockComments[commentIndex],
-        message: 'Comment updated successfully'
-      });
+      const updates: any = {};
+      if (typeof text === 'string') updates.text = text;
+      updates.updatedAt = new Date().toISOString();
+
+      await db.collection(COMMENTS_COLLECTION).updateOne({ id }, { $set: updates });
+      const updated = await db.collection(COMMENTS_COLLECTION).findOne({ id });
+      res.json({ success: true, data: updated, message: 'Comment updated successfully' });
     } catch (error) {
       console.error('Error updating comment:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to update comment',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to update comment', message: 'Internal server error' });
     }
   },
 
-  // DELETE /api/comments/:id - Delete comment
+  // DELETE /api/comments/:id - Delete comment (author-only)
   deleteComment: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      
-      const commentIndex = mockComments.findIndex(c => c.id === id);
-      if (commentIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Comment not found',
-          message: `Comment with ID ${id} does not exist`
-        });
+      const db = getDB();
+
+      const existing = await db.collection(COMMENTS_COLLECTION).findOne({ id });
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'Comment not found', message: `Comment with ID ${id} does not exist` });
       }
 
-      // Remove comment
-      mockComments.splice(commentIndex, 1);
+      const user = (req as any).user;
+      if (!user || user.id !== existing.author.id) {
+        return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can delete this comment' });
+      }
 
-      res.json({
-        success: true,
-        message: 'Comment deleted successfully'
-      });
+      await db.collection(COMMENTS_COLLECTION).deleteOne({ id });
+      res.json({ success: true, message: 'Comment deleted successfully' });
     } catch (error) {
       console.error('Error deleting comment:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to delete comment',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to delete comment', message: 'Internal server error' });
     }
   },
 
@@ -239,35 +162,26 @@ export const commentsController = {
   reactToComment: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { reaction, userId } = req.body;
-      
-      const commentIndex = mockComments.findIndex(c => c.id === id);
-      if (commentIndex === -1) {
-        return res.status(404).json({
-          success: false,
-          error: 'Comment not found'
-        });
+      const { reaction } = req.body as { reaction: string };
+
+      if (!reaction) {
+        return res.status(400).json({ success: false, error: 'Missing reaction' });
       }
 
-      // In production, handle reaction logic with database
-      const comment = mockComments[commentIndex];
-      if (!(comment.reactions as any)[reaction]) {
-        (comment.reactions as any)[reaction] = 0;
+      const db = getDB();
+      const existing = await db.collection(COMMENTS_COLLECTION).findOne({ id });
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'Comment not found' });
       }
-      (comment.reactions as any)[reaction]++;
 
-      res.json({
-        success: true,
-        data: comment,
-        message: 'Reaction added successfully'
-      });
+      const incField: any = {}; incField[`reactions.${reaction}`] = 1;
+      await db.collection(COMMENTS_COLLECTION).updateOne({ id }, { $inc: incField });
+      const updated = await db.collection(COMMENTS_COLLECTION).findOne({ id });
+
+      res.json({ success: true, data: updated, message: 'Reaction added successfully' });
     } catch (error) {
       console.error('Error adding reaction:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to add reaction',
-        message: 'Internal server error'
-      });
+      res.status(500).json({ success: false, error: 'Failed to add reaction', message: 'Internal server error' });
     }
   }
 };
