@@ -88,8 +88,52 @@ exports.adsController = {
             if (!adData.ownerId || !adData.headline) {
                 return res.status(400).json({ success: false, error: 'Missing required fields' });
             }
+            // Check if this is a special user (bypass subscription validation)
+            const isSpecialUser = adData.ownerId === '1' ||
+                (adData.ownerEmail && adData.ownerEmail.toLowerCase() === 'danelloosthuizen3@gmail.com');
+            // Check subscription limits if subscriptionId is provided and not special user
+            if (adData.subscriptionId && !isSpecialUser) {
+                const subscription = yield db.collection('adSubscriptions').findOne({
+                    id: adData.subscriptionId
+                });
+                if (!subscription) {
+                    return res.status(404).json({
+                        success: false,
+                        error: 'Subscription not found'
+                    });
+                }
+                if (subscription.status !== 'active') {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Subscription is not active'
+                    });
+                }
+                // Check if subscription has expired
+                if (subscription.endDate && Date.now() > subscription.endDate) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Subscription has expired'
+                    });
+                }
+                // Check if user has reached ad limit
+                if (subscription.adsUsed >= subscription.adLimit) {
+                    return res.status(400).json({
+                        success: false,
+                        error: `Ad limit reached. You can create ${subscription.adLimit} ads with this plan.`,
+                        limit: subscription.adLimit,
+                        used: subscription.adsUsed
+                    });
+                }
+            }
             const newAd = Object.assign(Object.assign({}, adData), { id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, timestamp: Date.now(), reactions: {}, reactionUsers: {}, hashtags: (0, hashtagUtils_1.getHashtagsFromText)(adData.description || '') });
             yield db.collection('ads').insertOne(newAd);
+            // Increment ads used count if subscription is linked and not special user
+            if (adData.subscriptionId && !isSpecialUser) {
+                yield db.collection('adSubscriptions').updateOne({ id: adData.subscriptionId }, {
+                    $inc: { adsUsed: 1 },
+                    $set: { updatedAt: Date.now() }
+                });
+            }
             res.status(201).json({
                 success: true,
                 data: newAd,
@@ -220,6 +264,242 @@ exports.adsController = {
         catch (error) {
             console.error('Error updating ad status:', error);
             res.status(500).json({ success: false, error: 'Failed to update ad status' });
+        }
+    }),
+    getAdAnalytics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const ad = yield db.collection('ads').findOne({ id });
+            if (!ad) {
+                return res.status(404).json({ success: false, error: 'Ad not found' });
+            }
+            const analytics = yield db.collection('adAnalytics').findOne({ adId: id });
+            const impressions = (analytics === null || analytics === void 0 ? void 0 : analytics.impressions) || 0;
+            const clicks = (analytics === null || analytics === void 0 ? void 0 : analytics.clicks) || 0;
+            const engagement = (analytics === null || analytics === void 0 ? void 0 : analytics.engagement) || 0;
+            const conversions = (analytics === null || analytics === void 0 ? void 0 : analytics.conversions) || 0;
+            const spend = (analytics === null || analytics === void 0 ? void 0 : analytics.spend) || 0;
+            const reach = (analytics === null || analytics === void 0 ? void 0 : analytics.reach) || impressions;
+            const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+            const lastUpdated = (analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) || Date.now();
+            res.json({
+                success: true,
+                data: {
+                    adId: id,
+                    impressions,
+                    clicks,
+                    ctr,
+                    reach,
+                    engagement,
+                    conversions,
+                    spend,
+                    lastUpdated
+                }
+            });
+        }
+        catch (error) {
+            console.error('Error fetching ad analytics:', error);
+            res.status(500).json({ success: false, error: 'Failed to fetch ad analytics' });
+        }
+    }),
+    getUserAdPerformance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { userId } = req.params;
+            const db = (0, db_1.getDB)();
+            const ads = yield db.collection('ads').find({ ownerId: userId }).toArray();
+            if (!ads || ads.length === 0) {
+                return res.json({ success: true, data: [] });
+            }
+            const adIds = ads.map((ad) => ad.id);
+            const analyticsDocs = yield db
+                .collection('adAnalytics')
+                .find({ adId: { $in: adIds } })
+                .toArray();
+            const analyticsMap = new Map();
+            analyticsDocs.forEach(doc => {
+                analyticsMap.set(doc.adId, doc);
+            });
+            const metrics = ads.map((ad) => {
+                const analytics = analyticsMap.get(ad.id) || {};
+                const impressions = analytics.impressions || 0;
+                const clicks = analytics.clicks || 0;
+                const engagement = analytics.engagement || 0;
+                const spend = analytics.spend || 0;
+                const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+                const roi = spend > 0 ? (engagement + clicks) / spend : 0;
+                return {
+                    adId: ad.id,
+                    adName: ad.headline || ad.title || 'Untitled Ad',
+                    status: ad.status || 'active',
+                    impressions,
+                    clicks,
+                    ctr,
+                    engagement,
+                    spend,
+                    roi,
+                    createdAt: ad.timestamp || Date.now()
+                };
+            });
+            res.json({
+                success: true,
+                data: metrics
+            });
+        }
+        catch (error) {
+            console.error('Error fetching user ad performance:', error);
+            res.status(500).json({ success: false, error: 'Failed to fetch user ad performance' });
+        }
+    }),
+    getCampaignPerformance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { userId } = req.params;
+            const db = (0, db_1.getDB)();
+            const ads = yield db.collection('ads').find({ ownerId: userId }).toArray();
+            if (!ads || ads.length === 0) {
+                return res.json({
+                    success: true,
+                    data: {
+                        totalImpressions: 0,
+                        totalClicks: 0,
+                        totalReach: 0,
+                        totalEngagement: 0,
+                        totalSpend: 0,
+                        averageCTR: 0,
+                        activeAds: 0,
+                        performanceScore: 0,
+                        trendData: []
+                    }
+                });
+            }
+            const adIds = ads.map((ad) => ad.id);
+            const analyticsDocs = yield db
+                .collection('adAnalytics')
+                .find({ adId: { $in: adIds } })
+                .toArray();
+            let totalImpressions = 0;
+            let totalClicks = 0;
+            let totalEngagement = 0;
+            let totalSpend = 0;
+            analyticsDocs.forEach(doc => {
+                totalImpressions += doc.impressions || 0;
+                totalClicks += doc.clicks || 0;
+                totalEngagement += doc.engagement || 0;
+                totalSpend += doc.spend || 0;
+            });
+            const totalReach = totalImpressions;
+            const averageCTR = analyticsDocs.length > 0 && totalImpressions > 0
+                ? (totalClicks / totalImpressions) * 100
+                : 0;
+            const activeAds = ads.filter((ad) => ad.status === 'active').length;
+            // Calculate next expiry
+            const now = Date.now();
+            const activeAdsList = ads.filter((ad) => ad.status === 'active' && ad.expiryDate && ad.expiryDate > now);
+            const nextExpiringAd = activeAdsList.sort((a, b) => (a.expiryDate || 0) - (b.expiryDate || 0))[0];
+            const daysToNextExpiry = nextExpiringAd
+                ? Math.ceil((nextExpiringAd.expiryDate - now) / (1000 * 60 * 60 * 24))
+                : null;
+            const performanceScore = Math.min(100, Math.round((totalClicks * 2 + totalEngagement + totalImpressions * 0.01) /
+                (activeAds || 1)));
+            const trendData = [];
+            res.json({
+                success: true,
+                data: {
+                    totalImpressions,
+                    totalClicks,
+                    totalReach,
+                    totalEngagement,
+                    totalSpend,
+                    averageCTR,
+                    activeAds,
+                    daysToNextExpiry,
+                    performanceScore,
+                    trendData
+                }
+            });
+        }
+        catch (error) {
+            console.error('Error fetching campaign performance:', error);
+            res.status(500).json({ success: false, error: 'Failed to fetch campaign performance' });
+        }
+    }),
+    trackImpression: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const ad = yield db.collection('ads').findOne({ id });
+            yield db.collection('adAnalytics').updateOne({ adId: id }, {
+                $setOnInsert: {
+                    adId: id,
+                    ownerId: (ad === null || ad === void 0 ? void 0 : ad.ownerId) || null,
+                    spend: 0,
+                    conversions: 0
+                },
+                $inc: {
+                    impressions: 1,
+                    reach: 1
+                },
+                $set: {
+                    lastUpdated: Date.now()
+                }
+            }, { upsert: true });
+            res.json({ success: true });
+        }
+        catch (error) {
+            console.error('Error tracking ad impression:', error);
+            res.status(500).json({ success: false, error: 'Failed to track ad impression' });
+        }
+    }),
+    trackClick: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const ad = yield db.collection('ads').findOne({ id });
+            yield db.collection('adAnalytics').updateOne({ adId: id }, {
+                $setOnInsert: {
+                    adId: id,
+                    ownerId: (ad === null || ad === void 0 ? void 0 : ad.ownerId) || null,
+                    spend: 0,
+                    conversions: 0
+                },
+                $inc: {
+                    clicks: 1
+                },
+                $set: {
+                    lastUpdated: Date.now()
+                }
+            }, { upsert: true });
+            res.json({ success: true });
+        }
+        catch (error) {
+            console.error('Error tracking ad click:', error);
+            res.status(500).json({ success: false, error: 'Failed to track ad click' });
+        }
+    }),
+    trackEngagement: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const ad = yield db.collection('ads').findOne({ id });
+            yield db.collection('adAnalytics').updateOne({ adId: id }, {
+                $setOnInsert: {
+                    adId: id,
+                    ownerId: (ad === null || ad === void 0 ? void 0 : ad.ownerId) || null,
+                    spend: 0,
+                    conversions: 0
+                },
+                $inc: {
+                    engagement: 1
+                },
+                $set: {
+                    lastUpdated: Date.now()
+                }
+            }, { upsert: true });
+            res.json({ success: true });
+        }
+        catch (error) {
+            console.error('Error tracking ad engagement:', error);
+            res.status(500).json({ success: false, error: 'Failed to track ad engagement' });
         }
     })
 };

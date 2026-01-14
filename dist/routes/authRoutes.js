@@ -61,8 +61,10 @@ router.get('/google/callback', passport_1.default.authenticate('google', { failu
                 console.log('Created new user after OAuth:', newUser.id);
             }
             // Successful authentication, redirect to frontend with token
-            const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://auraradiance.vercel.app';
+            const frontendUrl = process.env.VITE_FRONTEND_URL ||
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
             const token = (0, jwtUtils_1.generateToken)(req.user);
+            console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed?token=${token}`);
             res.redirect(`${frontendUrl}/feed?token=${token}`);
         }
     }

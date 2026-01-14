@@ -8,6 +8,17 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __rest = (this && this.__rest) || function (s, e) {
+    var t = {};
+    for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+        t[p] = s[p];
+    if (s != null && typeof Object.getOwnPropertySymbols === "function")
+        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+            if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                t[p[i]] = s[p[i]];
+        }
+    return t;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.usersController = void 0;
 const db_1 = require("../db");
@@ -145,8 +156,9 @@ exports.usersController = {
             const { id } = req.params;
             const updates = req.body;
             const db = (0, db_1.getDB)();
-            // Add updatedAt timestamp
-            const updateData = Object.assign(Object.assign({}, updates), { updatedAt: new Date().toISOString() });
+            // Prevent immutable fields like handle from being changed
+            const _a = updates || {}, { handle, googleId, id: _ignoredId } = _a, mutableUpdates = __rest(_a, ["handle", "googleId", "id"]);
+            const updateData = Object.assign(Object.assign({}, mutableUpdates), { updatedAt: new Date().toISOString() });
             const result = yield db.collection('users').updateOne({ id }, { $set: updateData });
             if (result.matchedCount === 0) {
                 return res.status(404).json({

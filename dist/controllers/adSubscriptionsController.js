@@ -17,22 +17,34 @@ exports.adSubscriptionsController = {
     getUserSubscriptions: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
+            console.log('[AdSubscriptions] Fetching subscriptions for user:', userId);
+            // Check if database is connected
+            if (!(0, db_1.isDBConnected)()) {
+                console.warn('[AdSubscriptions] Database not connected, returning empty array');
+                return res.json({
+                    success: true,
+                    data: [],
+                    message: 'Database not available'
+                });
+            }
             const db = (0, db_1.getDB)();
             const subscriptions = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION)
                 .find({ userId })
                 .sort({ createdAt: -1 })
                 .toArray();
+            console.log('[AdSubscriptions] Found subscriptions:', subscriptions.length);
             res.json({
                 success: true,
                 data: subscriptions
             });
         }
         catch (error) {
-            console.error('Error fetching user subscriptions:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to fetch subscriptions',
-                message: 'Internal server error'
+            console.error('[AdSubscriptions] Error fetching user subscriptions:', error);
+            // Return empty array instead of error to prevent frontend from getting stuck
+            res.json({
+                success: true,
+                data: [],
+                error: 'Failed to fetch subscriptions'
             });
         }
     }),

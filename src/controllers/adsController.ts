@@ -504,16 +504,13 @@ export const adsController = {
       const db = getDB();
 
       const ad = await db.collection('ads').findOne({ id });
-      if (!ad) {
-        return res.status(404).json({ success: false, error: 'Ad not found' });
-      }
 
       await db.collection('adAnalytics').updateOne(
         { adId: id },
         {
           $setOnInsert: {
             adId: id,
-            ownerId: ad.ownerId,
+            ownerId: ad?.ownerId || null,
             spend: 0,
             conversions: 0
           },
@@ -541,16 +538,13 @@ export const adsController = {
       const db = getDB();
 
       const ad = await db.collection('ads').findOne({ id });
-      if (!ad) {
-        return res.status(404).json({ success: false, error: 'Ad not found' });
-      }
 
       await db.collection('adAnalytics').updateOne(
         { adId: id },
         {
           $setOnInsert: {
             adId: id,
-            ownerId: ad.ownerId,
+            ownerId: ad?.ownerId || null,
             spend: 0,
             conversions: 0
           },
@@ -577,16 +571,13 @@ export const adsController = {
       const db = getDB();
 
       const ad = await db.collection('ads').findOne({ id });
-      if (!ad) {
-        return res.status(404).json({ success: false, error: 'Ad not found' });
-      }
 
       await db.collection('adAnalytics').updateOne(
         { adId: id },
         {
           $setOnInsert: {
             adId: id,
-            ownerId: ad.ownerId,
+            ownerId: ad?.ownerId || null,
             spend: 0,
             conversions: 0
           },
