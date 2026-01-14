@@ -4,6 +4,8 @@ import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
 
 const router = Router();
 
+router.get('/health', postsController.health);
+
 // GET /api/posts/search - Search posts
 router.get('/search', optionalAuth, postsController.searchPosts);
 

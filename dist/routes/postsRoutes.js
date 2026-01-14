@@ -4,6 +4,7 @@ const express_1 = require("express");
 const postsController_1 = require("../controllers/postsController");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = (0, express_1.Router)();
+router.get('/health', postsController_1.postsController.health);
 // GET /api/posts/search - Search posts
 router.get('/search', authMiddleware_1.optionalAuth, postsController_1.postsController.searchPosts);
 // GET /api/posts - Get all posts

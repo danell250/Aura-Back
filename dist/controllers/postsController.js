@@ -13,10 +13,21 @@ exports.postsController = void 0;
 const db_1 = require("../db");
 const hashtagUtils_1 = require("../utils/hashtagUtils");
 const notificationsController_1 = require("./notificationsController");
-// MongoDB collection names
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 exports.postsController = {
+    health: (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        res.json({
+            success: true,
+            message: 'Posts routes health check ok',
+            timestamp: new Date().toISOString(),
+            endpoints: [
+                'GET /api/posts',
+                'GET /api/posts/:id',
+                'POST /api/posts/:id/boost'
+            ]
+        });
+    }),
     // GET /api/posts/search - Search posts
     searchPosts: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;

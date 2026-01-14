@@ -3,11 +3,22 @@ import { getDB } from '../db';
 import { getHashtagsFromText } from '../utils/hashtagUtils';
 import { createNotificationInDB } from './notificationsController';
 
-// MongoDB collection names
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 
 export const postsController = {
+  health: async (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      message: 'Posts routes health check ok',
+      timestamp: new Date().toISOString(),
+      endpoints: [
+        'GET /api/posts',
+        'GET /api/posts/:id',
+        'POST /api/posts/:id/boost'
+      ]
+    });
+  },
   // GET /api/posts/search - Search posts
   searchPosts: async (req: Request, res: Response) => {
     try {
