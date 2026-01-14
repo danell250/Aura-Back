@@ -531,7 +531,18 @@ exports.postsController = {
                 return res.status(400).json({ success: false, error: 'Insufficient credits' });
             }
             const newCredits = currentCredits - creditsToSpend;
-            yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, { $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() } });
+            const creditUpdateResult = yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, { $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() } });
+            if (!creditUpdateResult.matchedCount || !creditUpdateResult.modifiedCount) {
+                console.error('Failed to update user credits during boost', {
+                    userId,
+                    creditsToSpend,
+                    currentCredits,
+                    newCredits,
+                    matchedCount: creditUpdateResult.matchedCount,
+                    modifiedCount: creditUpdateResult.modifiedCount
+                });
+                return res.status(500).json({ success: false, error: 'Failed to update user credits' });
+            }
             // Apply boost to post (radiance proportional to credits)
             const incRadiance = creditsToSpend * 2; // keep same multiplier as UI
             try {
