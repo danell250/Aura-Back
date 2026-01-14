@@ -33,6 +33,7 @@ exports.messagesController = {
                 });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
+            const db = (0, db_1.getDB)();
             // Get latest message for each conversation
             const conversations = yield messagesCollection.aggregate([
                 {
@@ -81,9 +82,12 @@ exports.messagesController = {
                     $sort: { 'lastMessage.timestamp': -1 }
                 }
             ]).toArray();
+            const user = yield db.collection('users').findOne({ id: userId });
+            const archivedChats = (user === null || user === void 0 ? void 0 : user.archivedChats) || [];
+            const conversationsWithArchive = conversations.map(conv => (Object.assign(Object.assign({}, conv), { isArchived: archivedChats.includes(conv._id) })));
             res.json({
                 success: true,
-                data: conversations
+                data: conversationsWithArchive
             });
         }
         catch (error) {
@@ -317,6 +321,39 @@ exports.messagesController = {
             res.status(500).json({
                 success: false,
                 message: 'Failed to mark messages as read'
+            });
+        }
+    }),
+    archiveConversation: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { userId, otherUserId, archived } = req.body;
+            if (!userId || !otherUserId || typeof archived !== 'boolean') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'userId, otherUserId and archived flag are required'
+                });
+            }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({
+                    success: true,
+                    message: 'Database not connected, archive state not persisted (dev fallback)'
+                });
+            }
+            const db = (0, db_1.getDB)();
+            const update = archived
+                ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } }
+                : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } };
+            yield db.collection('users').updateOne({ id: userId }, update);
+            res.json({
+                success: true,
+                message: archived ? 'Conversation archived successfully' : 'Conversation unarchived successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error archiving conversation:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to update archive state for conversation'
             });
         }
     })

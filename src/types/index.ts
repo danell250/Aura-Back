@@ -36,6 +36,7 @@ export interface User {
   updatedAt?: string;
   lastLogin?: string;
   privacySettings?: PrivacySettings;
+  archivedChats?: string[];
 }
 
 export interface PrivacySettings {

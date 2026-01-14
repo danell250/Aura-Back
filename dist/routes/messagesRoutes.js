@@ -18,4 +18,6 @@ router.put('/:messageId', messagesController_1.messagesController.editMessage);
 router.delete('/:messageId', messagesController_1.messagesController.deleteMessage);
 // PUT /api/messages/mark-read - Mark messages as read
 router.put('/mark-read', messagesController_1.messagesController.markAsRead);
+// POST /api/messages/archive - Archive or unarchive a conversation
+router.post('/archive', messagesController_1.messagesController.archiveConversation);
 exports.default = router;
