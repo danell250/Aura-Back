@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
+import { createNotificationInDB } from './notificationsController';
 
 const COMMENTS_COLLECTION = 'comments';
 const USERS_COLLECTION = 'users';
@@ -112,6 +113,22 @@ export const commentsController = {
       };
 
       await db.collection(COMMENTS_COLLECTION).insertOne(newComment);
+
+      try {
+        const post = await db.collection('posts').findOne({ id: postId });
+        if (post && post.author && post.author.id && post.author.id !== authorId) {
+          await createNotificationInDB(
+            post.author.id,
+            'comment',
+            authorId,
+            'commented on your post',
+            postId
+          );
+        }
+      } catch (e) {
+        console.error('Error creating comment notification:', e);
+      }
+
       res.status(201).json({ success: true, data: newComment, message: 'Comment created successfully' });
     } catch (error) {
       console.error('Error creating comment:', error);

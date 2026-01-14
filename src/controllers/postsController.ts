@@ -640,6 +640,20 @@ export const postsController = {
           return res.status(500).json({ success: false, error: 'Failed to boost post' });
         }
 
+        try {
+          if (post.author.id !== userId) {
+            await createNotificationInDB(
+              post.author.id,
+              'boost_received',
+              userId,
+              'boosted your post',
+              id
+            );
+          }
+        } catch (e) {
+          console.error('Error creating boost notification:', e);
+        }
+
         return res.json({ success: true, data: boostedDoc, message: 'Post boosted successfully' });
       } catch (e) {
         await db.collection(USERS_COLLECTION).updateOne(
