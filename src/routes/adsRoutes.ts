@@ -32,25 +32,18 @@ router.get('/plans/:planId', (req, res) => {
   });
 });
 
-// GET /api/ads - Get all ads
+router.get('/analytics/campaign/:userId', adsController.getCampaignPerformance);
+router.get('/analytics/user/:userId', adsController.getUserAdPerformance);
+router.get('/:id/analytics', adsController.getAdAnalytics);
+router.post('/:id/impression', adsController.trackImpression);
+router.post('/:id/click', adsController.trackClick);
+router.post('/:id/engagement', adsController.trackEngagement);
 router.get('/', adsController.getAllAds);
-
-// GET /api/ads/:id - Get ad by ID
 router.get('/:id', adsController.getAdById);
-
-// POST /api/ads - Create new ad
 router.post('/', adsController.createAd);
-
-// PUT /api/ads/:id - Update ad
 router.put('/:id', adsController.updateAd);
-
-// DELETE /api/ads/:id - Delete ad
 router.delete('/:id', adsController.deleteAd);
-
-// POST /api/ads/:id/react - Add reaction to ad
 router.post('/:id/react', adsController.reactToAd);
-
-// PUT /api/ads/:id/status - Update ad status
 router.put('/:id/status', adsController.updateAdStatus);
 
 export default router;

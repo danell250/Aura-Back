@@ -313,5 +313,287 @@ export const adsController = {
       console.error('Error updating ad status:', error);
       res.status(500).json({ success: false, error: 'Failed to update ad status' });
     }
+  },
+
+  getAdAnalytics: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      const analytics = await db.collection('adAnalytics').findOne({ adId: id });
+
+      const impressions = analytics?.impressions || 0;
+      const clicks = analytics?.clicks || 0;
+      const engagement = analytics?.engagement || 0;
+      const conversions = analytics?.conversions || 0;
+      const spend = analytics?.spend || 0;
+      const reach = analytics?.reach || impressions;
+      const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+      const lastUpdated = analytics?.lastUpdated || Date.now();
+
+      res.json({
+        success: true,
+        data: {
+          adId: id,
+          impressions,
+          clicks,
+          ctr,
+          reach,
+          engagement,
+          conversions,
+          spend,
+          lastUpdated
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching ad analytics:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch ad analytics' });
+    }
+  },
+
+  getUserAdPerformance: async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const db = getDB();
+
+      const ads = await db.collection('ads').find({ ownerId: userId }).toArray();
+      if (!ads || ads.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const adIds = ads.map((ad: any) => ad.id);
+      const analyticsDocs = await db
+        .collection('adAnalytics')
+        .find({ adId: { $in: adIds } })
+        .toArray();
+
+      const analyticsMap = new Map<string, any>();
+      analyticsDocs.forEach(doc => {
+        analyticsMap.set(doc.adId, doc);
+      });
+
+      const metrics = ads.map((ad: any) => {
+        const analytics = analyticsMap.get(ad.id) || {};
+        const impressions = analytics.impressions || 0;
+        const clicks = analytics.clicks || 0;
+        const engagement = analytics.engagement || 0;
+        const spend = analytics.spend || 0;
+        const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+        const roi = spend > 0 ? (engagement + clicks) / spend : 0;
+
+        return {
+          adId: ad.id,
+          adName: ad.headline || ad.title || 'Untitled Ad',
+          status: ad.status || 'active',
+          impressions,
+          clicks,
+          ctr,
+          engagement,
+          spend,
+          roi,
+          createdAt: ad.timestamp || Date.now()
+        };
+      });
+
+      res.json({
+        success: true,
+        data: metrics
+      });
+    } catch (error) {
+      console.error('Error fetching user ad performance:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch user ad performance' });
+    }
+  },
+
+  getCampaignPerformance: async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const db = getDB();
+
+      const ads = await db.collection('ads').find({ ownerId: userId }).toArray();
+      if (!ads || ads.length === 0) {
+        return res.json({
+          success: true,
+          data: {
+            totalImpressions: 0,
+            totalClicks: 0,
+            totalReach: 0,
+            totalEngagement: 0,
+            totalSpend: 0,
+            averageCTR: 0,
+            activeAds: 0,
+            performanceScore: 0,
+            trendData: []
+          }
+        });
+      }
+
+      const adIds = ads.map((ad: any) => ad.id);
+      const analyticsDocs = await db
+        .collection('adAnalytics')
+        .find({ adId: { $in: adIds } })
+        .toArray();
+
+      let totalImpressions = 0;
+      let totalClicks = 0;
+      let totalEngagement = 0;
+      let totalSpend = 0;
+
+      analyticsDocs.forEach(doc => {
+        totalImpressions += doc.impressions || 0;
+        totalClicks += doc.clicks || 0;
+        totalEngagement += doc.engagement || 0;
+        totalSpend += doc.spend || 0;
+      });
+
+      const totalReach = totalImpressions;
+      const averageCTR =
+        analyticsDocs.length > 0 && totalImpressions > 0
+          ? (totalClicks / totalImpressions) * 100
+          : 0;
+      const activeAds = ads.filter((ad: any) => ad.status === 'active').length;
+      const performanceScore = Math.min(
+        100,
+        Math.round(
+          (totalClicks * 2 + totalEngagement + totalImpressions * 0.01) /
+            (activeAds || 1)
+        )
+      );
+
+      const trendData: { date: string; impressions: number; clicks: number; engagement: number }[] =
+        [];
+
+      res.json({
+        success: true,
+        data: {
+          totalImpressions,
+          totalClicks,
+          totalReach,
+          totalEngagement,
+          totalSpend,
+          averageCTR,
+          activeAds,
+          performanceScore,
+          trendData
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching campaign performance:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch campaign performance' });
+    }
+  },
+
+  trackImpression: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      await db.collection('adAnalytics').updateOne(
+        { adId: id },
+        {
+          $setOnInsert: {
+            adId: id,
+            ownerId: ad.ownerId,
+            spend: 0,
+            conversions: 0
+          },
+          $inc: {
+            impressions: 1,
+            reach: 1
+          },
+          $set: {
+            lastUpdated: Date.now()
+          }
+        },
+        { upsert: true }
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error tracking ad impression:', error);
+      res.status(500).json({ success: false, error: 'Failed to track ad impression' });
+    }
+  },
+
+  trackClick: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      await db.collection('adAnalytics').updateOne(
+        { adId: id },
+        {
+          $setOnInsert: {
+            adId: id,
+            ownerId: ad.ownerId,
+            spend: 0,
+            conversions: 0
+          },
+          $inc: {
+            clicks: 1
+          },
+          $set: {
+            lastUpdated: Date.now()
+          }
+        },
+        { upsert: true }
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error tracking ad click:', error);
+      res.status(500).json({ success: false, error: 'Failed to track ad click' });
+    }
+  },
+
+  trackEngagement: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      await db.collection('adAnalytics').updateOne(
+        { adId: id },
+        {
+          $setOnInsert: {
+            adId: id,
+            ownerId: ad.ownerId,
+            spend: 0,
+            conversions: 0
+          },
+          $inc: {
+            engagement: 1
+          },
+          $set: {
+            lastUpdated: Date.now()
+          }
+        },
+        { upsert: true }
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error tracking ad engagement:', error);
+      res.status(500).json({ success: false, error: 'Failed to track ad engagement' });
+    }
   }
 };
