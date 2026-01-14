@@ -150,9 +150,10 @@ export const usersController = {
       
       const db = getDB();
       
-      // Add updatedAt timestamp
+      // Prevent immutable fields like handle from being changed
+      const { handle, googleId, id: _ignoredId, ...mutableUpdates } = updates || {};
       const updateData = {
-        ...updates,
+        ...mutableUpdates,
         updatedAt: new Date().toISOString()
       };
 
