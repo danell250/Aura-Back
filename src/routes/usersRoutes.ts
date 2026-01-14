@@ -27,6 +27,9 @@ router.post('/:id/purchase-credits', (req: Request, res: Response) => {
   usersController.purchaseCredits(req, res);
 });
 
+// POST /api/users/:id/spend-credits - Spend credits
+router.post('/:id/spend-credits', usersController.spendCredits);
+
 // Privacy and Data Management Routes
 // GET /api/users/:id/privacy-data - Export user's privacy data (GDPR compliance)
 router.get('/:id/privacy-data', usersController.getPrivacyData);
