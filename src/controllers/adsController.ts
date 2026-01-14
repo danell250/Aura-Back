@@ -457,6 +457,15 @@ export const adsController = {
           ? (totalClicks / totalImpressions) * 100
           : 0;
       const activeAds = ads.filter((ad: any) => ad.status === 'active').length;
+      
+      // Calculate next expiry
+      const now = Date.now();
+      const activeAdsList = ads.filter((ad: any) => ad.status === 'active' && ad.expiryDate && ad.expiryDate > now);
+      const nextExpiringAd = activeAdsList.sort((a: any, b: any) => (a.expiryDate || 0) - (b.expiryDate || 0))[0];
+      const daysToNextExpiry = nextExpiringAd
+        ? Math.ceil((nextExpiringAd.expiryDate - now) / (1000 * 60 * 60 * 24))
+        : null;
+
       const performanceScore = Math.min(
         100,
         Math.round(
@@ -478,6 +487,7 @@ export const adsController = {
           totalSpend,
           averageCTR,
           activeAds,
+          daysToNextExpiry,
           performanceScore,
           trendData
         }

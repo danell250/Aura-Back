@@ -76,8 +76,8 @@ router.get('/google/callback',
       const frontendUrl = process.env.VITE_FRONTEND_URL ||
         (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
       const token = generateToken(req.user as any);
-      console.log('[OAuth] Redirecting to:', `${frontendUrl}?token=${token}`);
-      res.redirect(`${frontendUrl}?token=${token}`);
+      console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed?token=${token}`);
+      res.redirect(`${frontendUrl}/feed?token=${token}`);
       }
     } catch (error) {
       console.error('Error in OAuth callback:', error);
