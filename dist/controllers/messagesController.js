@@ -24,14 +24,6 @@ exports.messagesController = {
                     message: 'User ID is required'
                 });
             }
-            // Check if database is connected
-            if (!(0, db_1.isDBConnected)()) {
-                return res.json({
-                    success: true,
-                    data: [], // Return empty array when DB is not connected
-                    message: 'Database not connected, using fallback'
-                });
-            }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const db = (0, db_1.getDB)();
             // Get latest message for each conversation
@@ -109,14 +101,6 @@ exports.messagesController = {
                     message: 'Current user ID is required'
                 });
             }
-            // Check if database is connected
-            if (!(0, db_1.isDBConnected)()) {
-                return res.json({
-                    success: true,
-                    data: [], // Return empty array when DB is not connected
-                    message: 'Database not connected, using fallback'
-                });
-            }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const messages = yield messagesCollection.find({
                 $or: [
@@ -155,27 +139,6 @@ exports.messagesController = {
                 return res.status(400).json({
                     success: false,
                     message: 'Sender ID, receiver ID, and text are required'
-                });
-            }
-            // Check if database is connected
-            if (!(0, db_1.isDBConnected)()) {
-                // Return a mock message when DB is not connected
-                const mockMessage = {
-                    _id: new mongodb_1.ObjectId(),
-                    senderId,
-                    receiverId,
-                    text,
-                    timestamp: new Date(),
-                    isRead: false,
-                    messageType,
-                    mediaUrl,
-                    replyTo,
-                    isEdited: false
-                };
-                return res.status(201).json({
-                    success: true,
-                    data: mockMessage,
-                    message: 'Database not connected, message not persisted'
                 });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
@@ -295,6 +258,36 @@ exports.messagesController = {
             });
         }
     }),
+    // DELETE /api/messages/conversation - Delete all messages in a conversation
+    deleteConversation: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { userId, otherUserId } = req.body;
+            if (!userId || !otherUserId) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'userId and otherUserId are required'
+                });
+            }
+            const messagesCollection = (0, Message_1.getMessagesCollection)();
+            yield messagesCollection.deleteMany({
+                $or: [
+                    { senderId: userId, receiverId: otherUserId },
+                    { senderId: otherUserId, receiverId: userId }
+                ]
+            });
+            res.json({
+                success: true,
+                message: 'Conversation deleted successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error deleting conversation:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to delete conversation'
+            });
+        }
+    }),
     // PUT /api/messages/mark-read - Mark messages as read
     markAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
@@ -331,12 +324,6 @@ exports.messagesController = {
                 return res.status(400).json({
                     success: false,
                     message: 'userId, otherUserId and archived flag are required'
-                });
-            }
-            if (!(0, db_1.isDBConnected)()) {
-                return res.json({
-                    success: true,
-                    message: 'Database not connected, archive state not persisted (dev fallback)'
                 });
             }
             const db = (0, db_1.getDB)();

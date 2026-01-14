@@ -16,6 +16,8 @@ router.post('/', messagesController_1.messagesController.sendMessage);
 router.put('/:messageId', messagesController_1.messagesController.editMessage);
 // DELETE /api/messages/:messageId - Delete a message
 router.delete('/:messageId', messagesController_1.messagesController.deleteMessage);
+// DELETE /api/messages/conversation - Delete all messages in a conversation
+router.delete('/conversation', messagesController_1.messagesController.deleteConversation);
 // PUT /api/messages/mark-read - Mark messages as read
 router.put('/mark-read', messagesController_1.messagesController.markAsRead);
 // POST /api/messages/archive - Archive or unarchive a conversation

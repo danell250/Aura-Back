@@ -18,6 +18,9 @@ router.put('/:messageId', messagesController.editMessage);
 // DELETE /api/messages/:messageId - Delete a message
 router.delete('/:messageId', messagesController.deleteMessage);
 
+// DELETE /api/messages/conversation - Delete all messages in a conversation
+router.delete('/conversation', messagesController.deleteConversation);
+
 // PUT /api/messages/mark-read - Mark messages as read
 router.put('/mark-read', messagesController.markAsRead);
 

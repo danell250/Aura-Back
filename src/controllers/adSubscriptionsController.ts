@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { getDB, isDBConnected } from '../db';
+import { getDB } from '../db';
 
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 
@@ -9,16 +9,6 @@ export const adSubscriptionsController = {
     try {
       const { userId } = req.params;
       console.log('[AdSubscriptions] Fetching subscriptions for user:', userId);
-      
-      // Check if database is connected
-      if (!isDBConnected()) {
-        console.warn('[AdSubscriptions] Database not connected, returning empty array');
-        return res.json({
-          success: true,
-          data: [],
-          message: 'Database not available'
-        });
-      }
       
       const db = getDB();
 

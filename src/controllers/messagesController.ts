@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { getMessagesCollection, IMessage } from '../models/Message';
 import { ObjectId } from 'mongodb';
-import { isDBConnected, getDB } from '../db';
+import { getDB } from '../db';
 
 export const messagesController = {
   // GET /api/messages/conversations - Get all conversations for a user
@@ -13,15 +13,6 @@ export const messagesController = {
         return res.status(400).json({
           success: false,
           message: 'User ID is required'
-        });
-      }
-
-      // Check if database is connected
-      if (!isDBConnected()) {
-        return res.json({
-          success: true,
-          data: [], // Return empty array when DB is not connected
-          message: 'Database not connected, using fallback'
         });
       }
 
@@ -111,15 +102,6 @@ export const messagesController = {
         });
       }
 
-      // Check if database is connected
-      if (!isDBConnected()) {
-        return res.json({
-          success: true,
-          data: [], // Return empty array when DB is not connected
-          message: 'Database not connected, using fallback'
-        });
-      }
-
       const messagesCollection = getMessagesCollection();
 
       const messages = await messagesCollection.find({
@@ -165,29 +147,6 @@ export const messagesController = {
         return res.status(400).json({
           success: false,
           message: 'Sender ID, receiver ID, and text are required'
-        });
-      }
-
-      // Check if database is connected
-      if (!isDBConnected()) {
-        // Return a mock message when DB is not connected
-        const mockMessage: IMessage = {
-          _id: new ObjectId(),
-          senderId,
-          receiverId,
-          text,
-          timestamp: new Date(),
-          isRead: false,
-          messageType,
-          mediaUrl,
-          replyTo,
-          isEdited: false
-        };
-
-        return res.status(201).json({
-          success: true,
-          data: mockMessage,
-          message: 'Database not connected, message not persisted'
         });
       }
 
@@ -328,6 +287,40 @@ export const messagesController = {
     }
   },
 
+  // DELETE /api/messages/conversation - Delete all messages in a conversation
+  deleteConversation: async (req: Request, res: Response) => {
+    try {
+      const { userId, otherUserId } = req.body;
+
+      if (!userId || !otherUserId) {
+        return res.status(400).json({
+          success: false,
+          message: 'userId and otherUserId are required'
+        });
+      }
+
+      const messagesCollection = getMessagesCollection();
+
+      await messagesCollection.deleteMany({
+        $or: [
+          { senderId: userId, receiverId: otherUserId },
+          { senderId: otherUserId, receiverId: userId }
+        ]
+      });
+
+      res.json({
+        success: true,
+        message: 'Conversation deleted successfully'
+      });
+    } catch (error) {
+      console.error('Error deleting conversation:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to delete conversation'
+      });
+    }
+  },
+
   // PUT /api/messages/mark-read - Mark messages as read
   markAsRead: async (req: Request, res: Response) => {
     try {
@@ -372,13 +365,6 @@ export const messagesController = {
         return res.status(400).json({
           success: false,
           message: 'userId, otherUserId and archived flag are required'
-        });
-      }
-
-      if (!isDBConnected()) {
-        return res.json({
-          success: true,
-          message: 'Database not connected, archive state not persisted (dev fallback)'
         });
       }
 

@@ -525,13 +525,12 @@ async function startServer() {
       if (!isHealthy && isDBConnected()) {
         console.warn('⚠️  Database health check failed - connection may be unstable');
       }
-    }, 60000); // Check every minute
+    }, 60000);
     
     // Set up Time Capsule unlock checker
     setInterval(async () => {
       try {
         if (!isDBConnected()) return;
-        
         const db = getDB();
         const now = Date.now();
         

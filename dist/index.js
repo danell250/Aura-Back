@@ -528,7 +528,7 @@ function startServer() {
                 if (!isHealthy && (0, db_1.isDBConnected)()) {
                     console.warn('⚠️  Database health check failed - connection may be unstable');
                 }
-            }), 60000); // Check every minute
+            }), 60000);
             // Set up Time Capsule unlock checker
             setInterval(() => __awaiter(this, void 0, void 0, function* () {
                 try {

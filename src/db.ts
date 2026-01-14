@@ -178,54 +178,11 @@ function startPeriodicReconnection() {
   }, 30000); // Try to reconnect every 30 seconds
 }
 
-// Enhanced getDB function with connection checking
 export function getDB(): Db {
   if (!isConnected || !db) {
-    console.warn("⚠️  Warning: Database not connected. Using mock database for this operation.");
-    
-    // Return a comprehensive mock database object
-    return createMockDB();
+    throw new Error("Database not connected");
   }
   return db;
-}
-
-// Create a mock database for when connection is not available
-function createMockDB(): Db {
-  const mockCollection = {
-    find: () => ({
-      toArray: async () => [],
-      limit: () => mockCollection.find(),
-      skip: () => mockCollection.find(),
-      sort: () => mockCollection.find(),
-    }),
-    findOne: async () => null,
-    insertOne: async (doc: any) => ({ 
-      acknowledged: true, 
-      insertedId: `mock-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` 
-    }),
-    insertMany: async (docs: any[]) => ({ 
-      acknowledged: true, 
-      insertedIds: docs.map((_, i) => `mock-${Date.now()}-${i}`) 
-    }),
-    updateOne: async () => ({ matchedCount: 0, modifiedCount: 0 }),
-    updateMany: async () => ({ matchedCount: 0, modifiedCount: 0 }),
-    deleteOne: async () => ({ deletedCount: 0 }),
-    deleteMany: async () => ({ deletedCount: 0 }),
-    countDocuments: async () => 0,
-    createIndex: async () => 'mock-index',
-    dropIndex: async () => true,
-  };
-
-  return {
-    collection: (name: string) => {
-      console.warn(`⚠️  Using mock collection '${name}'. Data operations will not be persisted.`);
-      return mockCollection;
-    },
-    admin: () => ({
-      command: async () => ({ ok: 1 })
-    }),
-    command: async () => ({ ok: 1 }),
-  } as any;
 }
 
 // Health check function

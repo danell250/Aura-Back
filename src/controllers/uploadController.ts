@@ -1,20 +1,33 @@
 import { Request, Response } from 'express';
+import { getDB } from '../db';
 
-export const uploadFile = (req: Request, res: Response) => {
+export const uploadFile = async (req: Request, res: Response) => {
   if (!req.file) {
     res.status(400).json({ error: 'No file uploaded' });
     return;
   }
 
-  // Construct public URL
-  // Assuming the server is running on localhost or similar, adapted to the request host
   const protocol = req.protocol;
   const host = req.get('host');
   const fileUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
 
-  res.json({ 
+  try {
+    const db = getDB();
+    await db.collection('mediaFiles').insertOne({
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      url: fileUrl,
+      uploadedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Failed to record uploaded file in database:', error);
+  }
+
+  res.json({
     url: fileUrl,
     filename: req.file.filename,
-    mimetype: req.file.mimetype 
+    mimetype: req.file.mimetype
   });
 };

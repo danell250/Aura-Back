@@ -178,55 +178,11 @@ function startPeriodicReconnection() {
         }
     }), 30000); // Try to reconnect every 30 seconds
 }
-// Enhanced getDB function with connection checking
 function getDB() {
     if (!isConnected || !db) {
-        console.warn("⚠️  Warning: Database not connected. Using mock database for this operation.");
-        // Return a comprehensive mock database object
-        return createMockDB();
+        throw new Error("Database not connected");
     }
     return db;
-}
-// Create a mock database for when connection is not available
-function createMockDB() {
-    const mockCollection = {
-        find: () => ({
-            toArray: () => __awaiter(this, void 0, void 0, function* () { return []; }),
-            limit: () => mockCollection.find(),
-            skip: () => mockCollection.find(),
-            sort: () => mockCollection.find(),
-        }),
-        findOne: () => __awaiter(this, void 0, void 0, function* () { return null; }),
-        insertOne: (doc) => __awaiter(this, void 0, void 0, function* () {
-            return ({
-                acknowledged: true,
-                insertedId: `mock-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-            });
-        }),
-        insertMany: (docs) => __awaiter(this, void 0, void 0, function* () {
-            return ({
-                acknowledged: true,
-                insertedIds: docs.map((_, i) => `mock-${Date.now()}-${i}`)
-            });
-        }),
-        updateOne: () => __awaiter(this, void 0, void 0, function* () { return ({ matchedCount: 0, modifiedCount: 0 }); }),
-        updateMany: () => __awaiter(this, void 0, void 0, function* () { return ({ matchedCount: 0, modifiedCount: 0 }); }),
-        deleteOne: () => __awaiter(this, void 0, void 0, function* () { return ({ deletedCount: 0 }); }),
-        deleteMany: () => __awaiter(this, void 0, void 0, function* () { return ({ deletedCount: 0 }); }),
-        countDocuments: () => __awaiter(this, void 0, void 0, function* () { return 0; }),
-        createIndex: () => __awaiter(this, void 0, void 0, function* () { return 'mock-index'; }),
-        dropIndex: () => __awaiter(this, void 0, void 0, function* () { return true; }),
-    };
-    return {
-        collection: (name) => {
-            console.warn(`⚠️  Using mock collection '${name}'. Data operations will not be persisted.`);
-            return mockCollection;
-        },
-        admin: () => ({
-            command: () => __awaiter(this, void 0, void 0, function* () { return ({ ok: 1 }); })
-        }),
-        command: () => __awaiter(this, void 0, void 0, function* () { return ({ ok: 1 }); }),
-    };
 }
 // Health check function
 function checkDBHealth() {

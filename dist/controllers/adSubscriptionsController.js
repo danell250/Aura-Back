@@ -18,15 +18,6 @@ exports.adSubscriptionsController = {
         try {
             const { userId } = req.params;
             console.log('[AdSubscriptions] Fetching subscriptions for user:', userId);
-            // Check if database is connected
-            if (!(0, db_1.isDBConnected)()) {
-                console.warn('[AdSubscriptions] Database not connected, returning empty array');
-                return res.json({
-                    success: true,
-                    data: [],
-                    message: 'Database not available'
-                });
-            }
             const db = (0, db_1.getDB)();
             const subscriptions = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION)
                 .find({ userId })
