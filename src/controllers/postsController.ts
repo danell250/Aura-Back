@@ -581,7 +581,7 @@ export const postsController = {
   boostPost: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { userId, credits } = req.body as { userId: string; credits?: number };
+      const { userId, credits } = req.body as { userId: string; credits?: number | string };
       const db = getDB();
 
       if (!userId) {
@@ -593,27 +593,24 @@ export const postsController = {
         return res.status(404).json({ success: false, error: 'Post not found' });
       }
 
-      // Determine credits to spend, default to 100 if not provided
-      const creditsToSpend = typeof credits === 'number' && credits > 0 ? credits : 100;
+      const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
+      const creditsToSpend = typeof parsedCredits === 'number' && parsedCredits > 0 ? parsedCredits : 100;
 
       // Fetch user and ensure enough credits
       const user = await db.collection(USERS_COLLECTION).findOne({ id: userId });
       if (!user) {
         return res.status(404).json({ success: false, error: 'User not found' });
       }
-      const currentCredits = user.auraCredits || 0;
+      const currentCredits = Number(user.auraCredits || 0);
       if (currentCredits < creditsToSpend) {
         return res.status(400).json({ success: false, error: 'Insufficient credits' });
       }
 
-      // Deduct credits
-      const decRes = await db.collection(USERS_COLLECTION).updateOne(
-        { id: userId, auraCredits: { $gte: creditsToSpend } },
-        { $inc: { auraCredits: -creditsToSpend }, $set: { updatedAt: new Date().toISOString() } }
+      const newCredits = currentCredits - creditsToSpend;
+      await db.collection(USERS_COLLECTION).updateOne(
+        { id: userId },
+        { $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() } }
       );
-      if (decRes.matchedCount === 0) {
-        return res.status(400).json({ success: false, error: 'Insufficient credits' });
-      }
 
       // Apply boost to post (radiance proportional to credits)
       const incRadiance = creditsToSpend * 2; // keep same multiplier as UI
@@ -625,20 +622,18 @@ export const postsController = {
 
         const boostedDoc = await db.collection(POSTS_COLLECTION).findOne({ id });
         if (!boostedDoc) {
-          // Rollback credits if somehow no doc
           await db.collection(USERS_COLLECTION).updateOne(
             { id: userId },
-            { $inc: { auraCredits: creditsToSpend }, $set: { updatedAt: new Date().toISOString() } }
+            { $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() } }
           );
           return res.status(500).json({ success: false, error: 'Failed to boost post' });
         }
 
         return res.json({ success: true, data: boostedDoc, message: 'Post boosted successfully' });
       } catch (e) {
-        // Rollback user credits if boost failed
         await db.collection(USERS_COLLECTION).updateOne(
           { id: userId },
-          { $inc: { auraCredits: creditsToSpend }, $set: { updatedAt: new Date().toISOString() } }
+          { $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() } }
         );
         throw e;
       }
