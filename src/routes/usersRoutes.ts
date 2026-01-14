@@ -47,6 +47,9 @@ router.put('/:id/privacy-settings', usersController.updatePrivacySettings);
 // POST /api/users/:id/connect - Send connection request
 router.post('/:id/connect', usersController.sendConnectionRequest);
 
+// POST /api/users/:id/cancel-connection - Cancel connection request
+router.post('/:id/cancel-connection', usersController.cancelConnectionRequest);
+
 // POST /api/users/:id/accept-connection - Accept connection request
 router.post('/:id/accept-connection', usersController.acceptConnectionRequest);
 

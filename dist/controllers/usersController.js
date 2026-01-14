@@ -51,6 +51,61 @@ exports.usersController = {
             });
         }
     }),
+    // POST /api/users/:id/cancel-connection - Cancel a sent connection request
+    cancelConnectionRequest: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const { targetUserId } = req.body;
+            const db = (0, db_1.getDB)();
+            const requester = yield db.collection('users').findOne({ id });
+            if (!requester) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Requester not found',
+                    message: `User with ID ${id} does not exist`
+                });
+            }
+            const targetUser = yield db.collection('users').findOne({ id: targetUserId });
+            if (!targetUser) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Target user not found',
+                    message: `User with ID ${targetUserId} does not exist`
+                });
+            }
+            const updatedSentRequests = (requester.sentAcquaintanceRequests || []).filter((rid) => rid !== targetUserId);
+            yield db.collection('users').updateOne({ id }, {
+                $set: {
+                    sentAcquaintanceRequests: updatedSentRequests,
+                    updatedAt: new Date().toISOString()
+                }
+            });
+            const updatedNotifications = (targetUser.notifications || []).filter((n) => !(n.type === 'acquaintance_request' && n.fromUser.id === id));
+            yield db.collection('users').updateOne({ id: targetUserId }, {
+                $set: {
+                    notifications: updatedNotifications,
+                    updatedAt: new Date().toISOString()
+                }
+            });
+            res.json({
+                success: true,
+                data: {
+                    requesterId: id,
+                    targetUserId,
+                    timestamp: new Date().toISOString()
+                },
+                message: 'Connection request cancelled successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error cancelling connection request:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to cancel connection request',
+                message: 'Internal server error'
+            });
+        }
+    }),
     // GET /api/users/:id - Get user by ID
     getUserById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {

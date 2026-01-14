@@ -35,6 +35,8 @@ router.put('/:id/privacy-settings', usersController_1.usersController.updatePriv
 // Social interaction routes
 // POST /api/users/:id/connect - Send connection request
 router.post('/:id/connect', usersController_1.usersController.sendConnectionRequest);
+// POST /api/users/:id/cancel-connection - Cancel connection request
+router.post('/:id/cancel-connection', usersController_1.usersController.cancelConnectionRequest);
 // POST /api/users/:id/accept-connection - Accept connection request
 router.post('/:id/accept-connection', usersController_1.usersController.acceptConnectionRequest);
 // POST /api/users/:id/reject-connection - Reject connection request
