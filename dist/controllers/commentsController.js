@@ -11,6 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.commentsController = void 0;
 const db_1 = require("../db");
+const notificationsController_1 = require("./notificationsController");
 const COMMENTS_COLLECTION = 'comments';
 const USERS_COLLECTION = 'users';
 exports.commentsController = {
@@ -114,6 +115,15 @@ exports.commentsController = {
                 userReactions: [] // placeholder for response
             };
             yield db.collection(COMMENTS_COLLECTION).insertOne(newComment);
+            try {
+                const post = yield db.collection('posts').findOne({ id: postId });
+                if (post && post.author && post.author.id && post.author.id !== authorId) {
+                    yield (0, notificationsController_1.createNotificationInDB)(post.author.id, 'comment', authorId, 'commented on your post', postId);
+                }
+            }
+            catch (e) {
+                console.error('Error creating comment notification:', e);
+            }
             res.status(201).json({ success: true, data: newComment, message: 'Comment created successfully' });
         }
         catch (error) {

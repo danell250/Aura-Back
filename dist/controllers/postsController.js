@@ -552,6 +552,14 @@ exports.postsController = {
                     yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, { $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() } });
                     return res.status(500).json({ success: false, error: 'Failed to boost post' });
                 }
+                try {
+                    if (post.author.id !== userId) {
+                        yield (0, notificationsController_1.createNotificationInDB)(post.author.id, 'boost_received', userId, 'boosted your post', id);
+                    }
+                }
+                catch (e) {
+                    console.error('Error creating boost notification:', e);
+                }
                 return res.json({ success: true, data: boostedDoc, message: 'Post boosted successfully' });
             }
             catch (e) {
