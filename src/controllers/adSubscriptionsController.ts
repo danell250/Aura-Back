@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { getDB } from '../db';
+import { getDB, isDBConnected } from '../db';
 
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 
@@ -8,6 +8,18 @@ export const adSubscriptionsController = {
   getUserSubscriptions: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
+      console.log('[AdSubscriptions] Fetching subscriptions for user:', userId);
+      
+      // Check if database is connected
+      if (!isDBConnected()) {
+        console.warn('[AdSubscriptions] Database not connected, returning empty array');
+        return res.json({
+          success: true,
+          data: [],
+          message: 'Database not available'
+        });
+      }
+      
       const db = getDB();
 
       const subscriptions = await db.collection(AD_SUBSCRIPTIONS_COLLECTION)
@@ -15,16 +27,19 @@ export const adSubscriptionsController = {
         .sort({ createdAt: -1 })
         .toArray();
 
+      console.log('[AdSubscriptions] Found subscriptions:', subscriptions.length);
+      
       res.json({
         success: true,
         data: subscriptions
       });
     } catch (error) {
-      console.error('Error fetching user subscriptions:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to fetch subscriptions',
-        message: 'Internal server error'
+      console.error('[AdSubscriptions] Error fetching user subscriptions:', error);
+      // Return empty array instead of error to prevent frontend from getting stuck
+      res.json({
+        success: true,
+        data: [],
+        error: 'Failed to fetch subscriptions'
       });
     }
   },
