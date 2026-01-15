@@ -15,6 +15,7 @@ export interface User {
   zodiacSign?: string;
   email?: string;
   phone?: string;
+  country?: string;
   acquaintances?: string[]; 
   sentAcquaintanceRequests?: string[];
   notifications?: Notification[];
