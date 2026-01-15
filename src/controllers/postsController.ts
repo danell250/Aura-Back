@@ -358,7 +358,8 @@ export const postsController = {
       const { 
         content, 
         mediaUrl, 
-        mediaType, 
+        mediaType,
+        mediaItems,
         energy, 
         authorId,
         taggedUserIds,
@@ -406,6 +407,7 @@ export const postsController = {
         content,
         mediaUrl: mediaUrl || undefined,
         mediaType: mediaType || undefined,
+        mediaItems: mediaItems || undefined,
         energy: energy || '🪐 Neutral',
         radiance: 0,
         timestamp: Date.now(),

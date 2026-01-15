@@ -234,6 +234,9 @@ exports.adsController = {
             // Don't allow updating id or ownerId
             delete updates.id;
             delete updates.ownerId;
+            if (typeof updates.description === 'string') {
+                updates.hashtags = (0, hashtagUtils_1.getHashtagsFromText)(updates.description || '');
+            }
             const result = yield db.collection('ads').findOneAndUpdate({ id }, { $set: updates }, { returnDocument: 'after' });
             if (!result) {
                 return res.status(404).json({ success: false, error: 'Ad not found' });

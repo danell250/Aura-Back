@@ -267,6 +267,10 @@ export const adsController = {
       // Don't allow updating id or ownerId
       delete updates.id;
       delete updates.ownerId;
+
+      if (typeof updates.description === 'string') {
+        updates.hashtags = getHashtagsFromText(updates.description || '');
+      }
       
       const result = await db.collection('ads').findOneAndUpdate(
         { id },
