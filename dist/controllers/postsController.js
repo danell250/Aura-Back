@@ -344,6 +344,12 @@ exports.postsController = {
         var _a;
         try {
             const { id } = req.params;
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({
+                    success: true,
+                    data: { id, viewCount: 0 }
+                });
+            }
             const db = (0, db_1.getDB)();
             const viewerId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             const query = { id };

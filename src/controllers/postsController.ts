@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { getDB } from '../db';
+import { getDB, isDBConnected } from '../db';
 import { getHashtagsFromText } from '../utils/hashtagUtils';
 import { createNotificationInDB } from './notificationsController';
 
@@ -354,6 +354,14 @@ export const postsController = {
   incrementPostViews: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: { id, viewCount: 0 }
+        });
+      }
+
       const db = getDB();
       const viewerId = (req as any).user?.id;
 

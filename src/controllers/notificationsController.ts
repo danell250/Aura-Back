@@ -1,13 +1,26 @@
 import { Request, Response } from 'express';
-import { getDB } from '../db';
+import { getDB, isDBConnected } from '../db';
 
 // Helper function to create a notification in the database
 export const createNotificationInDB = async (userId: string, type: string, fromUserId: string, message: string, postId?: string, connectionId?: string) => {
-  const db = getDB();
-  
-  // Fetch fromUser from database
-  const fromUserDoc = await db.collection('users').findOne({ id: fromUserId });
-  
+  let db: any = null;
+  if (isDBConnected()) {
+    try {
+      db = getDB();
+    } catch (error) {
+      console.error('Error accessing DB for notifications:', error);
+    }
+  }
+
+  let fromUserDoc: any = null;
+  if (db) {
+    try {
+      fromUserDoc = await db.collection('users').findOne({ id: fromUserId });
+    } catch (error) {
+      console.error('Error fetching notification fromUser in DB:', error);
+    }
+  }
+
   const fromUser = fromUserDoc ? {
     id: fromUserDoc.id,
     firstName: fromUserDoc.firstName || '',
@@ -23,7 +36,7 @@ export const createNotificationInDB = async (userId: string, type: string, fromU
     handle: '@user',
     avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`
   };
-  
+
   const newNotification = {
     id: `notif-${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     userId,
@@ -35,19 +48,20 @@ export const createNotificationInDB = async (userId: string, type: string, fromU
     postId: postId || '',
     connectionId: connectionId || undefined
   };
-  
-  try {
-    // Add to user's notifications
-    await db.collection('users').updateOne(
-      { id: userId },
-      { 
-        $push: { notifications: { $each: [newNotification], $position: 0 } }
-      } as any
-    );
-  } catch (error) {
-    console.error('Error creating notification in DB:', error);
+
+  if (db) {
+    try {
+      await db.collection('users').updateOne(
+        { id: userId },
+        { 
+          $push: { notifications: { $each: [newNotification], $position: 0 } }
+        } as any
+      );
+    } catch (error) {
+      console.error('Error creating notification in DB:', error);
+    }
   }
-  
+
   return newNotification;
 };
 
@@ -57,6 +71,21 @@ export const notificationsController = {
     try {
       const { userId } = req.params;
       const { page = 1, limit = 20, unreadOnly } = req.query;
+      
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: [],
+          pagination: {
+            page: Number(page),
+            limit: Number(limit),
+            total: 0,
+            pages: 0
+          },
+          unreadCount: 0
+        });
+      }
+
       const db = getDB();
       
       const user = await db.collection('users').findOne({ id: userId });

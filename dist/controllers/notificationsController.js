@@ -13,9 +13,24 @@ exports.notificationsController = exports.createNotificationInDB = void 0;
 const db_1 = require("../db");
 // Helper function to create a notification in the database
 const createNotificationInDB = (userId, type, fromUserId, message, postId, connectionId) => __awaiter(void 0, void 0, void 0, function* () {
-    const db = (0, db_1.getDB)();
-    // Fetch fromUser from database
-    const fromUserDoc = yield db.collection('users').findOne({ id: fromUserId });
+    let db = null;
+    if ((0, db_1.isDBConnected)()) {
+        try {
+            db = (0, db_1.getDB)();
+        }
+        catch (error) {
+            console.error('Error accessing DB for notifications:', error);
+        }
+    }
+    let fromUserDoc = null;
+    if (db) {
+        try {
+            fromUserDoc = yield db.collection('users').findOne({ id: fromUserId });
+        }
+        catch (error) {
+            console.error('Error fetching notification fromUser in DB:', error);
+        }
+    }
     const fromUser = fromUserDoc ? {
         id: fromUserDoc.id,
         firstName: fromUserDoc.firstName || '',
@@ -42,14 +57,15 @@ const createNotificationInDB = (userId, type, fromUserId, message, postId, conne
         postId: postId || '',
         connectionId: connectionId || undefined
     };
-    try {
-        // Add to user's notifications
-        yield db.collection('users').updateOne({ id: userId }, {
-            $push: { notifications: { $each: [newNotification], $position: 0 } }
-        });
-    }
-    catch (error) {
-        console.error('Error creating notification in DB:', error);
+    if (db) {
+        try {
+            yield db.collection('users').updateOne({ id: userId }, {
+                $push: { notifications: { $each: [newNotification], $position: 0 } }
+            });
+        }
+        catch (error) {
+            console.error('Error creating notification in DB:', error);
+        }
     }
     return newNotification;
 });
@@ -60,6 +76,19 @@ exports.notificationsController = {
         try {
             const { userId } = req.params;
             const { page = 1, limit = 20, unreadOnly } = req.query;
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({
+                    success: true,
+                    data: [],
+                    pagination: {
+                        page: Number(page),
+                        limit: Number(limit),
+                        total: 0,
+                        pages: 0
+                    },
+                    unreadCount: 0
+                });
+            }
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id: userId });
             if (!user) {
