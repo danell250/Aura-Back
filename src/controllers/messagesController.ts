@@ -366,9 +366,13 @@ export const messagesController = {
   // PUT /api/messages/mark-read - Mark messages as read
   markAsRead: async (req: Request, res: Response) => {
     try {
-      const { senderId, receiverId } = req.body;
+      const { senderId, receiverId, userId, otherUserId, currentUserId } = req.body;
+      const authUser = (req as any).user as any | undefined;
+
+      const resolvedReceiverId = receiverId || currentUserId || userId || authUser?.id;
+      const resolvedSenderId = senderId || otherUserId;
       
-      if (!senderId || !receiverId) {
+      if (!resolvedSenderId || !resolvedReceiverId) {
         return res.status(400).json({
           success: false,
           message: 'Sender ID and receiver ID are required'
@@ -386,8 +390,8 @@ export const messagesController = {
 
       await messagesCollection.updateMany(
         {
-          senderId,
-          receiverId,
+          senderId: resolvedSenderId,
+          receiverId: resolvedReceiverId,
           isRead: false
         },
         { $set: { isRead: true } }

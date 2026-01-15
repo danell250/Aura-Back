@@ -327,8 +327,11 @@ exports.messagesController = {
     // PUT /api/messages/mark-read - Mark messages as read
     markAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { senderId, receiverId } = req.body;
-            if (!senderId || !receiverId) {
+            const { senderId, receiverId, userId, otherUserId, currentUserId } = req.body;
+            const authUser = req.user;
+            const resolvedReceiverId = receiverId || currentUserId || userId || (authUser === null || authUser === void 0 ? void 0 : authUser.id);
+            const resolvedSenderId = senderId || otherUserId;
+            if (!resolvedSenderId || !resolvedReceiverId) {
                 return res.status(400).json({
                     success: false,
                     message: 'Sender ID and receiver ID are required'
@@ -342,8 +345,8 @@ exports.messagesController = {
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             yield messagesCollection.updateMany({
-                senderId,
-                receiverId,
+                senderId: resolvedSenderId,
+                receiverId: resolvedReceiverId,
                 isRead: false
             }, { $set: { isRead: true } });
             res.json({
