@@ -331,7 +331,6 @@ export const postsController = {
         }
       }
 
-      // Remove author details from response
       delete post.authorDetails;
 
       // Post-process to add userReactions for the current user
@@ -349,6 +348,37 @@ export const postsController = {
     } catch (error) {
       console.error('Error fetching post:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch post', message: 'Internal server error' });
+    }
+  },
+
+  incrementPostViews: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+      const viewerId = (req as any).user?.id;
+
+      const query: any = { id };
+      if (viewerId) {
+        query['author.id'] = { $ne: viewerId };
+      }
+
+      const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
+        query,
+        {
+          $inc: { viewCount: 1 },
+          $setOnInsert: { viewCount: 1 }
+        },
+        { returnDocument: 'after' }
+      );
+
+      if (!result || !result.value) {
+        return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
+      }
+
+      res.json({ success: true, data: { id, viewCount: result.value.viewCount || 0 } });
+    } catch (error) {
+      console.error('Error incrementing post views:', error);
+      res.status(500).json({ success: false, error: 'Failed to increment post views', message: 'Internal server error' });
     }
   },
 
@@ -416,6 +446,7 @@ export const postsController = {
         userReactions: [] as string[],
         comments: [] as any[],
         isBoosted: false,
+        viewCount: 0,
         hashtags,
         taggedUserIds: tagList,
         // Time Capsule specific fields

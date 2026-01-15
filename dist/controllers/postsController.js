@@ -323,7 +323,6 @@ exports.postsController = {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'Time Capsule is not yet unlocked' });
                 }
             }
-            // Remove author details from response
             delete post.authorDetails;
             // Post-process to add userReactions for the current user
             if (currentUserId) {
@@ -339,6 +338,30 @@ exports.postsController = {
         catch (error) {
             console.error('Error fetching post:', error);
             res.status(500).json({ success: false, error: 'Failed to fetch post', message: 'Internal server error' });
+        }
+    }),
+    incrementPostViews: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const viewerId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const query = { id };
+            if (viewerId) {
+                query['author.id'] = { $ne: viewerId };
+            }
+            const result = yield db.collection(POSTS_COLLECTION).findOneAndUpdate(query, {
+                $inc: { viewCount: 1 },
+                $setOnInsert: { viewCount: 1 }
+            }, { returnDocument: 'after' });
+            if (!result || !result.value) {
+                return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
+            }
+            res.json({ success: true, data: { id, viewCount: result.value.viewCount || 0 } });
+        }
+        catch (error) {
+            console.error('Error incrementing post views:', error);
+            res.status(500).json({ success: false, error: 'Failed to increment post views', message: 'Internal server error' });
         }
     }),
     // POST /api/posts - Create new post
@@ -373,7 +396,7 @@ exports.postsController = {
             const hashtags = (0, hashtagUtils_1.getHashtagsFromText)(content);
             const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
             const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
-            const newPost = Object.assign({ id: postId, author: authorEmbed, content, mediaUrl: mediaUrl || undefined, mediaType: mediaType || undefined, mediaItems: mediaItems || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
+            const newPost = Object.assign({ id: postId, author: authorEmbed, content, mediaUrl: mediaUrl || undefined, mediaType: mediaType || undefined, mediaItems: mediaItems || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
                 isTimeCapsule: true,
                 unlockDate: unlockDate || null,
                 isUnlocked: unlockDate ? Date.now() >= unlockDate : true,

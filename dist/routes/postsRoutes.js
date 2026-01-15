@@ -48,4 +48,5 @@ router.post('/:id/react', postsWriteRateLimiter, authMiddleware_1.requireAuth, p
 router.post('/:id/boost', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.boostPost);
 router.post('/:id/share', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.sharePost);
 router.post('/:id/report', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.reportPost);
+router.post('/:id/view', authMiddleware_1.optionalAuth, postsController_1.postsController.incrementPostViews);
 exports.default = router;
