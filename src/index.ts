@@ -5,6 +5,7 @@ import passport from 'passport';
 import session from 'express-session';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import geminiRoutes from './routes/geminiRoutes';
+import birthdayRoutes from './routes/birthdayRoutes';
 import uploadRoutes from './routes/uploadRoutes';
 import postsRoutes from './routes/postsRoutes';
 import usersRoutes from './routes/usersRoutes';
@@ -199,6 +200,8 @@ app.use('/api/users', (req, res, next) => {
   console.log(`Users route hit: ${req.method} ${req.path}`);
   next();
 }, usersRoutes);
+
+app.use('/api/birthdays', birthdayRoutes);
 
 // Logout route (legacy - moved to /auth)
 app.get('/api/auth/logout', (req, res) => {

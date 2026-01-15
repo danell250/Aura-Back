@@ -52,6 +52,7 @@ const passport_1 = __importDefault(require("passport"));
 const express_session_1 = __importDefault(require("express-session"));
 const passport_google_oauth20_1 = require("passport-google-oauth20");
 const geminiRoutes_1 = __importDefault(require("./routes/geminiRoutes"));
+const birthdayRoutes_1 = __importDefault(require("./routes/birthdayRoutes"));
 const uploadRoutes_1 = __importDefault(require("./routes/uploadRoutes"));
 const postsRoutes_1 = __importDefault(require("./routes/postsRoutes"));
 const usersRoutes_1 = __importDefault(require("./routes/usersRoutes"));
@@ -222,6 +223,7 @@ app.use('/api/users', (req, res, next) => {
     console.log(`Users route hit: ${req.method} ${req.path}`);
     next();
 }, usersRoutes_1.default);
+app.use('/api/birthdays', birthdayRoutes_1.default);
 // Logout route (legacy - moved to /auth)
 app.get('/api/auth/logout', (req, res) => {
     req.logout((err) => {

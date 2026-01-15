@@ -175,6 +175,7 @@ exports.usersController = {
                 bio: userData.bio || '',
                 dob: userData.dob || '',
                 phone: userData.phone || '',
+                country: userData.country || '',
                 industry: userData.industry || '',
                 companyName: userData.companyName || '',
                 acquaintances: userData.acquaintances || [],
