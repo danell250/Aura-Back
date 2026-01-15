@@ -24,7 +24,7 @@ const s3PublicBaseUrl = process.env.S3_PUBLIC_BASE_URL || '';
 const s3Client = new client_s3_1.S3Client({
     region: s3Region
 });
-const uploadsDir = path_1.default.join(__dirname, '../uploads');
+const uploadsDir = path_1.default.resolve(__dirname, '..', '..', 'uploads');
 const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     if (!req.file) {
         res.status(400).json({ error: 'No file uploaded' });

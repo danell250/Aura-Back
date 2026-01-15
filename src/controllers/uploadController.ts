@@ -13,7 +13,7 @@ const s3Client = new S3Client({
   region: s3Region
 });
 
-const uploadsDir = path.join(__dirname, '../uploads');
+const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
 
 export const uploadFile = async (req: Request, res: Response) => {
   if (!req.file) {
