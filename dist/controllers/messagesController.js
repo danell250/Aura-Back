@@ -337,9 +337,9 @@ exports.messagesController = {
             const resolvedReceiverId = bodyReceiverId || queryReceiverId || (authUser === null || authUser === void 0 ? void 0 : authUser.id);
             const resolvedSenderId = bodySenderId || querySenderId;
             if (!resolvedSenderId || !resolvedReceiverId) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Sender ID and receiver ID are required'
+                return res.json({
+                    success: true,
+                    message: 'No messages to mark as read'
                 });
             }
             if (!(0, db_1.isDBConnected)()) {
