@@ -76,7 +76,7 @@ dotenv_1.default.config();
 passport_1.default.use(new passport_google_oauth20_1.Strategy({
     clientID: process.env.GOOGLE_CLIENT_ID || '63639970194-r83ifit3giq02jd1rgfq84uea5tbgv6h.apps.googleusercontent.com',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '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',
-    callbackURL: "https://aura-back-s1bw.onrender.com/api/auth/google/callback"
+    callbackURL: process.env.VITE_GOOGLE_REDIRECT_URI || "https://aura-back-s1bw.onrender.com/api/auth/google/callback"
 }, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c, _d;
     try {

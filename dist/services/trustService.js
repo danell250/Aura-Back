@@ -38,7 +38,9 @@ function calculateProfileCompleteness(user) {
         'bio',
         'email',
         'dob',
-        'phone'
+        'phone',
+        'companyName',
+        'companyWebsite'
     ];
     const filled = fields.reduce((acc, key) => {
         const value = user[key];

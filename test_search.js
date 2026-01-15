@@ -2,7 +2,7 @@
 const { MongoClient } = require('mongodb');
 
 async function searchUsers(searchTerm) {
-  const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/aura';
+  const uri = process.env.MONGO_URI || 'mongodb://localhost:27017/aura';
   const client = new MongoClient(uri);
 
   try {
