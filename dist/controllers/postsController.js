@@ -344,9 +344,7 @@ exports.postsController = {
     // POST /api/posts - Create new post
     createPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { content, mediaUrl, mediaType, energy, authorId, 
-            // Time Capsule specific fields
-            isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle } = req.body;
+            const { content, mediaUrl, mediaType, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle } = req.body;
             if (!content || !authorId) {
                 return res.status(400).json({ success: false, error: 'Missing required fields', message: 'content and authorId are required' });
             }
@@ -373,8 +371,9 @@ exports.postsController = {
                 activeGlow: 'none'
             };
             const hashtags = (0, hashtagUtils_1.getHashtagsFromText)(content);
+            const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
             const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
-            const newPost = Object.assign({ id: postId, author: authorEmbed, content, mediaUrl: mediaUrl || undefined, mediaType: mediaType || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, hashtags }, (isTimeCapsule && {
+            const newPost = Object.assign({ id: postId, author: authorEmbed, content, mediaUrl: mediaUrl || undefined, mediaType: mediaType || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
                 isTimeCapsule: true,
                 unlockDate: unlockDate || null,
                 isUnlocked: unlockDate ? Date.now() >= unlockDate : true,
@@ -383,6 +382,13 @@ exports.postsController = {
                 timeCapsuleTitle: timeCapsuleTitle || null
             }));
             yield db.collection(POSTS_COLLECTION).insertOne(newPost);
+            if (tagList.length > 0) {
+                yield Promise.all(tagList
+                    .filter(id => id && id !== authorEmbed.id)
+                    .map(id => (0, notificationsController_1.createNotificationInDB)(id, 'link', authorEmbed.id, 'mentioned you in a post', postId).catch(err => {
+                    console.error('Error creating mention notification:', err);
+                })));
+            }
             res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
         }
         catch (error) {
@@ -593,6 +599,61 @@ exports.postsController = {
         catch (error) {
             console.error('Error sharing post:', error);
             res.status(500).json({ success: false, error: 'Failed to share post', message: 'Internal server error' });
+        }
+    }),
+    // POST /api/posts/:id/report - Report a post
+    reportPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e;
+        try {
+            const { id } = req.params;
+            const { reason, notes } = req.body;
+            const db = (0, db_1.getDB)();
+            const reporter = req.user;
+            if (!reporter || !reporter.id) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
+            if (!reason) {
+                return res.status(400).json({ success: false, error: 'Missing reason' });
+            }
+            const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
+            if (!post) {
+                return res.status(404).json({ success: false, error: 'Post not found' });
+            }
+            const reportDoc = {
+                id: `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                type: 'post',
+                postId: id,
+                reporterId: reporter.id,
+                reason,
+                notes: notes || '',
+                createdAt: new Date().toISOString(),
+                status: 'open'
+            };
+            yield db.collection('reports').insertOne(reportDoc);
+            const toEmail = 'danelloosthuizen3@gmail.com';
+            const subject = `Aura Post Report: ${((_a = post.author) === null || _a === void 0 ? void 0 : _a.name) || ((_b = post.author) === null || _b === void 0 ? void 0 : _b.handle) || id}`;
+            const body = [
+                `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,
+                `Post ID: ${id}`,
+                `Author: ${((_c = post.author) === null || _c === void 0 ? void 0 : _c.name) || ((_d = post.author) === null || _d === void 0 ? void 0 : _d.handle) || ((_e = post.author) === null || _e === void 0 ? void 0 : _e.id)}`,
+                `Reason: ${reason}`,
+                `Notes: ${notes || ''}`,
+                `Created At: ${reportDoc.createdAt}`,
+                `Report ID: ${reportDoc.id}`,
+                `Content: ${(post.content || '').slice(0, 300)}`
+            ].join('\n');
+            yield db.collection('email_outbox').insertOne({
+                to: toEmail,
+                subject,
+                body,
+                createdAt: new Date().toISOString(),
+                status: 'pending'
+            });
+            res.json({ success: true, data: reportDoc, message: 'Post reported successfully' });
+        }
+        catch (error) {
+            console.error('Error reporting post:', error);
+            res.status(500).json({ success: false, error: 'Failed to report post', message: 'Internal server error' });
         }
     }),
     // GET /api/posts/hashtags/trending - Get trending hashtags

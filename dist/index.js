@@ -67,6 +67,7 @@ const authMiddleware_1 = require("./middleware/authMiddleware");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const db_1 = require("./db");
+const trustService_1 = require("./services/trustService");
 dotenv_1.default.config();
 // Passport Google OAuth Strategy Configuration
 passport_1.default.use(new passport_google_oauth20_1.Strategy({
@@ -529,6 +530,19 @@ function startServer() {
                     console.warn('⚠️  Database health check failed - connection may be unstable');
                 }
             }), 60000);
+            // Set up daily trust score recalculation
+            setInterval(() => __awaiter(this, void 0, void 0, function* () {
+                try {
+                    if (!(0, db_1.isDBConnected)())
+                        return;
+                    console.log('🔄 Running daily trust score recalculation job...');
+                    yield (0, trustService_1.recalculateAllTrustScores)();
+                    console.log('✅ Daily trust score recalculation complete');
+                }
+                catch (error) {
+                    console.error('❌ Failed daily trust score recalculation job:', error);
+                }
+            }), 24 * 60 * 60 * 1000);
             // Set up Time Capsule unlock checker
             setInterval(() => __awaiter(this, void 0, void 0, function* () {
                 try {

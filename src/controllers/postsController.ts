@@ -361,7 +361,7 @@ export const postsController = {
         mediaType, 
         energy, 
         authorId,
-        // Time Capsule specific fields
+        taggedUserIds,
         isTimeCapsule,
         unlockDate,
         timeCapsuleType,
@@ -397,6 +397,7 @@ export const postsController = {
       };
 
       const hashtags = getHashtagsFromText(content);
+      const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];
       const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
       
       const newPost = {
@@ -409,11 +410,12 @@ export const postsController = {
         radiance: 0,
         timestamp: Date.now(),
         reactions: {} as Record<string, number>,
-        reactionUsers: {} as Record<string, string[]>, // Store who reacted with what
-        userReactions: [] as string[], // placeholder for response
+        reactionUsers: {} as Record<string, string[]>,
+        userReactions: [] as string[],
         comments: [] as any[],
         isBoosted: false,
         hashtags,
+        taggedUserIds: tagList,
         // Time Capsule specific fields
         ...(isTimeCapsule && {
           isTimeCapsule: true,
@@ -426,6 +428,23 @@ export const postsController = {
       };
 
       await db.collection(POSTS_COLLECTION).insertOne(newPost);
+      if (tagList.length > 0) {
+        await Promise.all(
+          tagList
+            .filter(id => id && id !== authorEmbed.id)
+            .map(id =>
+              createNotificationInDB(
+                id,
+                'link',
+                authorEmbed.id,
+                'mentioned you in a post',
+                postId
+              ).catch(err => {
+                console.error('Error creating mention notification:', err);
+              })
+            )
+        );
+      }
       res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
     } catch (error) {
       console.error('Error creating post:', error);
@@ -701,6 +720,67 @@ export const postsController = {
     } catch (error) {
       console.error('Error sharing post:', error);
       res.status(500).json({ success: false, error: 'Failed to share post', message: 'Internal server error' });
+    }
+  },
+  
+  // POST /api/posts/:id/report - Report a post
+  reportPost: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { reason, notes } = req.body as { reason: string; notes?: string };
+      const db = getDB();
+      const reporter = (req as any).user;
+      
+      if (!reporter || !reporter.id) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+      if (!reason) {
+        return res.status(400).json({ success: false, error: 'Missing reason' });
+      }
+      
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!post) {
+        return res.status(404).json({ success: false, error: 'Post not found' });
+      }
+      
+      const reportDoc = {
+        id: `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type: 'post',
+        postId: id,
+        reporterId: reporter.id,
+        reason,
+        notes: notes || '',
+        createdAt: new Date().toISOString(),
+        status: 'open'
+      };
+      
+      await db.collection('reports').insertOne(reportDoc);
+      
+      const toEmail = 'danelloosthuizen3@gmail.com';
+      const subject = `Aura Post Report: ${post.author?.name || post.author?.handle || id}`;
+      const body = [
+        `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,
+        `Post ID: ${id}`,
+        `Author: ${post.author?.name || post.author?.handle || post.author?.id}`,
+        `Reason: ${reason}`,
+        `Notes: ${notes || ''}`,
+        `Created At: ${reportDoc.createdAt}`,
+        `Report ID: ${reportDoc.id}`,
+        `Content: ${(post.content || '').slice(0, 300)}`
+      ].join('\n');
+      
+      await db.collection('email_outbox').insertOne({
+        to: toEmail,
+        subject,
+        body,
+        createdAt: new Date().toISOString(),
+        status: 'pending'
+      });
+      
+      res.json({ success: true, data: reportDoc, message: 'Post reported successfully' });
+    } catch (error) {
+      console.error('Error reporting post:', error);
+      res.status(500).json({ success: false, error: 'Failed to report post', message: 'Internal server error' });
     }
   },
 

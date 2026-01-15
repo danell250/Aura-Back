@@ -19,6 +19,7 @@ export interface User {
   sentAcquaintanceRequests?: string[];
   notifications?: Notification[];
   blockedUsers?: string[];
+  blockedBy?: string[];
   profileViews?: string[];
   isPrivate?: boolean;
   trustScore: number; 

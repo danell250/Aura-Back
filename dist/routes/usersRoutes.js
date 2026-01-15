@@ -43,16 +43,24 @@ router.post('/:id/accept-connection', usersController_1.usersController.acceptCo
 router.post('/:id/reject-connection', usersController_1.usersController.rejectConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', usersController_1.usersController.blockUser);
+// POST /api/users/:id/report - Report user
+router.post('/:id/report', usersController_1.usersController.reportUser);
 // POST /api/users/:id/remove-acquaintance - Remove acquaintance
 router.post('/:id/remove-acquaintance', usersController_1.usersController.removeAcquaintance);
 // POST /api/users/:id/record-profile-view - Record profile view
 router.post('/:id/record-profile-view', usersController_1.usersController.recordProfileView);
 // GET /api/users/:id - Get user by ID (public)
 router.get('/:id', usersController_1.usersController.getUserById);
+router.get('/:id/serendipity-matches', usersController_1.usersController.getSerendipityMatches);
 // PUT /api/users/:id - Update user
 router.put('/:id', usersController_1.usersController.updateUser);
 // DELETE /api/users/:id - Delete user
 router.delete('/:id', usersController_1.usersController.deleteUser);
 // DELETE /api/users/force-delete/:email - Force delete a user (Admin)
 router.delete('/force-delete/:email', usersController_1.usersController.forceDeleteUser);
+// Trust calibration routes
+// POST /api/users/:id/recalculate-trust - Recalculate trust score for a single user
+router.post('/:id/recalculate-trust', usersController_1.usersController.recalculateTrustForUser);
+// POST /api/users/recalculate-trust-all - Recalculate trust scores for all users
+router.post('/recalculate-trust-all', usersController_1.usersController.recalculateTrustForAllUsers);
 exports.default = router;

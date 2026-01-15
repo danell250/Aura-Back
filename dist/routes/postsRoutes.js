@@ -25,4 +25,6 @@ router.post('/:id/react', authMiddleware_1.requireAuth, postsController_1.postsC
 router.post('/:id/boost', authMiddleware_1.requireAuth, postsController_1.postsController.boostPost);
 // POST /api/posts/:id/share - Share post
 router.post('/:id/share', authMiddleware_1.requireAuth, postsController_1.postsController.sharePost);
+// POST /api/posts/:id/report - Report a post
+router.post('/:id/report', authMiddleware_1.requireAuth, postsController_1.postsController.reportPost);
 exports.default = router;

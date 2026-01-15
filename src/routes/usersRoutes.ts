@@ -59,6 +59,9 @@ router.post('/:id/reject-connection', usersController.rejectConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', usersController.blockUser);
 
+// POST /api/users/:id/report - Report user
+router.post('/:id/report', usersController.reportUser);
+
 // POST /api/users/:id/remove-acquaintance - Remove acquaintance
 router.post('/:id/remove-acquaintance', usersController.removeAcquaintance);
 
@@ -68,6 +71,8 @@ router.post('/:id/record-profile-view', usersController.recordProfileView);
 // GET /api/users/:id - Get user by ID (public)
 router.get('/:id', usersController.getUserById);
 
+router.get('/:id/serendipity-matches', usersController.getSerendipityMatches);
+
 // PUT /api/users/:id - Update user
 router.put('/:id', usersController.updateUser);
 
@@ -76,5 +81,12 @@ router.delete('/:id', usersController.deleteUser);
 
 // DELETE /api/users/force-delete/:email - Force delete a user (Admin)
 router.delete('/force-delete/:email', usersController.forceDeleteUser);
+
+// Trust calibration routes
+// POST /api/users/:id/recalculate-trust - Recalculate trust score for a single user
+router.post('/:id/recalculate-trust', usersController.recalculateTrustForUser);
+
+// POST /api/users/recalculate-trust-all - Recalculate trust scores for all users
+router.post('/recalculate-trust-all', usersController.recalculateTrustForAllUsers);
 
 export default router;

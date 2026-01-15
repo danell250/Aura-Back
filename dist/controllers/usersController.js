@@ -22,6 +22,7 @@ var __rest = (this && this.__rest) || function (s, e) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.usersController = void 0;
 const db_1 = require("../db");
+const trustService_1 = require("../services/trustService");
 exports.usersController = {
     // GET /api/users - Get all users (respects showInSearch privacy setting)
     getAllUsers: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -405,9 +406,53 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { targetUserId } = req.body;
-            // In production, this would update user's blocked list
+            const db = (0, db_1.getDB)();
+            if (!targetUserId || typeof targetUserId !== 'string') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing targetUserId',
+                    message: 'targetUserId is required'
+                });
+            }
+            const blocker = yield db.collection('users').findOne({ id });
+            const target = yield db.collection('users').findOne({ id: targetUserId });
+            if (!blocker || !target) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: 'Blocker or target user not found'
+                });
+            }
+            const nextBlocked = Array.from(new Set([...(blocker.blockedUsers || []), targetUserId]));
+            const nextBlockedBy = Array.from(new Set([...(target.blockedBy || []), id]));
+            const nextBlockerAcq = (blocker.acquaintances || []).filter((uid) => uid !== targetUserId);
+            const nextTargetAcq = (target.acquaintances || []).filter((uid) => uid !== id);
+            const nextBlockerRequests = (blocker.sentAcquaintanceRequests || []).filter((uid) => uid !== targetUserId);
+            const nextTargetRequests = (target.sentAcquaintanceRequests || []).filter((uid) => uid !== id);
+            yield db.collection('users').updateOne({ id }, {
+                $set: {
+                    blockedUsers: nextBlocked,
+                    acquaintances: nextBlockerAcq,
+                    sentAcquaintanceRequests: nextBlockerRequests,
+                    updatedAt: new Date().toISOString()
+                }
+            });
+            yield db.collection('users').updateOne({ id: targetUserId }, {
+                $set: {
+                    blockedBy: nextBlockedBy,
+                    acquaintances: nextTargetAcq,
+                    sentAcquaintanceRequests: nextTargetRequests,
+                    updatedAt: new Date().toISOString()
+                }
+            });
             res.json({
                 success: true,
+                data: {
+                    blockerId: id,
+                    targetUserId,
+                    blockedUsers: nextBlocked,
+                    blockedBy: nextBlockedBy
+                },
                 message: 'User blocked successfully'
             });
         }
@@ -416,6 +461,70 @@ exports.usersController = {
             res.status(500).json({
                 success: false,
                 error: 'Failed to block user',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // POST /api/users/:id/report - Report user
+    reportUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const { targetUserId, reason, notes } = req.body;
+            const db = (0, db_1.getDB)();
+            if (!targetUserId || !reason) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing fields',
+                    message: 'targetUserId and reason are required'
+                });
+            }
+            const reporter = yield db.collection('users').findOne({ id });
+            const target = yield db.collection('users').findOne({ id: targetUserId });
+            if (!reporter || !target) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: 'Reporter or target user not found'
+                });
+            }
+            const reportDoc = {
+                id: `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                reporterId: id,
+                targetUserId,
+                reason,
+                notes: notes || '',
+                createdAt: new Date().toISOString(),
+                status: 'open'
+            };
+            yield db.collection('reports').insertOne(reportDoc);
+            const toEmail = 'danelloosthuizen3@gmail.com';
+            const subject = `Aura User Report: ${target.name || target.handle || targetUserId}`;
+            const body = [
+                `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,
+                `Target: ${target.name || target.handle || targetUserId} (${targetUserId})`,
+                `Reason: ${reason}`,
+                `Notes: ${notes || ''}`,
+                `Created At: ${reportDoc.createdAt}`,
+                `Report ID: ${reportDoc.id}`
+            ].join('\n');
+            yield db.collection('email_outbox').insertOne({
+                to: toEmail,
+                subject,
+                body,
+                createdAt: new Date().toISOString(),
+                status: 'pending'
+            });
+            res.json({
+                success: true,
+                data: reportDoc,
+                message: 'User reported successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error reporting user:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to report user',
                 message: 'Internal server error'
             });
         }
@@ -761,6 +870,90 @@ exports.usersController = {
             res.status(500).json({
                 success: false,
                 error: 'Failed to clear user data',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // POST /api/users/:id/recalculate-trust - Recalculate trust score for a single user
+    recalculateTrustForUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const user = yield db.collection('users').findOne({ id });
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: `User with ID ${id} does not exist`
+                });
+            }
+            const breakdown = yield (0, trustService_1.calculateUserTrust)(id);
+            if (!breakdown) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'Failed to calculate trust score',
+                    message: 'Unable to compute trust score for this user'
+                });
+            }
+            res.json({
+                success: true,
+                data: breakdown,
+                message: 'Trust score recalculated successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error recalculating user trust:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to recalculate trust score',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // POST /api/users/recalculate-trust-all - Recalculate trust scores for all users
+    recalculateTrustForAllUsers: (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            yield (0, trustService_1.recalculateAllTrustScores)();
+            res.json({
+                success: true,
+                message: 'Trust scores recalculated for all users'
+            });
+        }
+        catch (error) {
+            console.error('Error recalculating trust scores for all users:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to recalculate trust scores for all users',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    getSerendipityMatches: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const { limit } = req.query;
+            const parsedLimit = parseInt(String(limit !== null && limit !== void 0 ? limit : 20), 10);
+            const limitValue = Number.isNaN(parsedLimit) ? 20 : parsedLimit;
+            const matches = yield (0, trustService_1.getSerendipityMatchesForUser)(id, limitValue);
+            if (!matches) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: `User with ID ${id} does not exist`
+                });
+            }
+            res.json({
+                success: true,
+                data: matches,
+                count: matches.length,
+                message: 'Serendipity matches retrieved successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error getting serendipity matches:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to get serendipity matches',
                 message: 'Internal server error'
             });
         }

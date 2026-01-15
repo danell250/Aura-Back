@@ -20,6 +20,7 @@ import { attachUser } from './middleware/authMiddleware';
 import path from 'path';
 import fs from 'fs';
 import { connectDB, checkDBHealth, isDBConnected, getDB } from './db';
+import { recalculateAllTrustScores } from './services/trustService';
 
 dotenv.config();
 
@@ -526,6 +527,18 @@ async function startServer() {
         console.warn('⚠️  Database health check failed - connection may be unstable');
       }
     }, 60000);
+    
+    // Set up daily trust score recalculation
+    setInterval(async () => {
+      try {
+        if (!isDBConnected()) return;
+        console.log('🔄 Running daily trust score recalculation job...');
+        await recalculateAllTrustScores();
+        console.log('✅ Daily trust score recalculation complete');
+      } catch (error) {
+        console.error('❌ Failed daily trust score recalculation job:', error);
+      }
+    }, 24 * 60 * 60 * 1000);
     
     // Set up Time Capsule unlock checker
     setInterval(async () => {

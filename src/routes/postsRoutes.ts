@@ -36,4 +36,7 @@ router.post('/:id/boost', requireAuth, postsController.boostPost);
 // POST /api/posts/:id/share - Share post
 router.post('/:id/share', requireAuth, postsController.sharePost);
 
+// POST /api/posts/:id/report - Report a post
+router.post('/:id/report', requireAuth, postsController.reportPost);
+
 export default router;
