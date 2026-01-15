@@ -98,13 +98,11 @@ router.get('/google/callback', passport_1.default.authenticate('google', { failu
             });
             // Set Cookies
             (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
-            // Successful authentication, redirect to frontend
+            // Successful authentication, redirect to frontend (cookies carry auth)
             const frontendUrl = process.env.VITE_FRONTEND_URL ||
                 (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
-            // We still pass the token in query param for now to ensure frontend compatibility, 
-            // but frontend should preferably use the cookie.
             console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
-            res.redirect(`${frontendUrl}/feed?token=${accessToken}`);
+            res.redirect(`${frontendUrl}/feed`);
         }
     }
     catch (error) {
