@@ -344,7 +344,7 @@ exports.postsController = {
     // POST /api/posts - Create new post
     createPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { content, mediaUrl, mediaType, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle } = req.body;
+            const { content, mediaUrl, mediaType, mediaItems, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle } = req.body;
             if (!content || !authorId) {
                 return res.status(400).json({ success: false, error: 'Missing required fields', message: 'content and authorId are required' });
             }
@@ -373,7 +373,7 @@ exports.postsController = {
             const hashtags = (0, hashtagUtils_1.getHashtagsFromText)(content);
             const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
             const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
-            const newPost = Object.assign({ id: postId, author: authorEmbed, content, mediaUrl: mediaUrl || undefined, mediaType: mediaType || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
+            const newPost = Object.assign({ id: postId, author: authorEmbed, content, mediaUrl: mediaUrl || undefined, mediaType: mediaType || undefined, mediaItems: mediaItems || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
                 isTimeCapsule: true,
                 unlockDate: unlockDate || null,
                 isUnlocked: unlockDate ? Date.now() >= unlockDate : true,
