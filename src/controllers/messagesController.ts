@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { getMessagesCollection, IMessage } from '../models/Message';
 import { ObjectId } from 'mongodb';
-import { getDB } from '../db';
+import { getDB, isDBConnected } from '../db';
 
 export const messagesController = {
   // GET /api/messages/conversations - Get all conversations for a user
@@ -13,6 +13,13 @@ export const messagesController = {
         return res.status(400).json({
           success: false,
           message: 'User ID is required'
+        });
+      }
+
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: []
         });
       }
 
@@ -102,6 +109,13 @@ export const messagesController = {
         });
       }
 
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: []
+        });
+      }
+
       const messagesCollection = getMessagesCollection();
 
       const messages = await messagesCollection.find({
@@ -150,6 +164,13 @@ export const messagesController = {
         });
       }
 
+      if (!isDBConnected()) {
+        return res.status(503).json({
+          success: false,
+          message: 'Messaging service is temporarily unavailable'
+        });
+      }
+
       const messagesCollection = getMessagesCollection();
 
       const message: IMessage = {
@@ -190,6 +211,13 @@ export const messagesController = {
         return res.status(400).json({
           success: false,
           message: 'Text and user ID are required'
+        });
+      }
+
+      if (!isDBConnected()) {
+        return res.status(503).json({
+          success: false,
+          message: 'Messaging service is temporarily unavailable'
         });
       }
 
@@ -255,6 +283,13 @@ export const messagesController = {
         });
       }
 
+      if (!isDBConnected()) {
+        return res.status(503).json({
+          success: false,
+          message: 'Messaging service is temporarily unavailable'
+        });
+      }
+
       const messagesCollection = getMessagesCollection();
       const message = await messagesCollection.findOne({ _id: new ObjectId(messageId) });
       
@@ -299,6 +334,13 @@ export const messagesController = {
         });
       }
 
+      if (!isDBConnected()) {
+        return res.status(503).json({
+          success: false,
+          message: 'Messaging service is temporarily unavailable'
+        });
+      }
+
       const messagesCollection = getMessagesCollection();
 
       await messagesCollection.deleteMany({
@@ -330,6 +372,13 @@ export const messagesController = {
         return res.status(400).json({
           success: false,
           message: 'Sender ID and receiver ID are required'
+        });
+      }
+
+      if (!isDBConnected()) {
+        return res.status(503).json({
+          success: false,
+          message: 'Messaging service is temporarily unavailable'
         });
       }
 

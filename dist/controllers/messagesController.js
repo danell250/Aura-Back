@@ -24,6 +24,12 @@ exports.messagesController = {
                     message: 'User ID is required'
                 });
             }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({
+                    success: true,
+                    data: []
+                });
+            }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const db = (0, db_1.getDB)();
             // Get latest message for each conversation
@@ -101,6 +107,12 @@ exports.messagesController = {
                     message: 'Current user ID is required'
                 });
             }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({
+                    success: true,
+                    data: []
+                });
+            }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const messages = yield messagesCollection.find({
                 $or: [
@@ -141,6 +153,12 @@ exports.messagesController = {
                     message: 'Sender ID, receiver ID, and text are required'
                 });
             }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({
+                    success: false,
+                    message: 'Messaging service is temporarily unavailable'
+                });
+            }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const message = {
                 senderId,
@@ -177,6 +195,12 @@ exports.messagesController = {
                 return res.status(400).json({
                     success: false,
                     message: 'Text and user ID are required'
+                });
+            }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({
+                    success: false,
+                    message: 'Messaging service is temporarily unavailable'
                 });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
@@ -230,6 +254,12 @@ exports.messagesController = {
                     message: 'User ID is required'
                 });
             }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({
+                    success: false,
+                    message: 'Messaging service is temporarily unavailable'
+                });
+            }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const message = yield messagesCollection.findOne({ _id: new mongodb_1.ObjectId(messageId) });
             if (!message) {
@@ -268,6 +298,12 @@ exports.messagesController = {
                     message: 'userId and otherUserId are required'
                 });
             }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({
+                    success: false,
+                    message: 'Messaging service is temporarily unavailable'
+                });
+            }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             yield messagesCollection.deleteMany({
                 $or: [
@@ -296,6 +332,12 @@ exports.messagesController = {
                 return res.status(400).json({
                     success: false,
                     message: 'Sender ID and receiver ID are required'
+                });
+            }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({
+                    success: false,
+                    message: 'Messaging service is temporarily unavailable'
                 });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();

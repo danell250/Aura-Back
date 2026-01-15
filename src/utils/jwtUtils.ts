@@ -68,8 +68,8 @@ export const setTokenCookies = (res: Response, accessToken: string, refreshToken
   // Access Token Cookie
   res.cookie('accessToken', accessToken, {
     httpOnly: true,
-    secure: isProduction, // true in production (requires HTTPS)
-    sameSite: 'lax', // Protects against CSRF
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
     maxAge: 15 * 60 * 1000 // 15 minutes
   });
 
@@ -77,7 +77,7 @@ export const setTokenCookies = (res: Response, accessToken: string, refreshToken
   res.cookie('refreshToken', refreshToken, {
     httpOnly: true,
     secure: isProduction,
-    sameSite: 'lax',
+    sameSite: isProduction ? 'none' : 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   });
 };
@@ -89,13 +89,13 @@ export const clearTokenCookies = (res: Response) => {
   res.clearCookie('accessToken', {
     httpOnly: true,
     secure: isProduction,
-    sameSite: 'lax'
+    sameSite: isProduction ? 'none' : 'lax'
   });
 
   res.clearCookie('refreshToken', {
     httpOnly: true,
     secure: isProduction,
-    sameSite: 'lax'
+    sameSite: isProduction ? 'none' : 'lax'
   });
 };
 
