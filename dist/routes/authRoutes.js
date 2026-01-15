@@ -203,6 +203,20 @@ router.post('/refresh-token', (req, res) => __awaiter(void 0, void 0, void 0, fu
         });
     }
 }));
+// Get current authenticated user (JWT or session)
+router.get('/user', authMiddleware_1.requireAuth, (req, res) => {
+    const user = req.user;
+    if (!user) {
+        return res.status(401).json({
+            success: false,
+            error: 'Not authenticated'
+        });
+    }
+    res.json({
+        success: true,
+        user
+    });
+});
 // Logout route
 router.post('/logout', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
