@@ -108,6 +108,38 @@ export const uploadFile = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Failed to upload file to storage bucket:', error);
-    res.status(500).json({ error: 'Failed to upload file' });
+
+    try {
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+
+      const filePath = path.join(uploadsDir, filename);
+      fs.writeFileSync(filePath, req.file.buffer);
+
+      const urlFromBase = `/uploads/${filename}`;
+
+      const db = getDB();
+      await db.collection('mediaFiles').insertOne({
+        storageProvider: 'local',
+        path: filePath,
+        filename: objectKey,
+        originalName: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        url: urlFromBase,
+        scanStatus: 'not_enabled',
+        uploadedAt: new Date().toISOString()
+      });
+
+      return res.json({
+        url: urlFromBase,
+        filename: objectKey,
+        mimetype: req.file.mimetype
+      });
+    } catch (localError) {
+      console.error('Failed to store file locally after storage bucket failure:', localError);
+      return res.status(500).json({ error: 'Failed to upload file' });
+    }
   }
 };

@@ -324,13 +324,18 @@ exports.messagesController = {
             });
         }
     }),
-    // PUT /api/messages/mark-read - Mark messages as read
     markAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { senderId, receiverId, userId, otherUserId, currentUserId } = req.body;
             const authUser = req.user;
-            const resolvedReceiverId = receiverId || currentUserId || userId || (authUser === null || authUser === void 0 ? void 0 : authUser.id);
-            const resolvedSenderId = senderId || otherUserId;
+            const bodySenderId = senderId || otherUserId;
+            const bodyReceiverId = receiverId || currentUserId || userId;
+            const querySenderId = req.query.senderId || req.query.otherUserId;
+            const queryReceiverId = req.query.receiverId ||
+                req.query.currentUserId ||
+                req.query.userId;
+            const resolvedReceiverId = bodyReceiverId || queryReceiverId || (authUser === null || authUser === void 0 ? void 0 : authUser.id);
+            const resolvedSenderId = bodySenderId || querySenderId;
             if (!resolvedSenderId || !resolvedReceiverId) {
                 return res.status(400).json({
                     success: false,

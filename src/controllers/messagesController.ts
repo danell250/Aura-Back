@@ -363,14 +363,22 @@ export const messagesController = {
     }
   },
 
-  // PUT /api/messages/mark-read - Mark messages as read
   markAsRead: async (req: Request, res: Response) => {
     try {
       const { senderId, receiverId, userId, otherUserId, currentUserId } = req.body;
       const authUser = (req as any).user as any | undefined;
 
-      const resolvedReceiverId = receiverId || currentUserId || userId || authUser?.id;
-      const resolvedSenderId = senderId || otherUserId;
+      const bodySenderId = senderId || otherUserId;
+      const bodyReceiverId = receiverId || currentUserId || userId;
+
+      const querySenderId = (req.query.senderId as string) || (req.query.otherUserId as string);
+      const queryReceiverId =
+        (req.query.receiverId as string) ||
+        (req.query.currentUserId as string) ||
+        (req.query.userId as string);
+
+      const resolvedReceiverId = bodyReceiverId || queryReceiverId || authUser?.id;
+      const resolvedSenderId = bodySenderId || querySenderId;
       
       if (!resolvedSenderId || !resolvedReceiverId) {
         return res.status(400).json({
