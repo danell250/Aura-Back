@@ -65,8 +65,8 @@ function connectDB() {
             console.log(`🔄 Attempting to connect to MongoDB (attempt ${connectionAttempts}/${maxRetries})...`);
             yield client.connect();
             // Test the connection
-            yield client.db("admin").command({ ping: 1 });
             db = client.db("aura");
+            yield db.command({ ping: 1 });
             exports.isConnected = isConnected = true;
             connectionAttempts = 0; // Reset on successful connection
             // Initialize collections
@@ -191,7 +191,7 @@ function checkDBHealth() {
             if (!isConnected || !db) {
                 return false;
             }
-            yield client.db("admin").command({ ping: 1 });
+            yield db.command({ ping: 1 });
             return true;
         }
         catch (error) {

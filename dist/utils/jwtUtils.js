@@ -12,47 +12,120 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.authenticateJWT = exports.verifyToken = exports.generateToken = void 0;
+exports.authenticateJWT = exports.clearTokenCookies = exports.setTokenCookies = exports.verifyRefreshToken = exports.verifyAccessToken = exports.generateRefreshToken = exports.generateAccessToken = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = require("../db");
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_jwt_secret_for_dev';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d'; // 7 days by default
-// Generate JWT token
-const generateToken = (user) => {
+const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || 'fallback_refresh_token_secret_for_dev';
+const ACCESS_TOKEN_EXPIRES_IN = '15m'; // 15 minutes
+const REFRESH_TOKEN_EXPIRES_IN = '7d'; // 7 days
+// Generate Access Token (Short-lived)
+const generateAccessToken = (user) => {
     const payload = {
         id: user.id,
         email: user.email,
         name: user.name,
-        iat: Math.floor(Date.now() / 1000), // issued at time
-        exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60) // expires in 7 days
+        type: 'access'
     };
-    return jsonwebtoken_1.default.sign(payload, JWT_SECRET, { algorithm: 'HS256' });
+    return jsonwebtoken_1.default.sign(payload, JWT_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: ACCESS_TOKEN_EXPIRES_IN
+    });
 };
-exports.generateToken = generateToken;
-// Verify JWT token
-const verifyToken = (token) => {
+exports.generateAccessToken = generateAccessToken;
+// Generate Refresh Token (Long-lived)
+const generateRefreshToken = (user) => {
+    const payload = {
+        id: user.id,
+        type: 'refresh'
+    };
+    return jsonwebtoken_1.default.sign(payload, REFRESH_TOKEN_SECRET, {
+        algorithm: 'HS256',
+        expiresIn: REFRESH_TOKEN_EXPIRES_IN
+    });
+};
+exports.generateRefreshToken = generateRefreshToken;
+// Verify Access Token
+const verifyAccessToken = (token) => {
     try {
         const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+        if (decoded.type !== 'access' && decoded.type !== undefined)
+            return null; // Ensure it's an access token (or legacy token without type)
         return decoded;
     }
     catch (error) {
-        console.error('JWT verification error:', error);
+        // console.error('JWT verification error:', error);
         return null;
     }
 };
-exports.verifyToken = verifyToken;
-// Middleware to protect routes with JWT
+exports.verifyAccessToken = verifyAccessToken;
+// Verify Refresh Token
+const verifyRefreshToken = (token) => {
+    try {
+        const decoded = jsonwebtoken_1.default.verify(token, REFRESH_TOKEN_SECRET, { algorithms: ['HS256'] });
+        if (decoded.type !== 'refresh')
+            return null;
+        return decoded;
+    }
+    catch (error) {
+        console.error('Refresh token verification error:', error);
+        return null;
+    }
+};
+exports.verifyRefreshToken = verifyRefreshToken;
+// Set Token Cookies
+const setTokenCookies = (res, accessToken, refreshToken) => {
+    const isProduction = process.env.NODE_ENV === 'production';
+    // Access Token Cookie
+    res.cookie('accessToken', accessToken, {
+        httpOnly: true,
+        secure: isProduction, // true in production (requires HTTPS)
+        sameSite: 'lax', // Protects against CSRF
+        maxAge: 15 * 60 * 1000 // 15 minutes
+    });
+    // Refresh Token Cookie
+    res.cookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
+};
+exports.setTokenCookies = setTokenCookies;
+// Clear Token Cookies
+const clearTokenCookies = (res) => {
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.clearCookie('accessToken', {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax'
+    });
+    res.clearCookie('refreshToken', {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'lax'
+    });
+};
+exports.clearTokenCookies = clearTokenCookies;
+// Middleware to protect routes with JWT (Updated to check cookies)
 const authenticateJWT = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    let token = null;
+    // 1. Check Cookies first
+    if (req.cookies && req.cookies.accessToken) {
+        token = req.cookies.accessToken;
+    }
+    // 2. Check Authorization Header (fallback)
+    else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
+    if (!token) {
         return res.status(401).json({
             success: false,
             error: 'Authentication required',
             message: 'Please provide a valid authorization token'
         });
     }
-    const token = authHeader.split(' ')[1]; // Extract token after "Bearer "
-    const decoded = (0, exports.verifyToken)(token);
+    const decoded = (0, exports.verifyAccessToken)(token);
     if (!decoded) {
         return res.status(403).json({
             success: false,

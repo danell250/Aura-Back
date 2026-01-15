@@ -1,11 +1,45 @@
 import { Router, Request, Response } from 'express';
 import passport from 'passport';
+import bcrypt from 'bcryptjs';
+import rateLimit from 'express-rate-limit';
 import { getDB } from '../db';
 import { requireAuth, attachUser } from '../middleware/authMiddleware';
-import { generateToken } from '../utils/jwtUtils';
+import { 
+  generateAccessToken, 
+  generateRefreshToken, 
+  setTokenCookies, 
+  clearTokenCookies, 
+  verifyRefreshToken 
+} from '../utils/jwtUtils';
+import { logSecurityEvent } from '../utils/securityLogger';
 import { User } from '../types';
 
 const router = Router();
+
+const loginRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logSecurityEvent({
+      req,
+      type: 'rate_limit_triggered',
+      route: '/login',
+      metadata: {
+        key: 'login',
+        max: 5,
+        windowMs: 60 * 1000
+      }
+    });
+
+    res.status(429).json({
+      success: false,
+      error: 'Too many login attempts',
+      message: 'Too many login attempts, please try again in a minute'
+    });
+  }
+});
 
 // Google OAuth routes
 router.get('/google',
@@ -30,6 +64,8 @@ router.get('/google/callback',
           ]
         });
         
+        let userToReturn: User;
+
         if (existingUser) {
           // Preserve immutable fields like handle; only update mutable profile fields and timestamps
           const preservedHandle = existingUser.handle;
@@ -53,6 +89,7 @@ router.get('/google/callback',
             { $set: updates }
           );
           console.log('Updated existing user after OAuth:', existingUser.id);
+          userToReturn = { ...existingUser, ...updates } as User;
         } else {
           // Create new user; generate and persist a handle once
           const newUser = {
@@ -65,19 +102,38 @@ router.get('/google/callback',
             trustScore: 10,
             activeGlow: 'none',
             acquaintances: [],
-            blockedUsers: []
+            blockedUsers: [],
+            refreshTokens: []
           };
           
           await db.collection('users').insertOne(newUser);
           console.log('Created new user after OAuth:', newUser.id);
+          userToReturn = newUser as User;
         }
       
-      // Successful authentication, redirect to frontend with token
-      const frontendUrl = process.env.VITE_FRONTEND_URL ||
-        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
-      const token = generateToken(req.user as any);
-      console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed?token=${token}`);
-      res.redirect(`${frontendUrl}/feed?token=${token}`);
+        // Generate Tokens
+        const accessToken = generateAccessToken(userToReturn);
+        const refreshToken = generateRefreshToken(userToReturn);
+
+        // Store Refresh Token in DB
+        await db.collection('users').updateOne(
+          { id: userToReturn.id },
+          { 
+            $push: { refreshTokens: refreshToken } as any
+          }
+        );
+
+        // Set Cookies
+        setTokenCookies(res, accessToken, refreshToken);
+
+        // Successful authentication, redirect to frontend
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
+        
+        // We still pass the token in query param for now to ensure frontend compatibility, 
+        // but frontend should preferably use the cookie.
+        console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
+        res.redirect(`${frontendUrl}/feed?token=${accessToken}`);
       }
     } catch (error) {
       console.error('Error in OAuth callback:', error);
@@ -86,42 +142,166 @@ router.get('/google/callback',
   }
 );
 
-// Logout route
-router.post('/logout', (req: Request, res: Response) => {
-  req.logout((err) => {
-    if (err) {
-      console.error('Error during logout:', err);
-      return res.status(500).json({
-        success: false,
-        error: 'Logout failed',
-        message: 'An error occurred during logout'
+// Refresh Token Endpoint
+router.post('/refresh-token', async (req: Request, res: Response) => {
+  try {
+    const refreshToken = req.cookies.refreshToken;
+
+    if (!refreshToken) {
+      logSecurityEvent({
+        req,
+        type: 'refresh_failed',
+        metadata: {
+          reason: 'missing_token'
+        }
+      });
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Refresh token required',
+        message: 'Please log in again' 
       });
     }
+
+    const decoded = verifyRefreshToken(refreshToken);
+    if (!decoded) {
+      clearTokenCookies(res);
+      logSecurityEvent({
+        req,
+        type: 'refresh_failed',
+        metadata: {
+          reason: 'invalid_or_expired_token'
+        }
+      });
+      return res.status(403).json({ 
+        success: false, 
+        error: 'Invalid refresh token',
+        message: 'Session expired, please log in again' 
+      });
+    }
+
+    const db = getDB();
+    const user = await db.collection('users').findOne({ id: decoded.id }) as unknown as User;
+
+    if (!user || !user.refreshTokens || !user.refreshTokens.includes(refreshToken)) {
+      clearTokenCookies(res);
+      logSecurityEvent({
+        req,
+        type: 'refresh_failed',
+        userId: decoded.id,
+        metadata: {
+          reason: 'token_not_found_for_user'
+        }
+      });
+      return res.status(403).json({ 
+        success: false, 
+        error: 'Invalid refresh token',
+        message: 'Session invalid' 
+      });
+    }
+
+    // Token Rotation: Remove old, add new
+    const newAccessToken = generateAccessToken(user);
+    const newRefreshToken = generateRefreshToken(user);
+
+    await db.collection('users').updateOne(
+      { id: user.id },
+      { 
+        $pull: { refreshTokens: refreshToken } as any,
+      }
+    );
     
-    req.session.destroy((err) => {
+    await db.collection('users').updateOne(
+        { id: user.id },
+        {
+            $push: { refreshTokens: newRefreshToken } as any
+        }
+    );
+
+    setTokenCookies(res, newAccessToken, newRefreshToken);
+
+    logSecurityEvent({
+      req,
+      type: 'refresh_success',
+      userId: user.id
+    });
+
+    res.json({
+      success: true,
+      accessToken: newAccessToken, // Client might update memory state
+      message: 'Token refreshed successfully'
+    });
+
+  } catch (error) {
+    console.error('Error refreshing token:', error);
+    clearTokenCookies(res);
+    logSecurityEvent({
+      req,
+      type: 'refresh_failed',
+      metadata: {
+        reason: 'exception',
+        errorMessage: error instanceof Error ? error.message : String(error)
+      }
+    });
+    res.status(500).json({ 
+      success: false, 
+      error: 'Refresh failed',
+      message: 'Internal server error' 
+    });
+  }
+});
+
+// Logout route
+router.post('/logout', async (req: Request, res: Response) => {
+  try {
+    const refreshToken = req.cookies.refreshToken;
+    
+    if (refreshToken) {
+      const db = getDB();
+      // Try to find user with this refresh token and remove it
+      // Since we don't have user ID in request guaranteed if token expired, we search by token
+      // But efficiently we might need ID. Let's try verify first.
+      const decoded = verifyRefreshToken(refreshToken);
+      if (decoded) {
+        await db.collection('users').updateOne(
+          { id: decoded.id },
+          { $pull: { refreshTokens: refreshToken } as any }
+        );
+      }
+    }
+
+    clearTokenCookies(res);
+
+    req.logout((err) => {
       if (err) {
-        console.error('Error destroying session:', err);
-        return res.status(500).json({
-          success: false,
-          error: 'Session cleanup failed',
-          message: 'An error occurred cleaning up session'
-        });
+        console.error('Error during passport logout:', err);
       }
       
-      res.json({ 
-        success: true, 
-        message: 'Logged out successfully' 
+      req.session.destroy((err) => {
+        if (err) {
+          console.error('Error destroying session:', err);
+        }
+        res.json({ 
+          success: true, 
+          message: 'Logged out successfully' 
+        });
       });
     });
-  });
+  } catch (error) {
+    console.error('Error in logout:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Logout error',
+      message: 'Internal server error' 
+    });
+  }
 });
 
 // Get current user info
 router.get('/user', attachUser, (req: Request, res: Response) => {
-  if (req.isAuthenticated && req.isAuthenticated() && req.user) {
+  if ((req as any).user) {
     res.json({ 
       success: true,
-      user: req.user,
+      user: (req as any).user,
       authenticated: true
     });
   } else {
@@ -134,21 +314,28 @@ router.get('/user', attachUser, (req: Request, res: Response) => {
 });
 
 // Check authentication status
-router.get('/status', (req: Request, res: Response) => {
-  const isAuthenticated = req.isAuthenticated && req.isAuthenticated();
+router.get('/status', attachUser, (req: Request, res: Response) => {
+  const isAuthenticated = !!(req as any).user;
   res.json({
     success: true,
     authenticated: isAuthenticated,
-    user: isAuthenticated ? req.user : null
+    user: isAuthenticated ? (req as any).user : null
   });
 });
 
-// Manual login endpoint (for email/password authentication)
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   try {
     const { identifier, password } = req.body;
     
     if (!identifier || !password) {
+      logSecurityEvent({
+        req,
+        type: 'login_failed',
+        identifier,
+        metadata: {
+          reason: 'missing_credentials'
+        }
+      });
       return res.status(400).json({
         success: false,
         error: 'Missing credentials',
@@ -159,7 +346,6 @@ router.post('/login', async (req: Request, res: Response) => {
     const db = getDB();
     const normalizedIdentifier = identifier.toLowerCase().trim();
     
-    // Find user by email or handle
     const user = await db.collection('users').findOne({
       $or: [
         { email: normalizedIdentifier },
@@ -168,6 +354,14 @@ router.post('/login', async (req: Request, res: Response) => {
     }) as unknown as User;
     
     if (!user) {
+      logSecurityEvent({
+        req,
+        type: 'login_failed',
+        identifier: normalizedIdentifier,
+        metadata: {
+          reason: 'user_not_found'
+        }
+      });
       return res.status(401).json({
         success: false,
         error: 'Invalid credentials',
@@ -175,11 +369,42 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
     
-    // In production, you would verify the password hash here
-    // For now, we'll accept any password for demo purposes
-    // TODO: Implement proper password hashing with bcrypt
+    if (!user.passwordHash) {
+      logSecurityEvent({
+        req,
+        type: 'login_failed',
+        userId: user.id,
+        identifier: normalizedIdentifier,
+        metadata: {
+          reason: 'no_password_hash'
+        }
+      });
+       return res.status(401).json({
+        success: false,
+        error: 'Invalid credentials',
+        message: 'Please log in with Google or reset your password'
+      });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.passwordHash);
     
-    // Update last login
+    if (!isValidPassword) {
+      logSecurityEvent({
+        req,
+        type: 'login_failed',
+        userId: user.id,
+        identifier: normalizedIdentifier,
+        metadata: {
+          reason: 'invalid_password'
+        }
+      });
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid credentials',
+        message: 'Invalid password'
+      });
+    }
+    
     await db.collection('users').updateOne(
       { id: user.id },
       { 
@@ -190,27 +415,47 @@ router.post('/login', async (req: Request, res: Response) => {
       }
     );
     
-    // Create session
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+
+    await db.collection('users').updateOne(
+      { id: user.id },
+      { $push: { refreshTokens: refreshToken } as any }
+    );
+
+    setTokenCookies(res, accessToken, refreshToken);
+
     req.login(user, (err) => {
       if (err) {
         console.error('Error creating session:', err);
-        return res.status(500).json({
-          success: false,
-          error: 'Session creation failed',
-          message: 'Failed to create user session'
-        });
       }
+
+      logSecurityEvent({
+        req,
+        type: 'login_success',
+        userId: user.id,
+        identifier: normalizedIdentifier
+      });
       
       res.json({
         success: true,
         user: user,
-        token: generateToken(user),
+        token: accessToken, // Return access token for immediate use if needed
         message: 'Login successful'
       });
     });
     
   } catch (error) {
     console.error('Error in manual login:', error);
+    logSecurityEvent({
+      req,
+      type: 'login_failed',
+      identifier: req.body?.identifier,
+      metadata: {
+        reason: 'exception',
+        errorMessage: error instanceof Error ? error.message : String(error)
+      }
+    });
     res.status(500).json({
       success: false,
       error: 'Login failed',
@@ -248,6 +493,9 @@ router.post('/register', async (req: Request, res: Response) => {
         message: 'An account with this email already exists'
       });
     }
+
+    // Hash Password
+    const passwordHash = await bcrypt.hash(password, 10);
     
     // Create new user
     const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -274,28 +522,36 @@ router.post('/register', async (req: Request, res: Response) => {
       activeGlow: 'none',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      lastLogin: new Date().toISOString()
-      // TODO: Hash password with bcrypt before storing
-      // passwordHash: await bcrypt.hash(password, 10)
+      lastLogin: new Date().toISOString(),
+      passwordHash: passwordHash, // Store hashed password
+      refreshTokens: []
     };
     
     await db.collection('users').insertOne(newUser);
+
+    // Generate Tokens
+    const accessToken = generateAccessToken(newUser as unknown as User);
+    const refreshToken = generateRefreshToken(newUser as unknown as User);
+
+    // Store Refresh Token
+    await db.collection('users').updateOne(
+      { id: newUser.id },
+      { $push: { refreshTokens: refreshToken } as any }
+    );
+
+    // Set Cookies
+    setTokenCookies(res, accessToken, refreshToken);
     
     // Create session for new user
     req.login(newUser, (err) => {
       if (err) {
         console.error('Error creating session for new user:', err);
-        return res.status(500).json({
-          success: false,
-          error: 'Registration successful but session creation failed',
-          message: 'Please try logging in manually'
-        });
       }
       
       res.status(201).json({
         success: true,
         user: newUser,
-        token: generateToken(newUser as unknown as User),
+        token: accessToken,
         message: 'Registration successful'
       });
     });

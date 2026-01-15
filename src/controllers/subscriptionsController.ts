@@ -1,5 +1,53 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
+import axios from 'axios';
+import { logSecurityEvent } from '../utils/securityLogger';
+
+async function verifyPayPalWebhookSignature(req: Request): Promise<boolean> {
+  const webhookId = process.env.PAYPAL_WEBHOOK_ID;
+  const clientId = process.env.PAYPAL_CLIENT_ID;
+  const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+  if (!webhookId || !clientId || !clientSecret) {
+    if (process.env.NODE_ENV === 'production') {
+      return false;
+    }
+    return true;
+  }
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const apiBase = process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com';
+  const tokenResponse = await axios.post(
+    `${apiBase}/v1/oauth2/token`,
+    'grant_type=client_credentials',
+    {
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    }
+  );
+  const accessToken = tokenResponse.data.access_token;
+  const headers = req.headers;
+  const verificationBody = {
+    auth_algo: headers['paypal-auth-algo'],
+    cert_url: headers['paypal-cert-url'],
+    transmission_id: headers['paypal-transmission-id'],
+    transmission_sig: headers['paypal-transmission-sig'],
+    transmission_time: headers['paypal-transmission-time'],
+    webhook_id: webhookId,
+    webhook_event: req.body
+  };
+  const verifyResponse = await axios.post(
+    `${apiBase}/v1/notifications/verify-webhook-signature`,
+    verificationBody,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return verifyResponse.data.verification_status === 'SUCCESS';
+}
 
 interface Subscription {
   id: string;
@@ -96,14 +144,34 @@ export const subscriptionsController = {
   async handleWebhook(req: Request, res: Response) {
     try {
       const event = req.body;
-      
-      // Verify webhook signature in production
-      // const isValid = verifyPayPalWebhookSignature(req);
-      // if (!isValid) {
-      //   return res.status(401).json({ error: 'Invalid webhook signature' });
-      // }
+      const isValid = await verifyPayPalWebhookSignature(req);
+      if (!isValid) {
+        logSecurityEvent({
+          req,
+          type: 'webhook_signature_failed',
+          metadata: {
+            source: 'subscriptions',
+            eventId: event && event.id,
+            eventType: event && event.event_type
+          }
+        });
+        return res.status(401).json({ error: 'Invalid webhook signature' });
+      }
 
       const db = getDB();
+
+      if (event && event.id) {
+        const existing = await db.collection('paypalWebhookEvents').findOne({ id: event.id });
+        if (existing) {
+          return res.status(200).json({ message: 'Event already processed' });
+        }
+        await db.collection('paypalWebhookEvents').insertOne({
+          id: event.id,
+          eventType: event.event_type,
+          source: 'subscriptions',
+          createdAt: new Date().toISOString()
+        });
+      }
 
       switch (event.event_type) {
         case 'BILLING.SUBSCRIPTION.ACTIVATED':
@@ -135,11 +203,6 @@ export const subscriptionsController = {
           );
           break;
 
-        case 'PAYMENT.SALE.COMPLETED':
-          // Handle successful payment
-          console.log('Payment completed for subscription:', event.resource.billing_agreement_id);
-          break;
-
         default:
           console.log('Unhandled webhook event:', event.event_type);
       }
@@ -147,6 +210,15 @@ export const subscriptionsController = {
       res.status(200).json({ message: 'Webhook processed successfully' });
     } catch (error) {
       console.error('Error processing webhook:', error);
+      logSecurityEvent({
+        req,
+        type: 'payment_failure',
+        metadata: {
+          source: 'subscriptions',
+          reason: 'webhook_exception',
+          errorMessage: error instanceof Error ? error.message : String(error)
+        }
+      });
       res.status(500).json({ error: 'Failed to process webhook' });
     }
   }

@@ -39,6 +39,12 @@ export interface User {
   lastLogin?: string;
   privacySettings?: PrivacySettings;
   archivedChats?: string[];
+  refreshTokens?: string[]; // Array of valid refresh tokens
+  serendipitySkips?: {
+    targetUserId: string;
+    lastSkippedAt: string;
+    count: number;
+  }[];
 }
 
 export interface PrivacySettings {

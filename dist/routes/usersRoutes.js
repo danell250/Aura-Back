@@ -52,6 +52,7 @@ router.post('/:id/record-profile-view', usersController_1.usersController.record
 // GET /api/users/:id - Get user by ID (public)
 router.get('/:id', usersController_1.usersController.getUserById);
 router.get('/:id/serendipity-matches', usersController_1.usersController.getSerendipityMatches);
+router.post('/:id/serendipity-skip', usersController_1.usersController.addSerendipitySkip);
 // PUT /api/users/:id - Update user
 router.put('/:id', usersController_1.usersController.updateUser);
 // DELETE /api/users/:id - Delete user

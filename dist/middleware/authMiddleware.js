@@ -18,11 +18,16 @@ const firebaseAdmin_1 = __importDefault(require("../firebaseAdmin"));
 const jwtUtils_1 = require("../utils/jwtUtils");
 // Middleware to check if user is authenticated via JWT or Firebase
 const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
-    // 1. Check JWT Token
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.split(' ')[1];
-        const decoded = (0, jwtUtils_1.verifyToken)(token);
+    // 1. Check JWT Token (Cookie or Header)
+    let token = null;
+    if (req.cookies && req.cookies.accessToken) {
+        token = req.cookies.accessToken;
+    }
+    else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
+    if (token) {
+        const decoded = (0, jwtUtils_1.verifyAccessToken)(token);
         if (decoded) {
             try {
                 const db = (0, db_1.getDB)();
@@ -37,6 +42,7 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
                 console.error('Error retrieving user from database:', error);
             }
         }
+        // If token exists but is invalid/expired
         return res.status(403).json({
             success: false,
             error: 'Invalid token',
@@ -47,12 +53,13 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
     if (req.isAuthenticated && req.isAuthenticated()) {
         return next();
     }
-    // 3. Check Bearer Token (Firebase)
+    // 3. Check Bearer Token (Firebase) - only if not handled by our JWT
+    const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.split(' ')[1];
+        const firebaseToken = authHeader.split(' ')[1];
         try {
             // Verify Firebase token using Admin SDK
-            const decodedToken = yield firebaseAdmin_1.default.auth().verifyIdToken(token);
+            const decodedToken = yield firebaseAdmin_1.default.auth().verifyIdToken(firebaseToken);
             // Token is valid, ensure user is attached
             if (!req.user) {
                 const db = (0, db_1.getDB)();
@@ -94,10 +101,15 @@ exports.requireAuth = requireAuth;
 // Middleware to check if user is authenticated (optional - doesn't block)
 const optionalAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     // Try JWT first
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.split(' ')[1];
-        const decoded = (0, jwtUtils_1.verifyToken)(token);
+    let token = null;
+    if (req.cookies && req.cookies.accessToken) {
+        token = req.cookies.accessToken;
+    }
+    else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
+    if (token) {
+        const decoded = (0, jwtUtils_1.verifyAccessToken)(token);
         if (decoded) {
             try {
                 const db = (0, db_1.getDB)();
@@ -116,11 +128,11 @@ const optionalAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, funct
     if (req.isAuthenticated && req.isAuthenticated()) {
         return next();
     }
-    // Try to authenticate via Bearer token
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.split(' ')[1];
+    // Try to authenticate via Bearer token (Firebase) if not already authenticated
+    if (!req.user && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        const firebaseToken = req.headers.authorization.split(' ')[1];
         try {
-            const decodedToken = yield firebaseAdmin_1.default.auth().verifyIdToken(token);
+            const decodedToken = yield firebaseAdmin_1.default.auth().verifyIdToken(firebaseToken);
             if (decodedToken) {
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decodedToken.uid });
@@ -141,10 +153,15 @@ exports.optionalAuth = optionalAuth;
 const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // 1. JWT Token Auth
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            const token = authHeader.split(' ')[1];
-            const decoded = (0, jwtUtils_1.verifyToken)(token);
+        let token = null;
+        if (req.cookies && req.cookies.accessToken) {
+            token = req.cookies.accessToken;
+        }
+        else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+            token = req.headers.authorization.split(' ')[1];
+        }
+        if (token) {
+            const decoded = (0, jwtUtils_1.verifyAccessToken)(token);
             if (decoded) {
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decoded.id });
@@ -167,11 +184,11 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
             }
             return next();
         }
-        // 3. Bearer Token Auth (Firebase)
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            const token = authHeader.split(' ')[1];
+        // 3. Bearer Token Auth (Firebase) - if not already handled
+        if (!req.user && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+            const firebaseToken = req.headers.authorization.split(' ')[1];
             try {
-                const decodedToken = yield firebaseAdmin_1.default.auth().verifyIdToken(token);
+                const decodedToken = yield firebaseAdmin_1.default.auth().verifyIdToken(firebaseToken);
                 if (decodedToken) {
                     const db = (0, db_1.getDB)();
                     const user = yield db.collection('users').findOne({ id: decodedToken.uid });
@@ -190,7 +207,7 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
                 }
             }
             catch (e) {
-                console.warn('Failed to verify token in attachUser:', e);
+                // console.warn('Failed to verify token in attachUser:', e);
             }
         }
         // 4. Simple User ID Auth (for manually registered users)

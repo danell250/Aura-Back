@@ -127,6 +127,18 @@ exports.adsController = {
             }
             const newAd = Object.assign(Object.assign({}, adData), { id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, timestamp: Date.now(), reactions: {}, reactionUsers: {}, hashtags: (0, hashtagUtils_1.getHashtagsFromText)(adData.description || '') });
             yield db.collection('ads').insertOne(newAd);
+            yield db.collection('adAnalytics').insertOne({
+                adId: newAd.id,
+                ownerId: newAd.ownerId,
+                impressions: 0,
+                clicks: 0,
+                ctr: 0,
+                reach: 0,
+                engagement: 0,
+                conversions: 0,
+                spend: 0,
+                lastUpdated: Date.now()
+            });
             // Increment ads used count if subscription is linked and not special user
             if (adData.subscriptionId && !isSpecialUser) {
                 yield db.collection('adSubscriptions').updateOne({ id: adData.subscriptionId }, {

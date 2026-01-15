@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import passport from 'passport';
 import session from 'express-session';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import cookieParser from 'cookie-parser';
 import geminiRoutes from './routes/geminiRoutes';
 import birthdayRoutes from './routes/birthdayRoutes';
 import uploadRoutes from './routes/uploadRoutes';
@@ -117,9 +118,10 @@ app.use(cors({
     const frontendUrl = process.env.VITE_FRONTEND_URL;
     const allowed = [
       frontendUrl,
-      "https://auraradiance.vercel.app", 
+      "https://auraradiance.vercel.app",
+      "https://aura-front-s1bw.onrender.com",
       "http://localhost:5173"
-    ].filter(Boolean); // Remove any undefined/null values
+    ].filter(Boolean);
 
     if (allowed.includes(origin)) {
       return callback(null, true);
@@ -175,6 +177,7 @@ app.use((req, res, next) => {
 
 // Pre-flight handling is managed by CORS middleware above
 app.use(express.json());
+app.use(cookieParser());
 
 // Debug middleware to log all requests
 app.use((req, res, next) => {
@@ -263,72 +266,8 @@ app.use('/api/messages', messagesRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
 app.use('/api/ad-subscriptions', adSubscriptionsRoutes);
 
-// Payment return routes for PayPal
-app.get('/payment-success', async (req, res) => {
-  console.log('💰 Payment success callback received');
-  const { paymentId, token, PayerID } = req.query;
-  
-  try {
-    // For Personal Pulse one-time payment
-    if (paymentId) {
-      console.log('Activating 14-day access for Personal Pulse payment:', paymentId);
-      
-      // Check if user is authenticated
-      if (req.isAuthenticated && req.isAuthenticated() && req.user) {
-        const user = req.user as any;
-        const userId = user.id;
-        console.log(`Processing payment for user: ${userId}`);
-        
-        const db = getDB();
-        const now = Date.now();
-        const durationDays = 14;
-        const endDate = now + (durationDays * 24 * 60 * 60 * 1000);
-        
-        // Create ad subscription record
-        const newSubscription = {
-          id: `sub-${now}-${Math.random().toString(36).substring(2, 11)}`,
-          userId,
-          packageId: 'pkg-starter',
-          packageName: 'Personal Pulse',
-          status: 'active',
-          startDate: now,
-          endDate,
-          paypalSubscriptionId: null,
-          adsUsed: 0,
-          adLimit: 1,
-          createdAt: now,
-          updatedAt: now
-        };
-        
-        await db.collection('adSubscriptions').insertOne(newSubscription);
-        
-        // Log transaction
-        await db.collection('transactions').insertOne({
-          userId,
-          type: 'ad_subscription',
-          packageId: 'pkg-starter',
-          packageName: 'Personal Pulse',
-          transactionId: paymentId as string,
-          paymentMethod: 'paypal_hosted',
-          status: 'completed',
-          details: {
-            adLimit: 1,
-            durationDays: 14,
-            subscriptionId: newSubscription.id,
-            payerId: PayerID,
-            token
-          },
-          createdAt: new Date().toISOString()
-        });
-        
-        console.log('Successfully created subscription and transaction for Personal Pulse');
-      } else {
-        console.warn('User not authenticated during payment success callback. Cannot allocate resource immediately.');
-        // In a real app, we might store this in a temporary "unclaimed payments" collection 
-        // or redirect to a login page that claims it after login.
-      }
-      
-      res.send(`
+app.get('/payment-success', (_req, res) => {
+  res.send(`
         <!DOCTYPE html>
         <html>
         <head>
@@ -343,11 +282,9 @@ app.get('/payment-success', async (req, res) => {
         </head>
         <body>
           <div class="success">✅ Payment Successful!</div>
-          <div class="message">Your 14-day Personal Pulse access is now active.</div>
+          <div class="message">If your payment was completed, your access will be activated shortly after verification.</div>
           <div class="message">Redirecting you back to Aura...</div>
-          <div class="details">Transaction ID: ${paymentId}</div>
           <script>
-            // Ensure we redirect to the main app with a success flag
             setTimeout(function() {
               window.location.href = '/?payment=success';
             }, 3000);
@@ -355,13 +292,6 @@ app.get('/payment-success', async (req, res) => {
         </body>
         </html>
       `);
-    } else {
-      res.redirect('/?payment=success');
-    }
-  } catch (error) {
-    console.error('Payment success error:', error);
-    res.redirect('/?payment=error');
-  }
 });
 
 app.get('/payment-cancelled', async (req, res) => {
@@ -407,7 +337,11 @@ app.get('/share/post/:id', async (req, res) => {
     const avatarUrl = author.avatar || '';
     const isImage = mediaUrl && (post.mediaType === 'image' || /\.(png|jpg|jpeg|webp|gif)$/i.test(mediaUrl));
     const isVideo = mediaUrl && (post.mediaType === 'video' || /\.(mp4|webm|ogg|mov)$/i.test(mediaUrl));
-    const imageForOg = isImage ? mediaUrl : avatarUrl || '';
+    // Use the new logo icon as fallback if no image is present
+    const imageForOg = isImage ? mediaUrl : (avatarUrl || 'https://auraradiance.vercel.app/logo-icon.svg');
+    // Frontend URL for redirection
+    const frontendUrl = `https://auraradiance.vercel.app/p/${post.id}`;
+    
     const html = `<!doctype html>
 <html lang="en">
   <head>
@@ -418,12 +352,18 @@ app.get('/share/post/:id', async (req, res) => {
     <meta property="og:description" content="${description}">
     <meta property="og:type" content="article">
     <meta property="og:url" content="${shareUrl}">
-    ${imageForOg ? `<meta property="og:image" content="${imageForOg}">` : ''}
+    <meta property="og:image" content="${imageForOg}">
     ${isVideo ? `<meta property="og:video" content="${mediaUrl}">` : ''}
     <meta name="twitter:title" content="${title}">
     <meta name="twitter:description" content="${description}">
-    ${imageForOg ? `<meta name="twitter:image" content="${imageForOg}">` : ''}
+    <meta name="twitter:image" content="${imageForOg}">
     <meta name="twitter:card" content="${imageForOg ? 'summary_large_image' : 'summary'}">
+    <script>
+        // Redirect to the frontend app
+        setTimeout(function() {
+          window.location.href = "${frontendUrl}";
+        }, 100);
+    </script>
     <style>
       body{margin:0;background:#0f172a;color:#fff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
       .container{max-width:680px;margin:0 auto;padding:24px}

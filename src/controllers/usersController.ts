@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
 import { calculateUserTrust, recalculateAllTrustScores, getSerendipityMatchesForUser } from '../services/trustService';
+import { logSecurityEvent } from '../utils/securityLogger';
 
 export const usersController = {
   // GET /api/users - Get all users (respects showInSearch privacy setting)
@@ -751,6 +752,18 @@ export const usersController = {
       });
     } catch (error) {
       console.error('Error processing credit purchase:', error);
+      logSecurityEvent({
+        req,
+        type: 'payment_failure',
+        userId: req.params && req.params.id,
+        metadata: {
+          source: 'credit_purchase',
+          reason: 'purchase_exception',
+          bundleName: req.body && req.body.bundleName,
+          credits: req.body && req.body.credits,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        }
+      });
       res.status(500).json({
         success: false,
         error: 'Failed to process credit purchase',
@@ -1074,6 +1087,82 @@ export const usersController = {
       res.status(500).json({
         success: false,
         error: 'Failed to get serendipity matches',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  addSerendipitySkip: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { targetUserId } = req.body;
+      if (!targetUserId || typeof targetUserId !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid targetUserId',
+          message: 'targetUserId is required'
+        });
+      }
+
+      const db = getDB();
+      const user = await db.collection('users').findOne({ id });
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      const now = new Date().toISOString();
+      const skips = Array.isArray(user.serendipitySkips) ? user.serendipitySkips : [];
+      const existingIndex = skips.findIndex((s: any) => s && s.targetUserId === targetUserId);
+
+      if (existingIndex >= 0) {
+        const existing = skips[existingIndex];
+        skips[existingIndex] = {
+          targetUserId,
+          lastSkippedAt: now,
+          count: typeof existing.count === 'number' ? existing.count + 1 : 1
+        };
+      } else {
+        skips.push({
+          targetUserId,
+          lastSkippedAt: now,
+          count: 1
+        });
+      }
+
+      if (skips.length > 100) {
+        skips.sort((a: any, b: any) => {
+          const aTime = new Date(a.lastSkippedAt).getTime();
+          const bTime = new Date(b.lastSkippedAt).getTime();
+          return bTime - aTime;
+        });
+        skips.splice(100);
+      }
+
+      await db.collection('users').updateOne(
+        { id },
+        {
+          $set: {
+            serendipitySkips: skips,
+            updatedAt: now
+          }
+        }
+      );
+
+      console.log('serendipity_skip event', { userId: id, targetUserId, count: skips.find((s: any) => s.targetUserId === targetUserId)?.count });
+
+      res.json({
+        success: true,
+        message: 'Serendipity skip recorded'
+      });
+    } catch (error) {
+      console.error('Error recording serendipity skip:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to record serendipity skip',
         message: 'Internal server error'
       });
     }

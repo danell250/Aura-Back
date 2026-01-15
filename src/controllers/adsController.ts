@@ -144,6 +144,19 @@ export const adsController = {
       
       await db.collection('ads').insertOne(newAd);
       
+      await db.collection('adAnalytics').insertOne({
+        adId: newAd.id,
+        ownerId: newAd.ownerId,
+        impressions: 0,
+        clicks: 0,
+        ctr: 0,
+        reach: 0,
+        engagement: 0,
+        conversions: 0,
+        spend: 0,
+        lastUpdated: Date.now()
+      });
+      
       // Increment ads used count if subscription is linked and not special user
       if (adData.subscriptionId && !isSpecialUser) {
         await db.collection('adSubscriptions').updateOne(

@@ -53,9 +53,8 @@ export async function connectDB(): Promise<Db | null> {
     await client.connect();
     
     // Test the connection
-    await client.db("admin").command({ ping: 1 });
-    
     db = client.db("aura");
+    await db.command({ ping: 1 });
     isConnected = true;
     connectionAttempts = 0; // Reset on successful connection
     
@@ -192,7 +191,7 @@ export async function checkDBHealth(): Promise<boolean> {
       return false;
     }
     
-    await client.db("admin").command({ ping: 1 });
+    await db.command({ ping: 1 });
     return true;
   } catch (error) {
     console.warn('⚠️  Database health check failed:', error);

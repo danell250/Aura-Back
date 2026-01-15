@@ -1,8 +1,35 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { postsController } from '../controllers/postsController';
 import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
+import { logSecurityEvent } from '../utils/securityLogger';
 
 const router = Router();
+
+const postsWriteRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logSecurityEvent({
+      req,
+      type: 'rate_limit_triggered',
+      route: '/posts',
+      metadata: {
+        key: 'posts_write',
+        max: 30,
+        windowMs: 60 * 1000
+      }
+    });
+
+    res.status(429).json({
+      success: false,
+      error: 'Too many requests',
+      message: 'Too many post actions, please slow down'
+    });
+  }
+});
 
 router.get('/health', postsController.health);
 
@@ -18,25 +45,12 @@ router.get('/hashtags/trending', postsController.getTrendingHashtags);
 // GET /api/posts/:id - Get post by ID
 router.get('/:id', optionalAuth, postsController.getPostById);
 
-// POST /api/posts - Create new post
-router.post('/', requireAuth, postsController.createPost);
-
-// PUT /api/posts/:id - Update post
-router.put('/:id', requireAuth, postsController.updatePost);
-
-// DELETE /api/posts/:id - Delete post
-router.delete('/:id', requireAuth, postsController.deletePost);
-
-// POST /api/posts/:id/react - Add reaction to post
-router.post('/:id/react', requireAuth, postsController.reactToPost);
-
-// POST /api/posts/:id/boost - Boost post
-router.post('/:id/boost', requireAuth, postsController.boostPost);
-
-// POST /api/posts/:id/share - Share post
-router.post('/:id/share', requireAuth, postsController.sharePost);
-
-// POST /api/posts/:id/report - Report a post
-router.post('/:id/report', requireAuth, postsController.reportPost);
+router.post('/', postsWriteRateLimiter, requireAuth, postsController.createPost);
+router.put('/:id', postsWriteRateLimiter, requireAuth, postsController.updatePost);
+router.delete('/:id', postsWriteRateLimiter, requireAuth, postsController.deletePost);
+router.post('/:id/react', postsWriteRateLimiter, requireAuth, postsController.reactToPost);
+router.post('/:id/boost', postsWriteRateLimiter, requireAuth, postsController.boostPost);
+router.post('/:id/share', postsWriteRateLimiter, requireAuth, postsController.sharePost);
+router.post('/:id/report', postsWriteRateLimiter, requireAuth, postsController.reportPost);
 
 export default router;

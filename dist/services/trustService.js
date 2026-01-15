@@ -278,6 +278,11 @@ function getSerendipityMatchesForUser(userId_1) {
         const currentAcquaintances = Array.isArray(currentUser.acquaintances) ? currentUser.acquaintances : [];
         const currentBlockedUsers = Array.isArray(currentUser.blockedUsers) ? currentUser.blockedUsers : [];
         const currentBlockedBy = Array.isArray(currentUser.blockedBy) ? currentUser.blockedBy : [];
+        const serendipitySkips = Array.isArray(currentUser.serendipitySkips)
+            ? currentUser.serendipitySkips
+            : [];
+        const skipCooldownMs = 7 * 24 * 60 * 60 * 1000;
+        const skipCutoff = Date.now() - skipCooldownMs;
         const filteredCandidates = candidates.filter(candidate => {
             if (!candidate || !candidate.id)
                 return false;
@@ -299,6 +304,13 @@ function getSerendipityMatchesForUser(userId_1) {
                 return false;
             if (candidateBlockedBy.includes(userId))
                 return false;
+            const skipEntry = serendipitySkips.find(s => s && s.targetUserId === candidateId);
+            if (skipEntry) {
+                const lastTime = new Date(skipEntry.lastSkippedAt).getTime();
+                if (!Number.isNaN(lastTime) && lastTime > skipCutoff) {
+                    return false;
+                }
+            }
             return true;
         });
         const limitedCandidates = filteredCandidates.slice(0, 50);

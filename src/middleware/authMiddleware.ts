@@ -2,16 +2,21 @@ import { Request, Response, NextFunction } from 'express';
 import { getDB } from '../db';
 import { User } from '../types';
 import admin from '../firebaseAdmin';
-import { verifyToken } from '../utils/jwtUtils';
+import { verifyAccessToken } from '../utils/jwtUtils';
 
 // Middleware to check if user is authenticated via JWT or Firebase
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
-  // 1. Check JWT Token
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    
-    const decoded = verifyToken(token);
+  // 1. Check JWT Token (Cookie or Header)
+  let token = null;
+  
+  if (req.cookies && req.cookies.accessToken) {
+    token = req.cookies.accessToken;
+  } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  if (token) {
+    const decoded = verifyAccessToken(token);
     
     if (decoded) {
       try {
@@ -28,6 +33,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
       }
     }
     
+    // If token exists but is invalid/expired
     return res.status(403).json({
       success: false,
       error: 'Invalid token',
@@ -40,13 +46,14 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     return next();
   }
 
-  // 3. Check Bearer Token (Firebase)
+  // 3. Check Bearer Token (Firebase) - only if not handled by our JWT
+  const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
+    const firebaseToken = authHeader.split(' ')[1];
     
     try {
       // Verify Firebase token using Admin SDK
-      const decodedToken = await admin.auth().verifyIdToken(token);
+      const decodedToken = await admin.auth().verifyIdToken(firebaseToken);
       
       // Token is valid, ensure user is attached
       if (!req.user) {
@@ -90,11 +97,15 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
 // Middleware to check if user is authenticated (optional - doesn't block)
 export const optionalAuth = async (req: Request, res: Response, next: NextFunction) => {
   // Try JWT first
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    
-    const decoded = verifyToken(token);
+  let token = null;
+  if (req.cookies && req.cookies.accessToken) {
+    token = req.cookies.accessToken;
+  } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+  
+  if (token) {
+    const decoded = verifyAccessToken(token);
     
     if (decoded) {
       try {
@@ -116,12 +127,12 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
     return next();
   }
 
-  // Try to authenticate via Bearer token
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
+  // Try to authenticate via Bearer token (Firebase) if not already authenticated
+  if (!req.user && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    const firebaseToken = req.headers.authorization.split(' ')[1];
     
     try {
-      const decodedToken = await admin.auth().verifyIdToken(token);
+      const decodedToken = await admin.auth().verifyIdToken(firebaseToken);
       
       if (decodedToken) {
         const db = getDB();
@@ -144,11 +155,15 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
 export const attachUser = async (req: Request, res: Response, next: NextFunction) => {
   try {
     // 1. JWT Token Auth
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
+    let token = null;
+    if (req.cookies && req.cookies.accessToken) {
+      token = req.cookies.accessToken;
+    } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
       
-      const decoded = verifyToken(token);
+    if (token) {
+      const decoded = verifyAccessToken(token);
       
       if (decoded) {
         const db = getDB();
@@ -183,12 +198,12 @@ export const attachUser = async (req: Request, res: Response, next: NextFunction
       return next();
     }
 
-    // 3. Bearer Token Auth (Firebase)
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
+    // 3. Bearer Token Auth (Firebase) - if not already handled
+    if (!req.user && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      const firebaseToken = req.headers.authorization.split(' ')[1];
       
       try {
-        const decodedToken = await admin.auth().verifyIdToken(token);
+        const decodedToken = await admin.auth().verifyIdToken(firebaseToken);
         
         if (decodedToken) {
           const db = getDB();
@@ -211,7 +226,7 @@ export const attachUser = async (req: Request, res: Response, next: NextFunction
           req.isAuthenticated = (() => true) as any;
         }
       } catch (e) {
-        console.warn('Failed to verify token in attachUser:', e);
+        // console.warn('Failed to verify token in attachUser:', e);
       }
     }
 

@@ -51,6 +51,7 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const passport_1 = __importDefault(require("passport"));
 const express_session_1 = __importDefault(require("express-session"));
 const passport_google_oauth20_1 = require("passport-google-oauth20");
+const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const geminiRoutes_1 = __importDefault(require("./routes/geminiRoutes"));
 const birthdayRoutes_1 = __importDefault(require("./routes/birthdayRoutes"));
 const uploadRoutes_1 = __importDefault(require("./routes/uploadRoutes"));
@@ -156,8 +157,9 @@ app.use((0, cors_1.default)({
         const allowed = [
             frontendUrl,
             "https://auraradiance.vercel.app",
+            "https://aura-front-s1bw.onrender.com",
             "http://localhost:5173"
-        ].filter(Boolean); // Remove any undefined/null values
+        ].filter(Boolean);
         if (allowed.includes(origin)) {
             return callback(null, true);
         }
@@ -205,6 +207,7 @@ app.use((req, res, next) => {
 });
 // Pre-flight handling is managed by CORS middleware above
 app.use(express_1.default.json());
+app.use((0, cookie_parser_1.default)());
 // Debug middleware to log all requests
 app.use((req, res, next) => {
     console.log(`🔍 Request: ${req.method} ${req.path} - ${new Date().toISOString()}`);
@@ -280,65 +283,8 @@ app.use('/api/notifications', notificationsRoutes_1.default);
 app.use('/api/messages', messagesRoutes_1.default);
 app.use('/api/subscriptions', subscriptionsRoutes_1.default);
 app.use('/api/ad-subscriptions', adSubscriptionsRoutes_1.default);
-// Payment return routes for PayPal
-app.get('/payment-success', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    console.log('💰 Payment success callback received');
-    const { paymentId, token, PayerID } = req.query;
-    try {
-        // For Personal Pulse one-time payment
-        if (paymentId) {
-            console.log('Activating 14-day access for Personal Pulse payment:', paymentId);
-            // Check if user is authenticated
-            if (req.isAuthenticated && req.isAuthenticated() && req.user) {
-                const user = req.user;
-                const userId = user.id;
-                console.log(`Processing payment for user: ${userId}`);
-                const db = (0, db_1.getDB)();
-                const now = Date.now();
-                const durationDays = 14;
-                const endDate = now + (durationDays * 24 * 60 * 60 * 1000);
-                // Create ad subscription record
-                const newSubscription = {
-                    id: `sub-${now}-${Math.random().toString(36).substring(2, 11)}`,
-                    userId,
-                    packageId: 'pkg-starter',
-                    packageName: 'Personal Pulse',
-                    status: 'active',
-                    startDate: now,
-                    endDate,
-                    paypalSubscriptionId: null,
-                    adsUsed: 0,
-                    adLimit: 1,
-                    createdAt: now,
-                    updatedAt: now
-                };
-                yield db.collection('adSubscriptions').insertOne(newSubscription);
-                // Log transaction
-                yield db.collection('transactions').insertOne({
-                    userId,
-                    type: 'ad_subscription',
-                    packageId: 'pkg-starter',
-                    packageName: 'Personal Pulse',
-                    transactionId: paymentId,
-                    paymentMethod: 'paypal_hosted',
-                    status: 'completed',
-                    details: {
-                        adLimit: 1,
-                        durationDays: 14,
-                        subscriptionId: newSubscription.id,
-                        payerId: PayerID,
-                        token
-                    },
-                    createdAt: new Date().toISOString()
-                });
-                console.log('Successfully created subscription and transaction for Personal Pulse');
-            }
-            else {
-                console.warn('User not authenticated during payment success callback. Cannot allocate resource immediately.');
-                // In a real app, we might store this in a temporary "unclaimed payments" collection 
-                // or redirect to a login page that claims it after login.
-            }
-            res.send(`
+app.get('/payment-success', (_req, res) => {
+    res.send(`
         <!DOCTYPE html>
         <html>
         <head>
@@ -353,11 +299,9 @@ app.get('/payment-success', (req, res) => __awaiter(void 0, void 0, void 0, func
         </head>
         <body>
           <div class="success">✅ Payment Successful!</div>
-          <div class="message">Your 14-day Personal Pulse access is now active.</div>
+          <div class="message">If your payment was completed, your access will be activated shortly after verification.</div>
           <div class="message">Redirecting you back to Aura...</div>
-          <div class="details">Transaction ID: ${paymentId}</div>
           <script>
-            // Ensure we redirect to the main app with a success flag
             setTimeout(function() {
               window.location.href = '/?payment=success';
             }, 3000);
@@ -365,16 +309,7 @@ app.get('/payment-success', (req, res) => __awaiter(void 0, void 0, void 0, func
         </body>
         </html>
       `);
-        }
-        else {
-            res.redirect('/?payment=success');
-        }
-    }
-    catch (error) {
-        console.error('Payment success error:', error);
-        res.redirect('/?payment=error');
-    }
-}));
+});
 app.get('/payment-cancelled', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     console.log('❌ Payment cancelled by user');
     res.send(`
@@ -415,7 +350,10 @@ app.get('/share/post/:id', (req, res) => __awaiter(void 0, void 0, void 0, funct
         const avatarUrl = author.avatar || '';
         const isImage = mediaUrl && (post.mediaType === 'image' || /\.(png|jpg|jpeg|webp|gif)$/i.test(mediaUrl));
         const isVideo = mediaUrl && (post.mediaType === 'video' || /\.(mp4|webm|ogg|mov)$/i.test(mediaUrl));
-        const imageForOg = isImage ? mediaUrl : avatarUrl || '';
+        // Use the new logo icon as fallback if no image is present
+        const imageForOg = isImage ? mediaUrl : (avatarUrl || 'https://auraradiance.vercel.app/logo-icon.svg');
+        // Frontend URL for redirection
+        const frontendUrl = `https://auraradiance.vercel.app/p/${post.id}`;
         const html = `<!doctype html>
 <html lang="en">
   <head>
@@ -426,12 +364,18 @@ app.get('/share/post/:id', (req, res) => __awaiter(void 0, void 0, void 0, funct
     <meta property="og:description" content="${description}">
     <meta property="og:type" content="article">
     <meta property="og:url" content="${shareUrl}">
-    ${imageForOg ? `<meta property="og:image" content="${imageForOg}">` : ''}
+    <meta property="og:image" content="${imageForOg}">
     ${isVideo ? `<meta property="og:video" content="${mediaUrl}">` : ''}
     <meta name="twitter:title" content="${title}">
     <meta name="twitter:description" content="${description}">
-    ${imageForOg ? `<meta name="twitter:image" content="${imageForOg}">` : ''}
+    <meta name="twitter:image" content="${imageForOg}">
     <meta name="twitter:card" content="${imageForOg ? 'summary_large_image' : 'summary'}">
+    <script>
+        // Redirect to the frontend app
+        setTimeout(function() {
+          window.location.href = "${frontendUrl}";
+        }, 100);
+    </script>
     <style>
       body{margin:0;background:#0f172a;color:#fff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
       .container{max-width:680px;margin:0 auto;padding:24px}

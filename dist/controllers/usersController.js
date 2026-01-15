@@ -23,6 +23,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.usersController = void 0;
 const db_1 = require("../db");
 const trustService_1 = require("../services/trustService");
+const securityLogger_1 = require("../utils/securityLogger");
 exports.usersController = {
     // GET /api/users - Get all users (respects showInSearch privacy setting)
     getAllUsers: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -665,6 +666,18 @@ exports.usersController = {
         }
         catch (error) {
             console.error('Error processing credit purchase:', error);
+            (0, securityLogger_1.logSecurityEvent)({
+                req,
+                type: 'payment_failure',
+                userId: req.params && req.params.id,
+                metadata: {
+                    source: 'credit_purchase',
+                    reason: 'purchase_exception',
+                    bundleName: req.body && req.body.bundleName,
+                    credits: req.body && req.body.credits,
+                    errorMessage: error instanceof Error ? error.message : String(error)
+                }
+            });
             res.status(500).json({
                 success: false,
                 error: 'Failed to process credit purchase',
@@ -965,6 +978,74 @@ exports.usersController = {
             res.status(500).json({
                 success: false,
                 error: 'Failed to get serendipity matches',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    addSerendipitySkip: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            const { id } = req.params;
+            const { targetUserId } = req.body;
+            if (!targetUserId || typeof targetUserId !== 'string') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid targetUserId',
+                    message: 'targetUserId is required'
+                });
+            }
+            const db = (0, db_1.getDB)();
+            const user = yield db.collection('users').findOne({ id });
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: `User with ID ${id} does not exist`
+                });
+            }
+            const now = new Date().toISOString();
+            const skips = Array.isArray(user.serendipitySkips) ? user.serendipitySkips : [];
+            const existingIndex = skips.findIndex((s) => s && s.targetUserId === targetUserId);
+            if (existingIndex >= 0) {
+                const existing = skips[existingIndex];
+                skips[existingIndex] = {
+                    targetUserId,
+                    lastSkippedAt: now,
+                    count: typeof existing.count === 'number' ? existing.count + 1 : 1
+                };
+            }
+            else {
+                skips.push({
+                    targetUserId,
+                    lastSkippedAt: now,
+                    count: 1
+                });
+            }
+            if (skips.length > 100) {
+                skips.sort((a, b) => {
+                    const aTime = new Date(a.lastSkippedAt).getTime();
+                    const bTime = new Date(b.lastSkippedAt).getTime();
+                    return bTime - aTime;
+                });
+                skips.splice(100);
+            }
+            yield db.collection('users').updateOne({ id }, {
+                $set: {
+                    serendipitySkips: skips,
+                    updatedAt: now
+                }
+            });
+            console.log('serendipity_skip event', { userId: id, targetUserId, count: (_a = skips.find((s) => s.targetUserId === targetUserId)) === null || _a === void 0 ? void 0 : _a.count });
+            res.json({
+                success: true,
+                message: 'Serendipity skip recorded'
+            });
+        }
+        catch (error) {
+            console.error('Error recording serendipity skip:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to record serendipity skip',
                 message: 'Internal server error'
             });
         }

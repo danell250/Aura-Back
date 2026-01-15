@@ -39,7 +39,7 @@ exports.shareController = {
             const description = escapeHtml(rawContent.length > 200
                 ? rawContent.substring(0, 197) + '...'
                 : rawContent || 'Check out this post on Aura');
-            const image = post.mediaUrl || 'https://auraradiance.vercel.app/og-image.svg';
+            const image = post.mediaUrl || 'https://auraradiance.vercel.app/logo-icon.svg';
             const url = `https://auraradiance.vercel.app/p/${id}`;
             // Return HTML with meta tags and redirect
             const html = `

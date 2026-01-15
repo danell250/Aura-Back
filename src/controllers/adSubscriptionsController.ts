@@ -1,5 +1,53 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
+import axios from 'axios';
+import { logSecurityEvent } from '../utils/securityLogger';
+
+async function verifyPayPalWebhookSignature(req: Request): Promise<boolean> {
+  const webhookId = process.env.PAYPAL_WEBHOOK_ID;
+  const clientId = process.env.PAYPAL_CLIENT_ID;
+  const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+  if (!webhookId || !clientId || !clientSecret) {
+    if (process.env.NODE_ENV === 'production') {
+      return false;
+    }
+    return true;
+  }
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const apiBase = process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com';
+  const tokenResponse = await axios.post(
+    `${apiBase}/v1/oauth2/token`,
+    'grant_type=client_credentials',
+    {
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    }
+  );
+  const accessToken = tokenResponse.data.access_token;
+  const headers = req.headers;
+  const verificationBody = {
+    auth_algo: headers['paypal-auth-algo'],
+    cert_url: headers['paypal-cert-url'],
+    transmission_id: headers['paypal-transmission-id'],
+    transmission_sig: headers['paypal-transmission-sig'],
+    transmission_time: headers['paypal-transmission-time'],
+    webhook_id: webhookId,
+    webhook_event: req.body
+  };
+  const verifyResponse = await axios.post(
+    `${apiBase}/v1/notifications/verify-webhook-signature`,
+    verificationBody,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return verifyResponse.data.verification_status === 'SUCCESS';
+}
 
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 
@@ -105,6 +153,18 @@ export const adSubscriptionsController = {
       });
     } catch (error) {
       console.error('Error creating subscription:', error);
+      logSecurityEvent({
+        req,
+        type: 'payment_failure',
+        userId: req.body && req.body.userId,
+        metadata: {
+          source: 'ad_subscriptions',
+          reason: 'create_subscription_exception',
+          packageId: req.body && req.body.packageId,
+          packageName: req.body && req.body.packageName,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        }
+      });
       res.status(500).json({
         success: false,
         error: 'Failed to create subscription',
@@ -308,12 +368,45 @@ export const adSubscriptionsController = {
   handleWebhook: async (req: Request, res: Response) => {
     try {
       const event = req.body;
+      const isValid = await verifyPayPalWebhookSignature(req);
+      if (!isValid) {
+        logSecurityEvent({
+          req,
+          type: 'webhook_signature_failed',
+          metadata: {
+            source: 'ad_subscriptions',
+            eventId: event && event.id,
+            eventType: event && event.event_type
+          }
+        });
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid webhook signature',
+          message: 'Webhook verification failed'
+        });
+      }
+      const db = getDB();
+
+      if (event && event.id) {
+        const existing = await db.collection('paypalWebhookEvents').findOne({ id: event.id });
+        if (existing) {
+          return res.status(200).json({
+            success: true,
+            message: 'Event already processed'
+          });
+        }
+        await db.collection('paypalWebhookEvents').insertOne({
+          id: event.id,
+          eventType: event.event_type,
+          source: 'ad-subscriptions',
+          createdAt: new Date().toISOString()
+        });
+      }
+
       const eventType = event.event_type;
       const resource = event.resource;
       
       console.log(`[AdSubscriptions] Webhook received: ${eventType}`);
-      
-      const db = getDB();
 
       if (eventType === 'PAYMENT.SALE.COMPLETED') {
         const subscriptionId = resource.billing_agreement_id;
@@ -393,6 +486,15 @@ export const adSubscriptionsController = {
       res.status(200).json({ success: true, message: 'Webhook processed' });
     } catch (error) {
       console.error('[AdSubscriptions] Error processing webhook:', error);
+      logSecurityEvent({
+        req,
+        type: 'payment_failure',
+        metadata: {
+          source: 'ad_subscriptions',
+          reason: 'webhook_exception',
+          errorMessage: error instanceof Error ? error.message : String(error)
+        }
+      });
       res.status(500).json({
         success: false,
         error: 'Failed to process webhook',

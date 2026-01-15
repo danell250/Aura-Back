@@ -72,6 +72,7 @@ router.post('/:id/record-profile-view', usersController.recordProfileView);
 router.get('/:id', usersController.getUserById);
 
 router.get('/:id/serendipity-matches', usersController.getSerendipityMatches);
+router.post('/:id/serendipity-skip', usersController.addSerendipitySkip);
 
 // PUT /api/users/:id - Update user
 router.put('/:id', usersController.updateUser);
