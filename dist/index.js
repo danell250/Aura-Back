@@ -64,6 +64,7 @@ const subscriptionsRoutes_1 = __importDefault(require("./routes/subscriptionsRou
 const adSubscriptionsRoutes_1 = __importDefault(require("./routes/adSubscriptionsRoutes"));
 const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const privacyRoutes_1 = __importDefault(require("./routes/privacyRoutes"));
+const shareRoutes_1 = __importDefault(require("./routes/shareRoutes"));
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -217,6 +218,8 @@ console.log('Registering routes...');
 app.use('/api/auth', authRoutes_1.default);
 // Privacy routes
 app.use('/api/privacy', privacyRoutes_1.default);
+// Share routes (public, no auth required, serves HTML for crawlers)
+app.use('/share', shareRoutes_1.default);
 // Apply user attachment middleware to all API routes
 app.use('/api', authMiddleware_1.attachUser);
 app.use('/api/users', (req, res, next) => {
@@ -285,23 +288,80 @@ app.get('/payment-success', (req, res) => __awaiter(void 0, void 0, void 0, func
         // For Personal Pulse one-time payment
         if (paymentId) {
             console.log('Activating 14-day access for Personal Pulse payment:', paymentId);
-            // TODO: Verify payment with PayPal API
-            // TODO: Create ad subscription record with 14-day expiry
+            // Check if user is authenticated
+            if (req.isAuthenticated && req.isAuthenticated() && req.user) {
+                const user = req.user;
+                const userId = user.id;
+                console.log(`Processing payment for user: ${userId}`);
+                const db = (0, db_1.getDB)();
+                const now = Date.now();
+                const durationDays = 14;
+                const endDate = now + (durationDays * 24 * 60 * 60 * 1000);
+                // Create ad subscription record
+                const newSubscription = {
+                    id: `sub-${now}-${Math.random().toString(36).substring(2, 11)}`,
+                    userId,
+                    packageId: 'pkg-starter',
+                    packageName: 'Personal Pulse',
+                    status: 'active',
+                    startDate: now,
+                    endDate,
+                    paypalSubscriptionId: null,
+                    adsUsed: 0,
+                    adLimit: 1,
+                    createdAt: now,
+                    updatedAt: now
+                };
+                yield db.collection('adSubscriptions').insertOne(newSubscription);
+                // Log transaction
+                yield db.collection('transactions').insertOne({
+                    userId,
+                    type: 'ad_subscription',
+                    packageId: 'pkg-starter',
+                    packageName: 'Personal Pulse',
+                    transactionId: paymentId,
+                    paymentMethod: 'paypal_hosted',
+                    status: 'completed',
+                    details: {
+                        adLimit: 1,
+                        durationDays: 14,
+                        subscriptionId: newSubscription.id,
+                        payerId: PayerID,
+                        token
+                    },
+                    createdAt: new Date().toISOString()
+                });
+                console.log('Successfully created subscription and transaction for Personal Pulse');
+            }
+            else {
+                console.warn('User not authenticated during payment success callback. Cannot allocate resource immediately.');
+                // In a real app, we might store this in a temporary "unclaimed payments" collection 
+                // or redirect to a login page that claims it after login.
+            }
             res.send(`
         <!DOCTYPE html>
         <html>
         <head>
           <title>Payment Successful - Aura</title>
-          <meta http-equiv="refresh" content="3;url=/">
+          <meta http-equiv="refresh" content="3;url=/?payment=success">
           <style>
             body { font-family: system-ui; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; padding: 4rem; }
             .success { font-size: 3rem; margin-bottom: 1rem; }
             .message { font-size: 1.2rem; opacity: 0.9; }
+            .details { font-size: 0.9rem; margin-top: 2rem; opacity: 0.7; }
           </style>
         </head>
         <body>
           <div class="success">✅ Payment Successful!</div>
-          <div class="message">Your 14-day Personal Pulse access is now active. Returning to app...</div>
+          <div class="message">Your 14-day Personal Pulse access is now active.</div>
+          <div class="message">Redirecting you back to Aura...</div>
+          <div class="details">Transaction ID: ${paymentId}</div>
+          <script>
+            // Ensure we redirect to the main app with a success flag
+            setTimeout(function() {
+              window.location.href = '/?payment=success';
+            }, 3000);
+          </script>
         </body>
         </html>
       `);
@@ -503,6 +563,299 @@ app.use((_req, res) => {
         message: `Route ${_req.method} ${_req.originalUrl} not found`
     });
 });
+function seedDummyPostsIfEmpty() {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            if (!(0, db_1.isDBConnected)())
+                return;
+            const db = (0, db_1.getDB)();
+            const count = yield db.collection('posts').countDocuments({});
+            if (count > 0)
+                return;
+            const now = Date.now();
+            const authors = [
+                {
+                    id: 'seed-editorial',
+                    firstName: 'Aura',
+                    lastName: 'Editorial',
+                    name: 'Aura Editorial Desk',
+                    handle: '@auranews',
+                    avatar: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?q=80&w=256&auto=format&fit=crop',
+                    avatarType: 'image',
+                    bio: 'Curated news and insights for modern creators and operators.',
+                    trustScore: 90,
+                    auraCredits: 0,
+                    activeGlow: 'emerald'
+                },
+                {
+                    id: 'seed-founder',
+                    firstName: 'Nova',
+                    lastName: 'Reyes',
+                    name: 'Nova Reyes',
+                    handle: '@novabuilds',
+                    avatar: 'https://images.unsplash.com/photo-1544723795-3fb6469f5b39?q=80&w=256&auto=format&fit=crop',
+                    avatarType: 'image',
+                    bio: 'Bootstrapped founder sharing playbooks from the trenches.',
+                    trustScore: 82,
+                    auraCredits: 0,
+                    activeGlow: 'none'
+                },
+                {
+                    id: 'seed-leadership',
+                    firstName: 'Elena',
+                    lastName: 'Kho',
+                    name: 'Elena Kho',
+                    handle: '@elenaleads',
+                    avatar: 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?q=80&w=256&auto=format&fit=crop',
+                    avatarType: 'image',
+                    bio: 'Leadership coach for high-signal teams and creators.',
+                    trustScore: 88,
+                    auraCredits: 0,
+                    activeGlow: 'amber'
+                },
+                {
+                    id: 'seed-agency',
+                    firstName: 'Signal',
+                    lastName: 'Studio',
+                    name: 'Signal Studio',
+                    handle: '@signalstudio',
+                    avatar: 'https://images.unsplash.com/photo-1520607162513-77705c0f0d4a?q=80&w=256&auto=format&fit=crop',
+                    avatarType: 'image',
+                    bio: 'Creative performance agency for ambitious brands.',
+                    trustScore: 76,
+                    auraCredits: 0,
+                    activeGlow: 'none'
+                }
+            ];
+            const [editorial, founder, leadership, agency] = authors;
+            const posts = [
+                {
+                    id: 'seed-news-1',
+                    author: editorial,
+                    content: 'News: Independent creators just overtook legacy agencies on total campaign volume for the first time this quarter. Brands are reallocating up to 32% of paid media into creator-led storytelling.\n\nKey shifts:\n• Briefs are shorter, but context is deeper\n• Performance is measured in conversations, not just clicks\n• Creative approval cycles dropped from 21 days to 4\n\n#News #CreatorEconomy #Marketing',
+                    mediaUrl: 'https://images.unsplash.com/photo-1522199755839-a2bacb67c546?q=80&w=1200&auto=format&fit=crop',
+                    mediaType: 'image',
+                    energy: '💡 Deep Dive',
+                    radiance: 180,
+                    timestamp: now - 2 * 24 * 60 * 60 * 1000,
+                    reactions: { '💡': 38, '📈': 21 },
+                    reactionUsers: {},
+                    userReactions: [],
+                    comments: [],
+                    isBoosted: false,
+                    hashtags: ['#News', '#CreatorEconomy', '#Marketing'],
+                    taggedUserIds: []
+                },
+                {
+                    id: 'seed-news-2',
+                    author: editorial,
+                    content: 'Market Update: Short-form business explainers are now the fastest growing category on Aura, outpacing lifestyle and entertainment in week-over-week growth.\n\nIf you can teach clearly for 60 seconds, you can open an entirely new acquisition channel.\n\n#News #Business #Education',
+                    mediaUrl: 'https://images.unsplash.com/photo-1525182008055-f88b95ff7980?q=80&w=1200&auto=format&fit=crop',
+                    mediaType: 'image',
+                    energy: '⚡ High Energy',
+                    radiance: 132,
+                    timestamp: now - 7 * 24 * 60 * 60 * 1000,
+                    reactions: { '⚡': 44, '💬': 17 },
+                    reactionUsers: {},
+                    userReactions: [],
+                    comments: [],
+                    isBoosted: false,
+                    hashtags: ['#News', '#Business', '#ShortForm'],
+                    taggedUserIds: []
+                },
+                {
+                    id: 'seed-founder-1',
+                    author: founder,
+                    content: 'Entrepreneurship: I turned a freelance editing habit into a productized “creator ops” studio doing $45k/m with a 3-person remote team.\n\nSimple playbook:\n1) Pick one painful workflow creators avoid\n2) Productize it into a clear package with a fixed scope\n3) Layer in async check-ins instead of endless calls\n4) Let your own content be the top-of-funnel\n\nIt is easier to scale a boring, repeatable service than a clever idea.\n\n#Entrepreneurship #CreatorOps #Playbook',
+                    energy: '💡 Deep Dive',
+                    radiance: 210,
+                    timestamp: now - 5 * 24 * 60 * 60 * 1000,
+                    reactions: { '💡': 61, '🔥': 24 },
+                    reactionUsers: {},
+                    userReactions: [],
+                    comments: [],
+                    isBoosted: true,
+                    hashtags: ['#Entrepreneurship', '#CreatorOps', '#Playbook'],
+                    taggedUserIds: []
+                },
+                {
+                    id: 'seed-founder-2',
+                    author: founder,
+                    content: 'Thread: 7 systems that took my content business from “posting randomly” to “running a proper company”.\n\n1) Monday: “pipeline” review instead of inbox review\n2) A single Notion board shared with all collaborators\n3) One analytics dashboard per offer, not per platform\n4) Weekly “kill meeting” to end weak experiments\n5) 90-minute deep work block reserved for writing\n6) Quarterly price review for every product\n7) Written operating principles so new hires onboard themselves\n\n#Entrepreneur #Systems #Execution',
+                    energy: '🪐 Neutral',
+                    radiance: 164,
+                    timestamp: now - 10 * 24 * 60 * 60 * 1000,
+                    reactions: { '📌': 33, '🧠': 29 },
+                    reactionUsers: {},
+                    userReactions: [],
+                    comments: [],
+                    isBoosted: false,
+                    hashtags: ['#Entrepreneur', '#Systems', '#Execution'],
+                    taggedUserIds: []
+                },
+                {
+                    id: 'seed-leadership-1',
+                    author: leadership,
+                    content: 'Leadership note: Your team does not need more dashboards, they need more clarity.\n\nAsk this in your next standup:\n\n“What are we definitely not doing this week?”\n\nRemoving noise is the highest form of leadership inside a high-signal organization.\n\n#Leadership #Focus #Teams',
+                    energy: '🌿 Calm',
+                    radiance: 142,
+                    timestamp: now - 15 * 24 * 60 * 60 * 1000,
+                    reactions: { '🌿': 47, '💡': 19 },
+                    reactionUsers: {},
+                    userReactions: [],
+                    comments: [],
+                    isBoosted: false,
+                    hashtags: ['#Leadership', '#Focus', '#Teams'],
+                    taggedUserIds: []
+                },
+                {
+                    id: 'seed-leadership-2',
+                    author: leadership,
+                    content: 'The strongest leaders in 2026 will behave like great editors, not great managers.\n\nThey will:\n• Cut confusing projects\n• Trim bloated meetings\n• Rewrite vague goals into sharp sentences\n• Protect deep work like a scarce resource\n\nEdit the environment and your people will surprise you.\n\n#Leadership #Culture #Editing',
+                    energy: '💡 Deep Dive',
+                    radiance: 188,
+                    timestamp: now - 30 * 24 * 60 * 60 * 1000,
+                    reactions: { '✂️': 21, '✨': 34 },
+                    reactionUsers: {},
+                    userReactions: [],
+                    comments: [],
+                    isBoosted: false,
+                    hashtags: ['#Leadership', '#Culture', '#Editing'],
+                    taggedUserIds: []
+                },
+                {
+                    id: 'seed-ad-business-1',
+                    author: agency,
+                    content: 'Ad: Launching a B2B podcast but worried it will become an expensive hobby?\n\nSignal Studio builds end-to-end “revenue podcasts” for SaaS and professional services.\n\nWhat we handle:\n• Strategy and show positioning\n• Guest pipeline and outreach\n• Recording, editing and clipping\n• Distribution across Aura, LinkedIn and email\n• Revenue attribution dashboard\n\nReply “PODCAST” below and we will DM you a full case study.\n\n#B2B #Podcasting #LeadGen',
+                    mediaUrl: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?q=80&w=1200&auto=format&fit=crop',
+                    mediaType: 'image',
+                    energy: '⚡ High Energy',
+                    radiance: 96,
+                    timestamp: now - 20 * 24 * 60 * 60 * 1000,
+                    reactions: { '🎙️': 18, '📈': 12 },
+                    reactionUsers: {},
+                    userReactions: [],
+                    comments: [],
+                    isBoosted: true,
+                    hashtags: ['#B2B', '#Podcasting', '#LeadGen'],
+                    taggedUserIds: []
+                },
+                {
+                    id: 'seed-ad-business-2',
+                    author: agency,
+                    content: 'Ad: Running paid social for your business but stuck on creative?\n\nOur “Done-For-You Creative Sprint” gives you:\n• 12 ready-to-run ad concepts\n• 36 hooks tested against your audience\n• 1 brand-safe script library your team can reuse\n\nMost clients see their first winning creative within 21 days.\n\nDM “SPRINT” for the full breakdown.\n\n#Ads #BusinessGrowth #Creative',
+                    energy: '🪐 Neutral',
+                    radiance: 104,
+                    timestamp: now - 45 * 24 * 60 * 60 * 1000,
+                    reactions: { '🚀': 27, '💰': 15 },
+                    reactionUsers: {},
+                    userReactions: [],
+                    comments: [],
+                    isBoosted: false,
+                    hashtags: ['#Ads', '#BusinessGrowth', '#Creative'],
+                    taggedUserIds: []
+                }
+            ];
+            yield db.collection('posts').insertMany(posts);
+            console.log(`✅ Seeded ${posts.length} dummy posts into MongoDB`);
+        }
+        catch (error) {
+            console.error('⚠️ Failed to seed dummy posts:', error);
+        }
+    });
+}
+function seedDummyAdsIfEmpty() {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            if (!(0, db_1.isDBConnected)())
+                return;
+            const db = (0, db_1.getDB)();
+            const count = yield db.collection('ads').countDocuments({});
+            if (count > 0)
+                return;
+            const now = Date.now();
+            const ads = [
+                {
+                    id: 'seed-ad-b2b-podcast',
+                    ownerId: 'business-seed-1',
+                    ownerName: 'Signal Studio',
+                    ownerAvatar: 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?q=80&w=256&auto=format&fit=crop',
+                    ownerAvatarType: 'image',
+                    ownerEmail: 'hello@signalstudio.io',
+                    headline: 'Turn Your B2B Podcast Into a Sales Channel',
+                    description: 'We build “revenue podcasts” for B2B teams. Strategy, booking, editing, clipping, and distribution across Aura + LinkedIn, all handled for you.\n\nClients see their first SQLs within 60–90 days of launch.\n\nTap to see the full case study.',
+                    mediaUrl: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?q=80&w=1200&auto=format&fit=crop',
+                    mediaType: 'image',
+                    ctaText: 'View Case Study',
+                    ctaLink: 'https://example.com/b2b-podcast',
+                    isSponsored: true,
+                    placement: 'feed',
+                    status: 'active',
+                    expiryDate: now + 60 * 24 * 60 * 60 * 1000,
+                    subscriptionTier: 'Aura Radiance',
+                    subscriptionId: undefined,
+                    timestamp: now - 3 * 24 * 60 * 60 * 1000,
+                    reactions: { '🎙️': 21, '📈': 12 },
+                    reactionUsers: {},
+                    hashtags: ['#B2B', '#Podcast', '#LeadGen']
+                },
+                {
+                    id: 'seed-ad-saas-demos',
+                    ownerId: 'business-seed-2',
+                    ownerName: 'Pipeline Cloud',
+                    ownerAvatar: 'https://images.unsplash.com/photo-1520607162513-77705c0f0d4a?q=80&w=256&auto=format&fit=crop',
+                    ownerAvatarType: 'image',
+                    ownerEmail: 'growth@pipelinecloud.io',
+                    headline: 'Book 40% More Qualified Demos From the Same Traffic',
+                    description: 'Pipeline Cloud turns your existing traffic into qualified demos using interactive product stories.\n\nNo redesign, no new funnel – we plug into what you already have.\n\nSee how a SaaS team lifted demo volume by 42% in 45 days.',
+                    mediaUrl: 'https://images.unsplash.com/photo-1553877522-43269d4ea984?q=80&w=1200&auto=format&fit=crop',
+                    mediaType: 'image',
+                    ctaText: 'See SaaS Playbook',
+                    ctaLink: 'https://example.com/saas-playbook',
+                    isSponsored: true,
+                    placement: 'feed',
+                    status: 'active',
+                    expiryDate: now + 45 * 24 * 60 * 60 * 1000,
+                    subscriptionTier: 'Universal Signal',
+                    subscriptionId: undefined,
+                    timestamp: now - 9 * 24 * 60 * 60 * 1000,
+                    reactions: { '🚀': 34, '💰': 15 },
+                    reactionUsers: {},
+                    hashtags: ['#SaaS', '#DemandGen', '#Revenue']
+                },
+                {
+                    id: 'seed-ad-founder-coaching',
+                    ownerId: 'business-seed-3',
+                    ownerName: 'Nova Reyes',
+                    ownerAvatar: 'https://images.unsplash.com/photo-1544723795-3fb6469f5b39?q=80&w=256&auto=format&fit=crop',
+                    ownerAvatarType: 'image',
+                    ownerEmail: 'nova@novabuilds.io',
+                    headline: 'Founder Operating System for Solo and Small Teams',
+                    description: 'A 6-week live program that helps founders install a simple operating system: weekly pipeline reviews, clear scorecards, and one-page strategy docs.\n\nBuilt for content-first founders and agencies who feel “busy but blurry”.',
+                    mediaUrl: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?q=80&w=1200&auto=format&fit=crop',
+                    mediaType: 'image',
+                    ctaText: 'Join the Next Cohort',
+                    ctaLink: 'https://example.com/founder-os',
+                    isSponsored: true,
+                    placement: 'feed',
+                    status: 'active',
+                    expiryDate: now + 30 * 24 * 60 * 60 * 1000,
+                    subscriptionTier: 'Creator Pro',
+                    subscriptionId: undefined,
+                    timestamp: now - 14 * 24 * 60 * 60 * 1000,
+                    reactions: { '💡': 18, '🌿': 9 },
+                    reactionUsers: {},
+                    hashtags: ['#Founder', '#Systems', '#Coaching']
+                }
+            ];
+            yield db.collection('ads').insertMany(ads);
+            console.log(`✅ Seeded ${ads.length} dummy ads into MongoDB`);
+        }
+        catch (error) {
+            console.error('⚠️ Failed to seed dummy ads:', error);
+        }
+    });
+}
 // Enhanced server startup with database connection management
 function startServer() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -520,6 +873,8 @@ function startServer() {
             try {
                 yield (0, db_1.connectDB)();
                 console.log('✅ Database connection established');
+                yield seedDummyPostsIfEmpty();
+                yield seedDummyAdsIfEmpty();
             }
             catch (error) {
                 console.warn('⚠️  Database connection failed, but server is still running');

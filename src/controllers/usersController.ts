@@ -714,17 +714,28 @@ export const usersController = {
         }
       );
 
-      // Log the transaction (in production, save to database)
-      console.log('Credit purchase processed:', {
-        userId: id,
-        bundleName,
-        credits,
-        previousCredits: currentCredits,
-        newCredits,
-        transactionId,
-        paymentMethod,
-        timestamp: new Date().toISOString()
-      });
+      // Log the transaction
+            await db.collection('transactions').insertOne({
+              userId: id,
+              type: 'credit_purchase',
+              amount: credits,
+              bundleName,
+              transactionId: transactionId || `tx-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              paymentMethod,
+              status: 'completed',
+              createdAt: new Date().toISOString()
+            });
+
+            console.log('Credit purchase processed and logged:', {
+              userId: id,
+              bundleName,
+              credits,
+              previousCredits: currentCredits,
+              newCredits,
+              transactionId,
+              paymentMethod,
+              timestamp: new Date().toISOString()
+            });
 
       res.json({
         success: true,

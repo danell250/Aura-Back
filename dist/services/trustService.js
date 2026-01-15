@@ -48,13 +48,13 @@ function calculateProfileCompleteness(user) {
         return acc;
     }, 0);
     const ratio = fields.length === 0 ? 0 : filled / fields.length;
-    return clampScore(ratio * 20);
+    return clampScore(ratio * 25);
 }
 function calculateActivityLevel(postsCount) {
     if (!postsCount || postsCount <= 0)
         return 0;
     const score = Math.min(postsCount, 50) / 50;
-    return clampScore(score * 15);
+    return clampScore(score * 20);
 }
 function calculateResponseRate(messages, userId) {
     if (!Array.isArray(messages) || messages.length === 0)
@@ -105,41 +105,41 @@ function calculatePositiveInteractions(posts) {
     const radianceScore = Math.min(radianceSum, 500) / 500;
     const commentsScore = Math.min(commentsReceived, 200) / 200;
     const combined = radianceScore * 0.6 + commentsScore * 0.4;
-    return clampScore(combined * 15);
+    return clampScore(combined * 20);
 }
 function calculateAccountAgeScore(user) {
     const days = getAccountAgeDays(user);
     if (days <= 0)
         return 0;
     const score = Math.min(days, 365) / 365;
-    return clampScore(score * 10);
+    return clampScore(score * 15);
 }
 function calculateNegativeFlags(user) {
     let penalty = 0;
     const blockedByOthers = Array.isArray(user.blockedBy) ? user.blockedBy.length : 0;
     if (blockedByOthers > 0) {
-        penalty -= Math.min(blockedByOthers * 2, 10);
+        penalty -= Math.min(blockedByOthers * 3, 15);
     }
     const missingFields = ['name', 'avatar', 'bio'];
     for (const key of missingFields) {
         const value = user[key];
         if (!value || (typeof value === 'string' && value.trim().length === 0)) {
-            penalty -= 2;
+            penalty -= 3;
         }
     }
-    if (penalty < -10) {
-        penalty = -10;
+    if (penalty < -20) {
+        penalty = -20;
     }
     return penalty;
 }
 function getTrustLevel(score) {
-    if (score >= 80)
+    if (score >= 85)
         return 'verified';
-    if (score >= 60)
+    if (score >= 65)
         return 'trusted';
-    if (score >= 40)
+    if (score >= 45)
         return 'neutral';
-    if (score >= 20)
+    if (score >= 25)
         return 'caution';
     return 'unverified';
 }
@@ -186,7 +186,7 @@ function calculateHashtagOverlapScore(baseTags, candidateTags) {
         return { score: 0, shared: [] };
     }
     const jaccard = shared.length / unionSize;
-    const score = clampScore(jaccard * 20);
+    const score = clampScore(jaccard * 15);
     return { score, shared };
 }
 function calculateIndustryMatchScore(currentUser, candidate) {
@@ -196,12 +196,12 @@ function calculateIndustryMatchScore(currentUser, candidate) {
         return { score: 0, match: false };
     }
     if (a === b) {
-        return { score: 20, match: true };
+        return { score: 15, match: true };
     }
     const aRoot = a.split(' ')[0];
     const bRoot = b.split(' ')[0];
     if (aRoot && bRoot && aRoot === bRoot) {
-        return { score: 10, match: true };
+        return { score: 8, match: true };
     }
     return { score: 0, match: false };
 }
@@ -318,13 +318,13 @@ function getSerendipityMatchesForUser(userId_1) {
             const mutualConnections = calculateMutualConnections(currentUser, candidate);
             const industryResult = calculateIndustryMatchScore(currentUser, candidate);
             const trustAverage = (currentTrust + candidateTrust) / 2;
-            const trustComponent = clampScore((trustAverage / 100) * 30);
+            const trustComponent = clampScore((trustAverage / 100) * 35);
             const activityAverage = (currentActivity + candidateActivity) / 2;
-            const activityComponent = clampScore((activityAverage / 15) * 10);
+            const activityComponent = clampScore((activityAverage / 20) * 8);
             const profileAverage = (currentProfileCompleteness + candidateProfileCompleteness) / 2;
-            const profileComponent = clampScore((profileAverage / 20) * 5);
+            const profileComponent = clampScore((profileAverage / 25) * 7);
             const mutualNormalized = Math.min(mutualConnections, 5) / 5;
-            const mutualComponent = clampScore(mutualNormalized * 15);
+            const mutualComponent = clampScore(mutualNormalized * 20);
             const total = trustComponent +
                 industryResult.score +
                 hashtagResult.score +

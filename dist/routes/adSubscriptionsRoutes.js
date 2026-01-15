@@ -16,4 +16,6 @@ router.post('/', authMiddleware_1.requireAuth, adSubscriptionsController_1.adSub
 router.put('/:id/use-ad', authMiddleware_1.requireAuth, adSubscriptionsController_1.adSubscriptionsController.useAdSlot);
 // PUT /api/ad-subscriptions/:id/cancel - Cancel subscription
 router.put('/:id/cancel', authMiddleware_1.requireAuth, adSubscriptionsController_1.adSubscriptionsController.cancelSubscription);
+// POST /api/ad-subscriptions/webhook - PayPal Webhook
+router.post('/webhook', adSubscriptionsController_1.adSubscriptionsController.handleWebhook);
 exports.default = router;

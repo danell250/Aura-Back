@@ -81,6 +81,23 @@ export const adSubscriptionsController = {
 
       await db.collection(AD_SUBSCRIPTIONS_COLLECTION).insertOne(newSubscription);
 
+      // Log the transaction
+      await db.collection('transactions').insertOne({
+        userId,
+        type: 'ad_subscription',
+        packageId,
+        packageName,
+        transactionId: paypalSubscriptionId || `tx-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+        paymentMethod: 'paypal',
+        status: 'completed',
+        details: {
+          adLimit,
+          durationDays,
+          subscriptionId: newSubscription.id
+        },
+        createdAt: now
+      });
+
       res.status(201).json({
         success: true,
         data: newSubscription,
@@ -282,6 +299,103 @@ export const adSubscriptionsController = {
       res.status(500).json({
         success: false,
         error: 'Failed to fetch subscription',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // POST /api/ad-subscriptions/webhook - Handle PayPal webhooks
+  handleWebhook: async (req: Request, res: Response) => {
+    try {
+      const event = req.body;
+      const eventType = event.event_type;
+      const resource = event.resource;
+      
+      console.log(`[AdSubscriptions] Webhook received: ${eventType}`);
+      
+      const db = getDB();
+
+      if (eventType === 'PAYMENT.SALE.COMPLETED') {
+        const subscriptionId = resource.billing_agreement_id;
+        
+        if (subscriptionId) {
+          console.log(`[AdSubscriptions] Processing renewal for subscription: ${subscriptionId}`);
+          
+          // Find the subscription
+          const subscription = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ 
+            paypalSubscriptionId: subscriptionId 
+          });
+          
+          if (subscription) {
+            // Reset adsUsed for the new cycle and update timestamp
+            await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
+              { _id: subscription._id },
+              { 
+                $set: { 
+                  adsUsed: 0,
+                  updatedAt: Date.now(),
+                  status: 'active' // Ensure it's active
+                } 
+              }
+            );
+            
+            // Log the renewal transaction
+            await db.collection('transactions').insertOne({
+              userId: subscription.userId,
+              type: 'ad_subscription_renewal',
+              packageId: subscription.packageId,
+              packageName: subscription.packageName,
+              transactionId: resource.id,
+              paymentMethod: 'paypal_subscription',
+              status: 'completed',
+              amount: resource.amount?.total,
+              currency: resource.amount?.currency,
+              details: {
+                subscriptionId: subscription.id,
+                paypalSubscriptionId: subscriptionId
+              },
+              createdAt: new Date().toISOString()
+            });
+            
+            console.log(`[AdSubscriptions] Successfully renewed subscription ${subscription.id}`);
+          } else {
+            console.warn(`[AdSubscriptions] No subscription found for PayPal ID: ${subscriptionId}`);
+          }
+        }
+      } else if (eventType === 'BILLING.SUBSCRIPTION.CANCELLED') {
+        const subscriptionId = resource.id;
+        console.log(`[AdSubscriptions] Processing cancellation for subscription: ${subscriptionId}`);
+        
+        await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
+          { paypalSubscriptionId: subscriptionId },
+          { 
+            $set: { 
+              status: 'cancelled',
+              updatedAt: Date.now()
+            } 
+          }
+        );
+      } else if (eventType === 'BILLING.SUBSCRIPTION.EXPIRED' || eventType === 'BILLING.SUBSCRIPTION.SUSPENDED') {
+        const subscriptionId = resource.id;
+        console.log(`[AdSubscriptions] Processing expiration/suspension for subscription: ${subscriptionId}`);
+        
+        await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
+          { paypalSubscriptionId: subscriptionId },
+          { 
+            $set: { 
+              status: 'expired',
+              updatedAt: Date.now()
+            } 
+          }
+        );
+      }
+
+      res.status(200).json({ success: true, message: 'Webhook processed' });
+    } catch (error) {
+      console.error('[AdSubscriptions] Error processing webhook:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to process webhook',
         message: 'Internal server error'
       });
     }
