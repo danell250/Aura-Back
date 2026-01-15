@@ -43,6 +43,7 @@ router.post('/:id/accept-connection', usersController_1.usersController.acceptCo
 router.post('/:id/reject-connection', usersController_1.usersController.rejectConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', usersController_1.usersController.blockUser);
+router.post('/:id/unblock', usersController_1.usersController.unblockUser);
 // POST /api/users/:id/report - Report user
 router.post('/:id/report', usersController_1.usersController.reportUser);
 // POST /api/users/:id/remove-acquaintance - Remove acquaintance

@@ -8,7 +8,8 @@ const ALLOWED_MIME_TYPES = [
   'image/jpeg',
   'image/png',
   'image/webp',
-  'video/mp4'
+  'video/mp4',
+  'application/pdf'
 ];
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;

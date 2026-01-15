@@ -59,6 +59,8 @@ router.post('/:id/reject-connection', usersController.rejectConnectionRequest);
 // POST /api/users/:id/block - Block user
 router.post('/:id/block', usersController.blockUser);
 
+router.post('/:id/unblock', usersController.unblockUser);
+
 // POST /api/users/:id/report - Report user
 router.post('/:id/report', usersController.reportUser);
 

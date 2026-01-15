@@ -33,7 +33,8 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
     const isAllowedType = req.file.mimetype === 'image/jpeg' ||
         req.file.mimetype === 'image/png' ||
         req.file.mimetype === 'image/webp' ||
-        req.file.mimetype === 'video/mp4';
+        req.file.mimetype === 'video/mp4' ||
+        req.file.mimetype === 'application/pdf';
     if (!isAllowedType) {
         return res.status(400).json({ error: 'Invalid file type' });
     }

@@ -467,6 +467,61 @@ exports.usersController = {
             });
         }
     }),
+    unblockUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const { targetUserId } = req.body;
+            const db = (0, db_1.getDB)();
+            if (!targetUserId || typeof targetUserId !== 'string') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing targetUserId',
+                    message: 'targetUserId is required'
+                });
+            }
+            const blocker = yield db.collection('users').findOne({ id });
+            const target = yield db.collection('users').findOne({ id: targetUserId });
+            if (!blocker || !target) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: 'Blocker or target user not found'
+                });
+            }
+            const nextBlocked = (blocker.blockedUsers || []).filter((uid) => uid !== targetUserId);
+            const nextBlockedBy = (target.blockedBy || []).filter((uid) => uid !== id);
+            yield db.collection('users').updateOne({ id }, {
+                $set: {
+                    blockedUsers: nextBlocked,
+                    updatedAt: new Date().toISOString()
+                }
+            });
+            yield db.collection('users').updateOne({ id: targetUserId }, {
+                $set: {
+                    blockedBy: nextBlockedBy,
+                    updatedAt: new Date().toISOString()
+                }
+            });
+            res.json({
+                success: true,
+                data: {
+                    blockerId: id,
+                    targetUserId,
+                    blockedUsers: nextBlocked,
+                    blockedBy: nextBlockedBy
+                },
+                message: 'User unblocked successfully'
+            });
+        }
+        catch (error) {
+            console.error('Error unblocking user:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to unblock user',
+                message: 'Internal server error'
+            });
+        }
+    }),
     // POST /api/users/:id/report - Report user
     reportUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {

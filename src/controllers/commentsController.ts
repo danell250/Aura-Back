@@ -71,11 +71,10 @@ export const commentsController = {
     }
   },
 
-  // POST /api/posts/:postId/comments - Create new comment
   createComment: async (req: Request, res: Response) => {
     try {
       const { postId } = req.params;
-      const { text, authorId, parentId } = req.body as { text: string; authorId: string; parentId?: string };
+      const { text, authorId, parentId, taggedUserIds } = req.body as { text: string; authorId: string; parentId?: string; taggedUserIds?: string[] };
       if (!text || !authorId) {
         return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text and authorId are required' });
       }
@@ -100,6 +99,8 @@ export const commentsController = {
         avatarType: 'image'
       };
 
+      const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];
+
       const newComment = {
         id: `comment-${Date.now()}`,
         postId,
@@ -108,8 +109,9 @@ export const commentsController = {
         timestamp: Date.now(),
         parentId: parentId || null,
         reactions: {} as Record<string, number>,
-        reactionUsers: {} as Record<string, string[]>, // Store who reacted with what
-        userReactions: [] as string[] // placeholder for response
+        reactionUsers: {} as Record<string, string[]>,
+        userReactions: [] as string[],
+        taggedUserIds: tagList
       };
 
       await db.collection(COMMENTS_COLLECTION).insertOne(newComment);
@@ -123,6 +125,23 @@ export const commentsController = {
             authorId,
             'commented on your post',
             postId
+          );
+        }
+
+        if (tagList.length > 0) {
+          const uniqueTagIds = Array.from(new Set(tagList)).filter(id => id && id !== authorEmbed.id);
+          await Promise.all(
+            uniqueTagIds.map(id =>
+              createNotificationInDB(
+                id,
+                'link',
+                authorEmbed.id,
+                'mentioned you in a comment',
+                postId
+              ).catch(err => {
+                console.error('Error creating comment mention notification:', err);
+              })
+            )
           );
         }
       } catch (e) {

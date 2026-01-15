@@ -76,11 +76,10 @@ exports.commentsController = {
             res.status(500).json({ success: false, error: 'Failed to fetch comment', message: 'Internal server error' });
         }
     }),
-    // POST /api/posts/:postId/comments - Create new comment
     createComment: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { postId } = req.params;
-            const { text, authorId, parentId } = req.body;
+            const { text, authorId, parentId, taggedUserIds } = req.body;
             if (!text || !authorId) {
                 return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text and authorId are required' });
             }
@@ -103,6 +102,7 @@ exports.commentsController = {
                 avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`,
                 avatarType: 'image'
             };
+            const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
             const newComment = {
                 id: `comment-${Date.now()}`,
                 postId,
@@ -111,14 +111,21 @@ exports.commentsController = {
                 timestamp: Date.now(),
                 parentId: parentId || null,
                 reactions: {},
-                reactionUsers: {}, // Store who reacted with what
-                userReactions: [] // placeholder for response
+                reactionUsers: {},
+                userReactions: [],
+                taggedUserIds: tagList
             };
             yield db.collection(COMMENTS_COLLECTION).insertOne(newComment);
             try {
                 const post = yield db.collection('posts').findOne({ id: postId });
                 if (post && post.author && post.author.id && post.author.id !== authorId) {
                     yield (0, notificationsController_1.createNotificationInDB)(post.author.id, 'comment', authorId, 'commented on your post', postId);
+                }
+                if (tagList.length > 0) {
+                    const uniqueTagIds = Array.from(new Set(tagList)).filter(id => id && id !== authorEmbed.id);
+                    yield Promise.all(uniqueTagIds.map(id => (0, notificationsController_1.createNotificationInDB)(id, 'link', authorEmbed.id, 'mentioned you in a comment', postId).catch(err => {
+                        console.error('Error creating comment mention notification:', err);
+                    })));
                 }
             }
             catch (e) {
