@@ -241,7 +241,8 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      accessToken: newAccessToken, // Client might update memory state
+      accessToken: newAccessToken,
+      user: user,
       message: 'Token refreshed successfully'
     });
 
