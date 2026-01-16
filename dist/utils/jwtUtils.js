@@ -127,7 +127,7 @@ const authenticateJWT = (req, res, next) => __awaiter(void 0, void 0, void 0, fu
     }
     const decoded = (0, exports.verifyAccessToken)(token);
     if (!decoded) {
-        return res.status(403).json({
+        return res.status(401).json({
             success: false,
             error: 'Invalid token',
             message: 'The provided token is invalid or expired'

@@ -123,7 +123,7 @@ export const authenticateJWT = async (req: Request, res: Response, next: NextFun
   const decoded = verifyAccessToken(token);
   
   if (!decoded) {
-    return res.status(403).json({
+    return res.status(401).json({
       success: false,
       error: 'Invalid token',
       message: 'The provided token is invalid or expired'

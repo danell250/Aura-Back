@@ -33,8 +33,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
       }
     }
     
-    // If token exists but is invalid/expired
-    return res.status(403).json({
+    return res.status(401).json({
       success: false,
       error: 'Invalid token',
       message: 'The provided token is invalid or expired'
