@@ -448,7 +448,9 @@ exports.adsController = {
                     adId: id,
                     ownerId: (ad === null || ad === void 0 ? void 0 : ad.ownerId) || null,
                     spend: 0,
-                    conversions: 0
+                    conversions: 0,
+                    clicks: 0,
+                    engagement: 0
                 },
                 $inc: {
                     impressions: 1,
@@ -475,7 +477,10 @@ exports.adsController = {
                     adId: id,
                     ownerId: (ad === null || ad === void 0 ? void 0 : ad.ownerId) || null,
                     spend: 0,
-                    conversions: 0
+                    conversions: 0,
+                    impressions: 0,
+                    reach: 0,
+                    engagement: 0
                 },
                 $inc: {
                     clicks: 1

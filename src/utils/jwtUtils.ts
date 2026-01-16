@@ -1,13 +1,13 @@
-import jwt from 'jsonwebtoken';
+import jwt, { SignOptions, Secret } from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
 import { getDB } from '../db';
 import { User } from '../types';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_jwt_secret_for_dev';
-const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || 'fallback_refresh_token_secret_for_dev';
+const JWT_SECRET: Secret = process.env.JWT_SECRET || 'fallback_jwt_secret_for_dev';
+const REFRESH_TOKEN_SECRET: Secret = process.env.REFRESH_TOKEN_SECRET || 'fallback_refresh_token_secret_for_dev';
 
-const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || '15m';
-const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d';
+const ACCESS_TOKEN_EXPIRES_IN = (process.env.ACCESS_TOKEN_EXPIRES_IN || '15m') as SignOptions['expiresIn'];
+const REFRESH_TOKEN_EXPIRES_IN = (process.env.REFRESH_TOKEN_EXPIRES_IN || '7d') as SignOptions['expiresIn'];
 
 // Generate Access Token (Short-lived)
 export const generateAccessToken = (user: User): string => {
