@@ -309,7 +309,6 @@ app.get('/auth/user', (req, res) => {
         res.status(401).json({ error: 'Not authenticated' });
     }
 });
-// Debug endpoint to check environment variables
 app.get('/api/debug/env', (req, res) => {
     res.json({
         frontendUrl: process.env.VITE_FRONTEND_URL,
@@ -324,6 +323,30 @@ app.get('/api/debug/env', (req, res) => {
         ].filter(Boolean)
     });
 });
+app.get('/api/credits/history/:userId', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { userId } = req.params;
+        const db = (0, db_1.getDB)();
+        const transactions = yield db
+            .collection('transactions')
+            .find({ userId, type: 'credit_purchase' })
+            .sort({ createdAt: -1 })
+            .limit(100)
+            .toArray();
+        res.json({
+            success: true,
+            data: transactions
+        });
+    }
+    catch (error) {
+        console.error('Error fetching credit history:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch credit history',
+            message: 'Internal server error'
+        });
+    }
+}));
 // Direct test route for debugging
 app.post('/api/users/direct-test', (req, res) => {
     console.log('Direct test route hit!');
@@ -339,13 +362,15 @@ app.use('/api/notifications', notificationsRoutes_1.default);
 app.use('/api/messages', messagesRoutes_1.default);
 app.use('/api/subscriptions', subscriptionsRoutes_1.default);
 app.use('/api/ad-subscriptions', adSubscriptionsRoutes_1.default);
-app.get('/payment-success', (_req, res) => {
+app.get('/payment-success', (req, res) => {
+    const pkg = typeof req.query.pkg === 'string' ? req.query.pkg : undefined;
+    const pkgParam = pkg ? `&pkg=${encodeURIComponent(pkg)}` : '';
     res.send(`
         <!DOCTYPE html>
         <html>
         <head>
           <title>Payment Successful - Aura</title>
-          <meta http-equiv="refresh" content="3;url=/?payment=success">
+          <meta http-equiv="refresh" content="3;url=/?payment=success${pkgParam}">
           <style>
             body { font-family: system-ui; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; padding: 4rem; }
             .success { font-size: 3rem; margin-bottom: 1rem; }
@@ -359,7 +384,7 @@ app.get('/payment-success', (_req, res) => {
           <div class="message">Redirecting you back to Aura...</div>
           <script>
             setTimeout(function() {
-              window.location.href = '/?payment=success';
+              window.location.href = '/?payment=success${pkgParam}';
             }, 3000);
           </script>
         </body>

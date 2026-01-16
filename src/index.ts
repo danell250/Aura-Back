@@ -292,7 +292,6 @@ app.get('/auth/user', (req, res) => {
   }
 });
 
-// Debug endpoint to check environment variables
 app.get('/api/debug/env', (req, res) => {
   res.json({
     frontendUrl: process.env.VITE_FRONTEND_URL,
@@ -306,6 +305,31 @@ app.get('/api/debug/env', (req, res) => {
       "http://localhost:5173"
     ].filter(Boolean)
   });
+});
+
+app.get('/api/credits/history/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const db = getDB();
+    const transactions = await db
+      .collection('transactions')
+      .find({ userId, type: 'credit_purchase' })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .toArray();
+
+    res.json({
+      success: true,
+      data: transactions
+    });
+  } catch (error) {
+    console.error('Error fetching credit history:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch credit history',
+      message: 'Internal server error'
+    });
+  }
 });
 
 // Direct test route for debugging
@@ -324,13 +348,15 @@ app.use('/api/messages', messagesRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
 app.use('/api/ad-subscriptions', adSubscriptionsRoutes);
 
-app.get('/payment-success', (_req, res) => {
+app.get('/payment-success', (req, res) => {
+  const pkg = typeof req.query.pkg === 'string' ? req.query.pkg : undefined;
+  const pkgParam = pkg ? `&pkg=${encodeURIComponent(pkg)}` : '';
   res.send(`
         <!DOCTYPE html>
         <html>
         <head>
           <title>Payment Successful - Aura</title>
-          <meta http-equiv="refresh" content="3;url=/?payment=success">
+          <meta http-equiv="refresh" content="3;url=/?payment=success${pkgParam}">
           <style>
             body { font-family: system-ui; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; padding: 4rem; }
             .success { font-size: 3rem; margin-bottom: 1rem; }
@@ -344,7 +370,7 @@ app.get('/payment-success', (_req, res) => {
           <div class="message">Redirecting you back to Aura...</div>
           <script>
             setTimeout(function() {
-              window.location.href = '/?payment=success';
+              window.location.href = '/?payment=success${pkgParam}';
             }, 3000);
           </script>
         </body>
