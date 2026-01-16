@@ -74,51 +74,56 @@ const db_1 = require("./db");
 const trustService_1 = require("./services/trustService");
 dotenv_1.default.config();
 // Passport Google OAuth Strategy Configuration
-passport_1.default.use(new passport_google_oauth20_1.Strategy({
-    clientID: process.env.GOOGLE_CLIENT_ID || '63639970194-r83ifit3giq02jd1rgfq84uea5tbgv6h.apps.googleusercontent.com',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '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',
-    callbackURL: process.env.GOOGLE_CALLBACK_URL || "https://aura-back-s1bw.onrender.com/api/auth/google/callback"
-}, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d;
-    try {
-        // Parse name from profile
-        const displayName = profile.displayName || '';
-        const nameParts = displayName.trim().split(/\s+/);
-        const firstName = nameParts[0] || 'User';
-        const lastName = nameParts.slice(1).join(' ') || '';
-        const email = (_b = (_a = profile.emails) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.value;
-        if (!email) {
-            return done(new Error('Google account does not have an email address'), undefined);
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    passport_1.default.use(new passport_google_oauth20_1.Strategy({
+        clientID: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        callbackURL: process.env.GOOGLE_CALLBACK_URL || "https://aura-back-s1bw.onrender.com/api/auth/google/callback"
+    }, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c, _d;
+        try {
+            // Parse name from profile
+            const displayName = profile.displayName || '';
+            const nameParts = displayName.trim().split(/\s+/);
+            const firstName = nameParts[0] || 'User';
+            const lastName = nameParts.slice(1).join(' ') || '';
+            const email = (_b = (_a = profile.emails) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.value;
+            if (!email) {
+                return done(new Error('Google account does not have an email address'), undefined);
+            }
+            // Create user object with Google profile data
+            const user = {
+                id: profile.id,
+                googleId: profile.id,
+                firstName: firstName,
+                lastName: lastName,
+                name: displayName || `${firstName} ${lastName}`.trim(),
+                email: email.toLowerCase().trim(),
+                avatar: ((_d = (_c = profile.photos) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.value) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
+                avatarType: 'image',
+                handle: `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`,
+                bio: 'New to Aura',
+                industry: 'Other',
+                companyName: '',
+                phone: '',
+                dob: '',
+                acquaintances: [],
+                blockedUsers: [],
+                trustScore: 10,
+                auraCredits: 100,
+                activeGlow: 'none'
+            };
+            return done(null, user);
         }
-        // Create user object with Google profile data
-        const user = {
-            id: profile.id,
-            googleId: profile.id,
-            firstName: firstName,
-            lastName: lastName,
-            name: displayName || `${firstName} ${lastName}`.trim(),
-            email: email.toLowerCase().trim(),
-            avatar: ((_d = (_c = profile.photos) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.value) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
-            avatarType: 'image',
-            handle: `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`,
-            bio: 'New to Aura',
-            industry: 'Other',
-            companyName: '',
-            phone: '',
-            dob: '',
-            acquaintances: [],
-            blockedUsers: [],
-            trustScore: 10,
-            auraCredits: 100,
-            activeGlow: 'none'
-        };
-        return done(null, user);
-    }
-    catch (error) {
-        console.error('Error in Google OAuth strategy:', error);
-        return done(error, undefined);
-    }
-})));
+        catch (error) {
+            console.error('Error in Google OAuth strategy:', error);
+            return done(error, undefined);
+        }
+    })));
+}
+else {
+    console.warn('⚠️ Google OAuth environment variables not found. Google login will not be available.');
+}
 // Serialize user for session - store user ID
 passport_1.default.serializeUser((user, done) => {
     done(null, user.id);
@@ -173,48 +178,53 @@ app.use((0, cors_1.default)({
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
 // Passport GitHub OAuth Strategy Configuration
-passport_1.default.use(new passport_github2_1.Strategy({
-    clientID: process.env.GITHUB_CLIENT_ID || '',
-    clientSecret: process.env.GITHUB_CLIENT_SECRET || '',
-    callbackURL: process.env.GITHUB_CALLBACK_URL || "https://aura-back-s1bw.onrender.com/api/auth/github/callback",
-    scope: ['user:email']
-}, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const displayName = profile.displayName || '';
-        const username = profile.username || 'githubuser';
-        const nameParts = displayName.trim().split(/\s+/);
-        const firstName = nameParts[0] || username;
-        const lastName = nameParts.slice(1).join(' ') || '';
-        const email = (profile.emails && profile.emails[0] && profile.emails[0].value) ||
-            `${username}@github`;
-        const user = {
-            id: profile.id,
-            githubId: profile.id,
-            firstName,
-            lastName,
-            name: displayName || username,
-            email: email.toLowerCase().trim(),
-            avatar: (profile.photos && profile.photos[0] && profile.photos[0].value) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
-            avatarType: 'image',
-            handle: `@${username.toLowerCase()}${Math.floor(Math.random() * 10000)}`,
-            bio: 'New to Aura',
-            industry: 'Other',
-            companyName: '',
-            phone: '',
-            dob: '',
-            acquaintances: [],
-            blockedUsers: [],
-            trustScore: 10,
-            auraCredits: 100,
-            activeGlow: 'none'
-        };
-        return done(null, user);
-    }
-    catch (error) {
-        console.error('Error in GitHub OAuth strategy:', error);
-        return done(error, undefined);
-    }
-})));
+if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
+    passport_1.default.use(new passport_github2_1.Strategy({
+        clientID: process.env.GITHUB_CLIENT_ID,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET,
+        callbackURL: process.env.GITHUB_CALLBACK_URL || "https://aura-back-s1bw.onrender.com/api/auth/github/callback",
+        scope: ['user:email']
+    }, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const displayName = profile.displayName || '';
+            const username = profile.username || 'githubuser';
+            const nameParts = displayName.trim().split(/\s+/);
+            const firstName = nameParts[0] || username;
+            const lastName = nameParts.slice(1).join(' ') || '';
+            const email = (profile.emails && profile.emails[0] && profile.emails[0].value) ||
+                `${username}@github`;
+            const user = {
+                id: profile.id,
+                githubId: profile.id,
+                firstName,
+                lastName,
+                name: displayName || username,
+                email: email.toLowerCase().trim(),
+                avatar: (profile.photos && profile.photos[0] && profile.photos[0].value) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
+                avatarType: 'image',
+                handle: `@${username.toLowerCase()}${Math.floor(Math.random() * 10000)}`,
+                bio: 'New to Aura',
+                industry: 'Other',
+                companyName: '',
+                phone: '',
+                dob: '',
+                acquaintances: [],
+                blockedUsers: [],
+                trustScore: 10,
+                auraCredits: 100,
+                activeGlow: 'none'
+            };
+            return done(null, user);
+        }
+        catch (error) {
+            console.error('Error in GitHub OAuth strategy:', error);
+            return done(error, undefined);
+        }
+    })));
+}
+else {
+    console.warn('⚠️ GitHub OAuth environment variables not found. GitHub login will not be available.');
+}
 // Remove the problematic wildcard options route
 // app.options("*", cors());
 // Session middleware

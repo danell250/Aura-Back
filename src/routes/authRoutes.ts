@@ -43,10 +43,25 @@ const loginRateLimiter = rateLimit({
 
 // Google OAuth routes
 router.get('/google',
+  (req, res, next) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(503).json({ 
+        success: false, 
+        message: 'Google login is not configured on the server.' 
+      });
+    }
+    next();
+  },
   passport.authenticate('google', { scope: ['profile', 'email'] })
 );
 
 router.get('/google/callback',
+  (req, res, next) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.redirect('/login?error=google_not_configured');
+    }
+    next();
+  },
   passport.authenticate('google', { failureRedirect: '/login' }),
   async (req: Request, res: Response) => {
     try {
@@ -251,10 +266,25 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
 
 // GitHub OAuth routes
 router.get('/github',
+  (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+      return res.status(503).json({ 
+        success: false, 
+        message: 'GitHub login is not configured on the server.' 
+      });
+    }
+    next();
+  },
   passport.authenticate('github', { scope: ['user:email'] })
 );
 
 router.get('/github/callback',
+  (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+      return res.redirect('/login?error=github_not_configured');
+    }
+    next();
+  },
   passport.authenticate('github', { failureRedirect: '/login' }),
   async (req: Request, res: Response) => {
     try {

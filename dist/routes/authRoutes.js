@@ -45,8 +45,21 @@ const loginRateLimiter = (0, express_rate_limit_1.default)({
     }
 });
 // Google OAuth routes
-router.get('/google', passport_1.default.authenticate('google', { scope: ['profile', 'email'] }));
-router.get('/google/callback', passport_1.default.authenticate('google', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.get('/google', (req, res, next) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+        return res.status(503).json({
+            success: false,
+            message: 'Google login is not configured on the server.'
+        });
+    }
+    next();
+}, passport_1.default.authenticate('google', { scope: ['profile', 'email'] }));
+router.get('/google/callback', (req, res, next) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+        return res.redirect('/login?error=google_not_configured');
+    }
+    next();
+}, passport_1.default.authenticate('google', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // Save or update user in database after successful OAuth
         if (req.user) {
@@ -203,8 +216,21 @@ router.post('/refresh-token', (req, res) => __awaiter(void 0, void 0, void 0, fu
     }
 }));
 // GitHub OAuth routes
-router.get('/github', passport_1.default.authenticate('github', { scope: ['user:email'] }));
-router.get('/github/callback', passport_1.default.authenticate('github', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.get('/github', (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+        return res.status(503).json({
+            success: false,
+            message: 'GitHub login is not configured on the server.'
+        });
+    }
+    next();
+}, passport_1.default.authenticate('github', { scope: ['user:email'] }));
+router.get('/github/callback', (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+        return res.redirect('/login?error=github_not_configured');
+    }
+    next();
+}, passport_1.default.authenticate('github', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         if (req.user) {
             const db = (0, db_1.getDB)();
