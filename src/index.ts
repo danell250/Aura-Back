@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import passport from 'passport';
 import session from 'express-session';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import { Strategy as GitHubStrategy } from 'passport-github2';
 import cookieParser from 'cookie-parser';
 import geminiRoutes from './routes/geminiRoutes';
 import birthdayRoutes from './routes/birthdayRoutes';
@@ -134,6 +135,53 @@ app.use(cors({
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
+// Passport GitHub OAuth Strategy Configuration
+passport.use(new GitHubStrategy({
+  clientID: process.env.GITHUB_CLIENT_ID || '',
+  clientSecret: process.env.GITHUB_CLIENT_SECRET || '',
+  callbackURL: process.env.GITHUB_CALLBACK_URL || "https://aura-back-s1bw.onrender.com/api/auth/github/callback",
+  scope: ['user:email']
+},
+async (_accessToken: any, _refreshToken: any, profile: any, done: (err: any, user?: any) => void) => {
+  try {
+    const displayName = profile.displayName || '';
+    const username = profile.username || 'githubuser';
+    const nameParts = displayName.trim().split(/\s+/);
+    const firstName = nameParts[0] || username;
+    const lastName = nameParts.slice(1).join(' ') || '';
+    const email =
+      (profile.emails && profile.emails[0] && profile.emails[0].value) ||
+      `${username}@github`;
+
+    const user = {
+      id: profile.id,
+      githubId: profile.id,
+      firstName,
+      lastName,
+      name: displayName || username,
+      email: email.toLowerCase().trim(),
+      avatar: (profile.photos && profile.photos[0] && profile.photos[0].value) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
+      avatarType: 'image' as const,
+      handle: `@${username.toLowerCase()}${Math.floor(Math.random() * 10000)}`,
+      bio: 'New to Aura',
+      industry: 'Other',
+      companyName: '',
+      phone: '',
+      dob: '',
+      acquaintances: [],
+      blockedUsers: [],
+      trustScore: 10,
+      auraCredits: 100,
+      activeGlow: 'none' as const
+    };
+
+    return done(null, user);
+  } catch (error) {
+    console.error('Error in GitHub OAuth strategy:', error);
+    return done(error as any, undefined);
+  }
 }));
 
 // Remove the problematic wildcard options route

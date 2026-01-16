@@ -57,6 +57,7 @@ router.get('/google/callback', passport_1.default.authenticate('google', { failu
                 $or: [
                     { id: userData.id },
                     { googleId: userData.googleId },
+                    { githubId: userData.githubId },
                     { email: userData.email }
                 ]
             });
@@ -199,6 +200,65 @@ router.post('/refresh-token', (req, res) => __awaiter(void 0, void 0, void 0, fu
             error: 'Refresh failed',
             message: 'Internal server error'
         });
+    }
+}));
+// GitHub OAuth routes
+router.get('/github', passport_1.default.authenticate('github', { scope: ['user:email'] }));
+router.get('/github/callback', passport_1.default.authenticate('github', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        if (req.user) {
+            const db = (0, db_1.getDB)();
+            const userData = req.user;
+            const existingUser = yield db.collection('users').findOne({
+                $or: [
+                    { id: userData.id },
+                    { githubId: userData.githubId },
+                    { email: userData.email }
+                ]
+            });
+            let userToReturn;
+            if (existingUser) {
+                const preservedHandle = existingUser.handle;
+                const updates = {
+                    firstName: userData.firstName,
+                    lastName: userData.lastName,
+                    name: userData.name,
+                    email: userData.email,
+                    avatar: userData.avatar,
+                    avatarType: userData.avatarType,
+                    githubId: userData.githubId,
+                    lastLogin: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+                updates.handle = preservedHandle || existingUser.handle || userData.handle;
+                yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
+                console.log('Updated existing user after GitHub OAuth:', existingUser.id);
+                userToReturn = Object.assign(Object.assign({}, existingUser), updates);
+            }
+            else {
+                const newUser = Object.assign(Object.assign({}, userData), { handle: userData.handle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
+                yield db.collection('users').insertOne(newUser);
+                console.log('Created new user after GitHub OAuth:', newUser.id);
+                userToReturn = newUser;
+            }
+            const accessToken = (0, jwtUtils_1.generateAccessToken)(userToReturn);
+            const refreshToken = (0, jwtUtils_1.generateRefreshToken)(userToReturn);
+            yield db.collection('users').updateOne({ id: userToReturn.id }, {
+                $push: { refreshTokens: refreshToken }
+            });
+            (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
+            const frontendUrl = process.env.VITE_FRONTEND_URL ||
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
+            console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}/feed`);
+            res.redirect(`${frontendUrl}/feed`);
+        }
+        else {
+            res.redirect('/login');
+        }
+    }
+    catch (error) {
+        console.error('GitHub OAuth callback error:', error);
+        res.redirect('/login');
     }
 }));
 // Get current authenticated user (JWT or session)

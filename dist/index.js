@@ -51,6 +51,7 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const passport_1 = __importDefault(require("passport"));
 const express_session_1 = __importDefault(require("express-session"));
 const passport_google_oauth20_1 = require("passport-google-oauth20");
+const passport_github2_1 = require("passport-github2");
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const geminiRoutes_1 = __importDefault(require("./routes/geminiRoutes"));
 const birthdayRoutes_1 = __importDefault(require("./routes/birthdayRoutes"));
@@ -171,6 +172,49 @@ app.use((0, cors_1.default)({
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
+// Passport GitHub OAuth Strategy Configuration
+passport_1.default.use(new passport_github2_1.Strategy({
+    clientID: process.env.GITHUB_CLIENT_ID || '',
+    clientSecret: process.env.GITHUB_CLIENT_SECRET || '',
+    callbackURL: process.env.GITHUB_CALLBACK_URL || "https://aura-back-s1bw.onrender.com/api/auth/github/callback",
+    scope: ['user:email']
+}, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const displayName = profile.displayName || '';
+        const username = profile.username || 'githubuser';
+        const nameParts = displayName.trim().split(/\s+/);
+        const firstName = nameParts[0] || username;
+        const lastName = nameParts.slice(1).join(' ') || '';
+        const email = (profile.emails && profile.emails[0] && profile.emails[0].value) ||
+            `${username}@github`;
+        const user = {
+            id: profile.id,
+            githubId: profile.id,
+            firstName,
+            lastName,
+            name: displayName || username,
+            email: email.toLowerCase().trim(),
+            avatar: (profile.photos && profile.photos[0] && profile.photos[0].value) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
+            avatarType: 'image',
+            handle: `@${username.toLowerCase()}${Math.floor(Math.random() * 10000)}`,
+            bio: 'New to Aura',
+            industry: 'Other',
+            companyName: '',
+            phone: '',
+            dob: '',
+            acquaintances: [],
+            blockedUsers: [],
+            trustScore: 10,
+            auraCredits: 100,
+            activeGlow: 'none'
+        };
+        return done(null, user);
+    }
+    catch (error) {
+        console.error('Error in GitHub OAuth strategy:', error);
+        return done(error, undefined);
+    }
+})));
 // Remove the problematic wildcard options route
 // app.options("*", cors());
 // Session middleware

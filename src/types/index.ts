@@ -32,6 +32,7 @@ export interface User {
   isCompany?: boolean;
   // Backend-specific fields
   googleId?: string;
+  githubId?: string;
   passwordHash?: string;
   isAdmin?: boolean; // Required for admin checks
   createdAt?: string;
