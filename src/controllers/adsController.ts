@@ -529,7 +529,9 @@ export const adsController = {
             adId: id,
             ownerId: ad?.ownerId || null,
             spend: 0,
-            conversions: 0
+            conversions: 0,
+            clicks: 0,
+            engagement: 0
           },
           $inc: {
             impressions: 1,
@@ -563,7 +565,10 @@ export const adsController = {
             adId: id,
             ownerId: ad?.ownerId || null,
             spend: 0,
-            conversions: 0
+            conversions: 0,
+            impressions: 0,
+            reach: 0,
+            engagement: 0
           },
           $inc: {
             clicks: 1
