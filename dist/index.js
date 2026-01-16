@@ -315,6 +315,8 @@ app.get('/api/debug/env', (req, res) => {
         frontendUrl: process.env.VITE_FRONTEND_URL,
         nodeEnv: process.env.NODE_ENV,
         port: process.env.PORT,
+        hasGoogleOAuthConfig: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+        hasGitHubOAuthConfig: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
         allowedOrigins: [
             process.env.VITE_FRONTEND_URL,
             "https://auraradiance.vercel.app",
