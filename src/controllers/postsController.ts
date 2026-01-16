@@ -407,8 +407,13 @@ export const postsController = {
         timeCapsuleTitle
       } = req.body;
       
-      if (!content || !authorId) {
-        return res.status(400).json({ success: false, error: 'Missing required fields', message: 'content and authorId are required' });
+      if (!authorId) {
+        return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
+      }
+      const hasText = typeof content === 'string' && content.trim().length > 0;
+      const hasMedia = !!mediaUrl || (Array.isArray(mediaItems) && mediaItems.length > 0);
+      if (!hasText && !hasMedia) {
+        return res.status(400).json({ success: false, error: 'Missing content or media', message: 'A post must include text or at least one media item' });
       }
 
       const db = getDB();
@@ -434,14 +439,15 @@ export const postsController = {
         activeGlow: 'none'
       };
 
-      const hashtags = getHashtagsFromText(content);
+      const safeContent = typeof content === 'string' ? content : '';
+      const hashtags = getHashtagsFromText(safeContent);
       const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];
       const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
       
       const newPost = {
         id: postId,
         author: authorEmbed,
-        content,
+        content: safeContent,
         mediaUrl: mediaUrl || undefined,
         mediaType: mediaType || undefined,
         mediaItems: mediaItems || undefined,

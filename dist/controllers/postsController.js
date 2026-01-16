@@ -373,8 +373,13 @@ exports.postsController = {
     createPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { content, mediaUrl, mediaType, mediaItems, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle } = req.body;
-            if (!content || !authorId) {
-                return res.status(400).json({ success: false, error: 'Missing required fields', message: 'content and authorId are required' });
+            if (!authorId) {
+                return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
+            }
+            const hasText = typeof content === 'string' && content.trim().length > 0;
+            const hasMedia = !!mediaUrl || (Array.isArray(mediaItems) && mediaItems.length > 0);
+            if (!hasText && !hasMedia) {
+                return res.status(400).json({ success: false, error: 'Missing content or media', message: 'A post must include text or at least one media item' });
             }
             const db = (0, db_1.getDB)();
             // Try to fetch full author from DB
@@ -398,10 +403,11 @@ exports.postsController = {
                 avatarType: 'image',
                 activeGlow: 'none'
             };
-            const hashtags = (0, hashtagUtils_1.getHashtagsFromText)(content);
+            const safeContent = typeof content === 'string' ? content : '';
+            const hashtags = (0, hashtagUtils_1.getHashtagsFromText)(safeContent);
             const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
             const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
-            const newPost = Object.assign({ id: postId, author: authorEmbed, content, mediaUrl: mediaUrl || undefined, mediaType: mediaType || undefined, mediaItems: mediaItems || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
+            const newPost = Object.assign({ id: postId, author: authorEmbed, content: safeContent, mediaUrl: mediaUrl || undefined, mediaType: mediaType || undefined, mediaItems: mediaItems || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
                 isTimeCapsule: true,
                 unlockDate: unlockDate || null,
                 isUnlocked: unlockDate ? Date.now() >= unlockDate : true,
