@@ -64,6 +64,28 @@ const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, 
     console.log('⚠ Using fallback handle:', fallbackHandle);
     return fallbackHandle;
 });
+const normalizeUserHandle = (rawHandle) => {
+    const base = (rawHandle || '').trim().toLowerCase();
+    const withoutAt = base.startsWith('@') ? base.slice(1) : base;
+    const cleaned = withoutAt.replace(/[^a-z0-9_-]/g, '');
+    if (!cleaned)
+        return '';
+    return `@${cleaned}`;
+};
+const validateHandleFormat = (handle) => {
+    const normalized = normalizeUserHandle(handle);
+    if (!normalized) {
+        return { ok: false, message: 'Handle is required' };
+    }
+    const core = normalized.slice(1);
+    if (core.length < 3 || core.length > 21) {
+        return { ok: false, message: 'Handle must be between 3 and 21 characters' };
+    }
+    if (!/^[a-z0-9_-]+$/.test(core)) {
+        return { ok: false, message: 'Handle can only use letters, numbers, underscores and hyphens' };
+    }
+    return { ok: true };
+};
 const CREDIT_BUNDLE_CONFIG = {
     'Nano Pulse': { credits: 100, price: 9.99 },
     'Neural Spark': { credits: 500, price: 39.99 },
@@ -255,11 +277,44 @@ exports.usersController = {
     updateUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
-            const updates = req.body;
+            const updates = req.body || {};
             const db = (0, db_1.getDB)();
-            // Prevent immutable fields like handle from being changed
-            const _a = updates || {}, { handle, googleId, id: _ignoredId } = _a, mutableUpdates = __rest(_a, ["handle", "googleId", "id"]);
-            const updateData = Object.assign(Object.assign({}, mutableUpdates), { updatedAt: new Date().toISOString() });
+            const existingUser = yield db.collection('users').findOne({ id });
+            if (!existingUser) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: `User with ID ${id} does not exist`
+                });
+            }
+            const { googleId, id: _ignoredId } = updates, mutableUpdates = __rest(updates, ["googleId", "id"]);
+            const updateData = Object.assign({}, mutableUpdates);
+            if (typeof mutableUpdates.handle === 'string') {
+                const handleValidation = validateHandleFormat(mutableUpdates.handle);
+                if (!handleValidation.ok) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Invalid handle',
+                        message: handleValidation.message || 'Invalid handle'
+                    });
+                }
+                const normalizedHandle = normalizeUserHandle(mutableUpdates.handle);
+                if (normalizedHandle !== existingUser.handle) {
+                    const conflictingUser = yield db.collection('users').findOne({ handle: normalizedHandle });
+                    if (conflictingUser && conflictingUser.id !== id) {
+                        return res.status(409).json({
+                            success: false,
+                            error: 'Handle taken',
+                            message: 'This handle is already taken. Please try another one.'
+                        });
+                    }
+                }
+                updateData.handle = normalizedHandle;
+            }
+            else {
+                delete updateData.handle;
+            }
+            updateData.updatedAt = new Date().toISOString();
             const result = yield db.collection('users').updateOne({ id }, { $set: updateData });
             if (result.matchedCount === 0) {
                 return res.status(404).json({

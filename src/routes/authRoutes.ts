@@ -19,7 +19,7 @@ const router = Router();
 const normalizeUserHandle = (rawHandle: string): string => {
   const base = (rawHandle || '').trim().toLowerCase();
   const withoutAt = base.startsWith('@') ? base.slice(1) : base;
-  const cleaned = withoutAt.replace(/[^a-z0-9_.]/g, '');
+  const cleaned = withoutAt.replace(/[^a-z0-9_-]/g, '');
   if (!cleaned) return '';
   return `@${cleaned}`;
 };
@@ -30,11 +30,11 @@ const validateHandleFormat = (handle: string): { ok: boolean; message?: string }
     return { ok: false, message: 'Handle is required' };
   }
   const core = normalized.slice(1);
-  if (core.length < 3 || core.length > 20) {
-    return { ok: false, message: 'Handle must be between 3 and 20 characters' };
+  if (core.length < 3 || core.length > 21) {
+    return { ok: false, message: 'Handle must be between 3 and 21 characters' };
   }
-  if (!/^[a-z0-9_.]+$/.test(core)) {
-    return { ok: false, message: 'Handle can only use letters, numbers, dots and underscores' };
+  if (!/^[a-z0-9_-]+$/.test(core)) {
+    return { ok: false, message: 'Handle can only use letters, numbers, underscores and hyphens' };
   }
   return { ok: true };
 };
@@ -79,6 +79,41 @@ const generateUniqueHandle = async (firstName: string, lastName: string): Promis
   console.log('⚠ Using fallback handle:', fallbackHandle);
   return fallbackHandle;
 };
+
+router.post('/check-handle', async (req: Request, res: Response) => {
+  try {
+    const { handle } = req.body || {};
+
+    const validation = validateHandleFormat(handle || '');
+    if (!validation.ok) {
+      return res.status(400).json({
+        success: false,
+        available: false,
+        error: 'Invalid handle',
+        message: validation.message || 'Invalid handle'
+      });
+    }
+
+    const normalizedHandle = normalizeUserHandle(handle);
+    const db = getDB();
+
+    const existingUser = await db.collection('users').findOne({ handle: normalizedHandle });
+
+    return res.json({
+      success: true,
+      available: !existingUser,
+      handle: normalizedHandle
+    });
+  } catch (error) {
+    console.error('Error checking handle availability:', error);
+    return res.status(500).json({
+      success: false,
+      available: false,
+      error: 'Handle check failed',
+      message: 'Internal server error'
+    });
+  }
+});
 
 // ============ RATE LIMITER ============
 const loginRateLimiter = rateLimit({

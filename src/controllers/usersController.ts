@@ -45,6 +45,29 @@ const generateUniqueHandle = async (firstName: string, lastName: string): Promis
   return fallbackHandle;
 };
 
+const normalizeUserHandle = (rawHandle: string): string => {
+  const base = (rawHandle || '').trim().toLowerCase();
+  const withoutAt = base.startsWith('@') ? base.slice(1) : base;
+  const cleaned = withoutAt.replace(/[^a-z0-9_-]/g, '');
+  if (!cleaned) return '';
+  return `@${cleaned}`;
+};
+
+const validateHandleFormat = (handle: string): { ok: boolean; message?: string } => {
+  const normalized = normalizeUserHandle(handle);
+  if (!normalized) {
+    return { ok: false, message: 'Handle is required' };
+  }
+  const core = normalized.slice(1);
+  if (core.length < 3 || core.length > 21) {
+    return { ok: false, message: 'Handle must be between 3 and 21 characters' };
+  }
+  if (!/^[a-z0-9_-]+$/.test(core)) {
+    return { ok: false, message: 'Handle can only use letters, numbers, underscores and hyphens' };
+  }
+  return { ok: true };
+};
+
 const CREDIT_BUNDLE_CONFIG: Record<string, { credits: number; price: number }> = {
   'Nano Pulse': { credits: 100, price: 9.99 },
   'Neural Spark': { credits: 500, price: 39.99 },
@@ -267,16 +290,53 @@ export const usersController = {
   updateUser: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const updates = req.body;
-      
+      const updates = req.body || {};
+
       const db = getDB();
-      
-      // Prevent immutable fields like handle from being changed
-      const { handle, googleId, id: _ignoredId, ...mutableUpdates } = updates || {};
-      const updateData = {
-        ...mutableUpdates,
-        updatedAt: new Date().toISOString()
+
+      const existingUser = await db.collection('users').findOne({ id });
+      if (!existingUser) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      const { googleId, id: _ignoredId, ...mutableUpdates } = updates;
+      const updateData: any = {
+        ...mutableUpdates
       };
+
+      if (typeof mutableUpdates.handle === 'string') {
+        const handleValidation = validateHandleFormat(mutableUpdates.handle);
+        if (!handleValidation.ok) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid handle',
+            message: handleValidation.message || 'Invalid handle'
+          });
+        }
+
+        const normalizedHandle = normalizeUserHandle(mutableUpdates.handle);
+
+        if (normalizedHandle !== existingUser.handle) {
+          const conflictingUser = await db.collection('users').findOne({ handle: normalizedHandle });
+          if (conflictingUser && conflictingUser.id !== id) {
+            return res.status(409).json({
+              success: false,
+              error: 'Handle taken',
+              message: 'This handle is already taken. Please try another one.'
+            });
+          }
+        }
+
+        updateData.handle = normalizedHandle;
+      } else {
+        delete updateData.handle;
+      }
+
+      updateData.updatedAt = new Date().toISOString();
 
       const result = await db.collection('users').updateOne(
         { id },
