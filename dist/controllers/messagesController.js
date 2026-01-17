@@ -124,6 +124,7 @@ exports.messagesController = {
                 .limit(Number(limit))
                 .skip((Number(page) - 1) * Number(limit))
                 .toArray();
+            const mappedMessages = messages.map((message) => (Object.assign(Object.assign({}, message), { id: message.id || (message._id ? String(message._id) : undefined) })));
             // Mark messages as read
             yield messagesCollection.updateMany({
                 senderId: userId,
@@ -132,7 +133,7 @@ exports.messagesController = {
             }, { $set: { isRead: true } });
             res.json({
                 success: true,
-                data: messages.reverse() // Return in chronological order
+                data: mappedMessages.reverse()
             });
         }
         catch (error) {
@@ -174,10 +175,12 @@ exports.messagesController = {
             };
             const result = yield messagesCollection.insertOne(message);
             const insertedMessage = yield messagesCollection.findOne({ _id: result.insertedId });
+            const responseMessage = insertedMessage
+                ? Object.assign(Object.assign({}, insertedMessage), { id: insertedMessage._id ? String(insertedMessage._id) : undefined }) : null;
             yield db.collection('users').updateOne({ id: receiverId }, { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } });
             res.status(201).json({
                 success: true,
-                data: insertedMessage
+                data: responseMessage
             });
         }
         catch (error) {

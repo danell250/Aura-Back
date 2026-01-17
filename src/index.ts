@@ -7,6 +7,7 @@ import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import cookieParser from 'cookie-parser';
 import geminiRoutes from './routes/geminiRoutes';
+import giphyRoutes from './routes/giphyRoutes';
 import birthdayRoutes from './routes/birthdayRoutes';
 import uploadRoutes from './routes/uploadRoutes';
 import postsRoutes from './routes/postsRoutes';
@@ -338,6 +339,7 @@ app.post('/api/users/direct-test', (req, res) => {
   res.json({ success: true, message: 'Direct route working!' });
 });
 app.use('/api/gemini', geminiRoutes);
+app.use('/api/giphy', giphyRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/posts', postsRoutes);
 app.use('/api/ads', adsRoutes);
