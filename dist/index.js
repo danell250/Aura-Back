@@ -54,7 +54,6 @@ const passport_google_oauth20_1 = require("passport-google-oauth20");
 const passport_github2_1 = require("passport-github2");
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const geminiRoutes_1 = __importDefault(require("./routes/geminiRoutes"));
-const giphyRoutes_1 = __importDefault(require("./routes/giphyRoutes"));
 const birthdayRoutes_1 = __importDefault(require("./routes/birthdayRoutes"));
 const uploadRoutes_1 = __importDefault(require("./routes/uploadRoutes"));
 const postsRoutes_1 = __importDefault(require("./routes/postsRoutes"));
@@ -354,7 +353,6 @@ app.post('/api/users/direct-test', (req, res) => {
     res.json({ success: true, message: 'Direct route working!' });
 });
 app.use('/api/gemini', geminiRoutes_1.default);
-app.use('/api/giphy', giphyRoutes_1.default);
 app.use('/api/upload', uploadRoutes_1.default);
 app.use('/api/posts', postsRoutes_1.default);
 app.use('/api/ads', adsRoutes_1.default);
