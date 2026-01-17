@@ -654,7 +654,88 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   }
 });
 
-// ============ REGISTER ============
+// ============ COMPLETE OAUTH PROFILE ============
+router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
+  try {
+    const { firstName, lastName, bio, industry, companyName } = req.body;
+    const tempOAuthData = (req.session as any)?.tempOAuthData;
+
+    if (!tempOAuthData) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing OAuth data',
+        message: 'Session expired. Please log in again.'
+      });
+    }
+
+    const db = getDB();
+
+    // Generate unique handle
+    const uniqueHandle = await generateUniqueHandle(firstName, lastName);
+
+    // Create the complete user object
+    const newUser = {
+      id: tempOAuthData.id,
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      name: `${firstName.trim()} ${lastName.trim()}`,
+      email: tempOAuthData.email,
+      avatar: tempOAuthData.avatar,
+      avatarType: tempOAuthData.avatarType || 'image',
+      googleId: tempOAuthData.googleId,
+      githubId: tempOAuthData.githubId,
+      handle: uniqueHandle,
+      bio: bio?.trim() || '',
+      industry: industry || 'Other',
+      companyName: companyName?.trim() || '',
+      trustScore: 10,
+      auraCredits: 100,
+      activeGlow: 'none',
+      acquaintances: [],
+      blockedUsers: [],
+      refreshTokens: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      lastLogin: new Date().toISOString()
+    };
+
+    // Insert the new user
+    await db.collection('users').insertOne(newUser);
+    console.log('✓ Completed OAuth profile for new user:', newUser.id, '| Handle:', uniqueHandle);
+
+    // Generate tokens
+    const accessToken = generateAccessToken(newUser as unknown as User);
+    const refreshToken = generateRefreshToken(newUser as unknown as User);
+
+    // Store refresh token
+    await db.collection('users').updateOne(
+      { id: newUser.id },
+      { $push: { refreshTokens: refreshToken } as any }
+    );
+
+    // Set cookies
+    setTokenCookies(res, accessToken, refreshToken);
+
+    // Clear temp OAuth data
+    (req.session as any).tempOAuthData = null;
+
+    res.json({
+      success: true,
+      user: newUser,
+      token: accessToken,
+      message: 'Profile completed successfully'
+    });
+  } catch (error) {
+    console.error('Error completing OAuth profile:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to complete profile',
+      message: 'Internal server error'
+    });
+  }
+});
+
+
 router.post('/register', async (req: Request, res: Response) => {
   try {
     const { firstName, lastName, email, phone, dob, password } = req.body;
