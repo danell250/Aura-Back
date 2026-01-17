@@ -129,6 +129,11 @@ export const messagesController = {
       .skip((Number(page) - 1) * Number(limit))
       .toArray();
 
+      const mappedMessages = messages.map((message: any) => ({
+        ...message,
+        id: message.id || (message._id ? String(message._id) : undefined),
+      }));
+
       // Mark messages as read
       await messagesCollection.updateMany(
         {
@@ -141,7 +146,7 @@ export const messagesController = {
 
       res.json({
         success: true,
-        data: messages.reverse() // Return in chronological order
+        data: mappedMessages.reverse()
       });
     } catch (error) {
       console.error('Error fetching messages:', error);
@@ -189,6 +194,13 @@ export const messagesController = {
       const result = await messagesCollection.insertOne(message);
       const insertedMessage = await messagesCollection.findOne({ _id: result.insertedId });
 
+      const responseMessage = insertedMessage
+        ? {
+            ...insertedMessage,
+            id: (insertedMessage as any)._id ? String((insertedMessage as any)._id) : undefined,
+          }
+        : null;
+
       await db.collection('users').updateOne(
         { id: receiverId },
         { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } }
@@ -196,7 +208,7 @@ export const messagesController = {
 
       res.status(201).json({
         success: true,
-        data: insertedMessage
+        data: responseMessage
       });
     } catch (error) {
       console.error('Error sending message:', error);
