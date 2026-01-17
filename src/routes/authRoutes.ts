@@ -117,18 +117,20 @@ router.get('/google/callback',
         const db = getDB();
         const userData = req.user as any;
 
+        console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
+
+        // FIX: Only check for THIS SPECIFIC USER by ID or googleId, NOT by name/email
         const existingUser = await db.collection('users').findOne({
           $or: [
             { id: userData.id },
-            { googleId: userData.googleId },
-            { githubId: userData.githubId },
-            { email: userData.email }
+            { googleId: userData.googleId }
           ]
         });
 
         let userToReturn: User;
 
         if (existingUser) {
+          console.log('✓ Found existing user:', existingUser.id);
           // PRESERVE existing handle - NEVER change it
           const updates: any = {
             firstName: userData.firstName,
@@ -147,9 +149,10 @@ router.get('/google/callback',
             { id: existingUser.id },
             { $set: updates }
           );
-          console.log('✓ Updated existing user after OAuth:', existingUser.id);
+          console.log('✓ Updated existing user after OAuth:', existingUser.id, '| Handle preserved:', existingUser.handle);
           userToReturn = { ...existingUser, ...updates } as User;
         } else {
+          console.log('➕ New user from Google OAuth');
           // NEW USER: Generate unique handle
           const uniqueHandle = await generateUniqueHandle(
             userData.firstName || 'User',
@@ -336,17 +339,20 @@ router.get('/github/callback',
         const db = getDB();
         const userData = req.user as any;
 
+        console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
+
+        // FIX: Only check for THIS SPECIFIC USER by ID or githubId, NOT by name/email
         const existingUser = await db.collection('users').findOne({
           $or: [
             { id: userData.id },
-            { githubId: userData.githubId },
-            { email: userData.email }
+            { githubId: userData.githubId }
           ]
         });
 
         let userToReturn: User;
 
         if (existingUser) {
+          console.log('✓ Found existing user:', existingUser.id);
           // PRESERVE existing handle - NEVER change it
           const updates: any = {
             firstName: userData.firstName,
@@ -365,9 +371,10 @@ router.get('/github/callback',
             { id: existingUser.id },
             { $set: updates }
           );
-          console.log('✓ Updated existing user after GitHub OAuth:', existingUser.id);
+          console.log('✓ Updated existing user after GitHub OAuth:', existingUser.id, '| Handle preserved:', existingUser.handle);
           userToReturn = { ...existingUser, ...updates } as User;
         } else {
+          console.log('➕ New user from GitHub OAuth');
           // NEW USER: Generate unique handle
           const uniqueHandle = await generateUniqueHandle(
             userData.firstName || 'User',
