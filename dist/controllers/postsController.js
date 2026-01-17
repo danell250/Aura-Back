@@ -372,7 +372,7 @@ exports.postsController = {
     // POST /api/posts - Create new post
     createPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { content, mediaUrl, mediaType, mediaItems, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle } = req.body;
+            const { content, mediaUrl, mediaType, mediaItems, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle, timezone } = req.body;
             if (!authorId) {
                 return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
             }
@@ -413,7 +413,8 @@ exports.postsController = {
                 isUnlocked: unlockDate ? Date.now() >= unlockDate : true,
                 timeCapsuleType: timeCapsuleType || null,
                 invitedUsers: invitedUsers || [],
-                timeCapsuleTitle: timeCapsuleTitle || null
+                timeCapsuleTitle: timeCapsuleTitle || null,
+                timezone: timezone || null
             }));
             yield db.collection(POSTS_COLLECTION).insertOne(newPost);
             if (tagList.length > 0) {

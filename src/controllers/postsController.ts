@@ -404,7 +404,8 @@ export const postsController = {
         unlockDate,
         timeCapsuleType,
         invitedUsers,
-        timeCapsuleTitle
+        timeCapsuleTitle,
+        timezone
       } = req.body;
       
       if (!authorId) {
@@ -469,7 +470,8 @@ export const postsController = {
           isUnlocked: unlockDate ? Date.now() >= unlockDate : true,
           timeCapsuleType: timeCapsuleType || null,
           invitedUsers: invitedUsers || [],
-          timeCapsuleTitle: timeCapsuleTitle || null
+          timeCapsuleTitle: timeCapsuleTitle || null,
+          timezone: timezone || null
         })
       };
 

@@ -42,7 +42,6 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
                 console.error('Error retrieving user from database:', error);
             }
         }
-        // If token exists but is invalid/expired, treat as unauthorized so clients can refresh
         return res.status(401).json({
             success: false,
             error: 'Invalid token',
