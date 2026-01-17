@@ -1436,10 +1436,22 @@ exports.usersController = {
     }),
     // POST /api/users/:id/connect - Send connection request
     sendConnectionRequest: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
-            const { fromUserId } = req.body;
+            let { fromUserId } = req.body;
             const db = (0, db_1.getDB)();
+            // Fallback to authenticated user if fromUserId is not provided
+            if (!fromUserId && ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id)) {
+                fromUserId = req.user.id;
+            }
+            if (!fromUserId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing requester',
+                    message: 'fromUserId is required to send a connection request'
+                });
+            }
             if (id === fromUserId) {
                 return res.status(400).json({
                     success: false,

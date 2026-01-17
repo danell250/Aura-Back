@@ -462,6 +462,7 @@ export const postsController = {
         mediaUrl: mediaUrl || undefined,
         mediaType: mediaType || undefined,
         mediaItems: mediaItems || undefined,
+        sharedFrom: (req.body as any).sharedFrom || undefined,
         energy: energy || '🪐 Neutral',
         radiance: 0,
         timestamp: Date.now(),
