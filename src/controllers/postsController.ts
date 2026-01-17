@@ -487,6 +487,7 @@ export const postsController = {
       };
 
       await db.collection(POSTS_COLLECTION).insertOne(newPost);
+
       if (tagList.length > 0) {
         await Promise.all(
           tagList
@@ -500,6 +501,24 @@ export const postsController = {
                 postId
               ).catch(err => {
                 console.error('Error creating mention notification:', err);
+              })
+            )
+        );
+      }
+
+      if (isTimeCapsule && timeCapsuleType === 'group' && Array.isArray(invitedUsers) && invitedUsers.length > 0) {
+        await Promise.all(
+          invitedUsers
+            .filter((userId: string) => userId && userId !== authorEmbed.id)
+            .map((userId: string) =>
+              createNotificationInDB(
+                userId,
+                'time_capsule_invite',
+                authorEmbed.id,
+                `invited you to a Time Capsule${timeCapsuleTitle ? `: "${timeCapsuleTitle}"` : ''}`,
+                postId
+              ).catch(err => {
+                console.error('Error creating time capsule invite notification:', err);
               })
             )
         );
