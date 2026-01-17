@@ -160,6 +160,7 @@ exports.messagesController = {
                 });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
+            const db = (0, db_1.getDB)();
             const message = {
                 senderId,
                 receiverId,
@@ -173,6 +174,7 @@ exports.messagesController = {
             };
             const result = yield messagesCollection.insertOne(message);
             const insertedMessage = yield messagesCollection.findOne({ _id: result.insertedId });
+            yield db.collection('users').updateOne({ id: receiverId }, { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } });
             res.status(201).json({
                 success: true,
                 data: insertedMessage

@@ -4,6 +4,20 @@ import { getDB } from '../db';
 export const shareController = {
   getPostShare: async (req: Request, res: Response) => {
     try {
+      const escapeHtml = (unsafe: string): string => {
+        return unsafe
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      };
+
+      const truncateContent = (text: string, maxLength: number = 200): string => {
+        if (text.length <= maxLength) return text;
+        return text.substring(0, maxLength - 3) + '...';
+      };
+
       const { id } = req.params;
       const db = getDB();
       const post = await db.collection('posts').findOne({ id });
@@ -15,27 +29,38 @@ export const shareController = {
       }
 
       // Construct metadata
-      // Escape HTML characters to prevent XSS in meta tags
-      const escapeHtml = (unsafe: string) => {
-        return unsafe
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;")
-          .replace(/'/g, "&#039;");
-      };
+      const authorName = post.author?.name || 'Aura User';
+      const authorHandle = post.author?.handle || '';
+      const trustScore = post.author?.trustScore || 0;
 
-      const title = escapeHtml(`Post by ${post.author?.name || 'Aura User'} | Aura`);
-      // Truncate content to ~200 chars
-      const rawContent = post.content || '';
-      const description = escapeHtml(
-        rawContent.length > 200 
-          ? rawContent.substring(0, 197) + '...' 
-          : rawContent || 'Check out this post on Aura'
-      );
-      
-      const image = post.mediaUrl || 'https://auraradiance.vercel.app/logo-icon.svg';
+      const postContent = post.content || '';
+      const title = escapeHtml(`Post by ${authorName} on Aura`);
+      const description = escapeHtml(truncateContent(postContent, 200));
+      const image = post.mediaUrl || 'https://auraradiance.vercel.app/og-image.png';
       const url = `https://auraradiance.vercel.app/p/${id}`;
+
+      const structuredData = {
+        "@context": "https://schema.org",
+        "@type": "BlogPosting",
+        headline: title,
+        description,
+        image,
+        author: {
+          "@type": "Person",
+          name: authorName,
+          url: `https://auraradiance.vercel.app/@${authorHandle}`
+        },
+        datePublished: post.timestamp || new Date().toISOString(),
+        url,
+        publisher: {
+          "@type": "Organization",
+          name: "Aura",
+          logo: {
+            "@type": "ImageObject",
+            url: "https://auraradiance.vercel.app/logo.png"
+          }
+        }
+      };
 
       // Return HTML with meta tags and redirect
       const html = `
@@ -45,10 +70,16 @@ export const shareController = {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${title}</title>
+
+  <!-- Primary Meta Tags -->
+  <meta name="title" content="${title}" />
   <meta name="description" content="${description}" />
+  <meta name="keywords" content="aura, post, social, network, ${authorHandle ? authorHandle + ',' : ''} radiance" />
+  <meta name="author" content="${escapeHtml(authorName)}" />
+  <meta name="robots" content="index, follow" />
   
   <!-- Open Graph / Facebook -->
-  <meta property="og:type" content="website" />
+  <meta property="og:type" content="article" />
   <meta property="og:url" content="${url}" />
   <meta property="og:title" content="${title}" />
   <meta property="og:description" content="${description}" />
@@ -56,18 +87,21 @@ export const shareController = {
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta property="og:site_name" content="Aura" />
+  <meta property="article:author" content="${escapeHtml(authorName)}" />
 
-  <!-- Twitter -->
+  <!-- Twitter / X -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:url" content="${url}" />
   <meta name="twitter:title" content="${title}" />
   <meta name="twitter:description" content="${description}" />
   <meta name="twitter:image" content="${image}" />
+  <meta name="twitter:creator" content="${authorHandle ? '@' + authorHandle : '@auraapp'}" />
+  <meta name="twitter:site" content="@auraapp" />
 
-  <!-- LinkedIn -->
-  <meta property="linkedin:title" content="${title}" />
-  <meta property="linkedin:description" content="${description}" />
-  <meta property="linkedin:image" content="${image}" />
+  <!-- Structured Data -->
+  <script type="application/ld+json">
+    ${JSON.stringify(structuredData)}
+  </script>
 
   <style>
     body {
@@ -115,7 +149,9 @@ export const shareController = {
 </html>
       `;
 
-      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.send(html);
 
     } catch (error) {
