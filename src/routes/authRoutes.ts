@@ -16,6 +16,24 @@ import { User } from '../types';
 
 const router = Router();
 
+const generateUniqueHandle = async (base: string, maxAttempts = 10): Promise<string> => {
+  const db = getDB();
+  const trimmed = base.trim().toLowerCase().replace(/\s+/g, '');
+  const prefix = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const suffix = attempt === 0 ? '' : Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+    const handle = `${prefix}${suffix}`;
+    const existing = await db.collection('users').findOne({ handle });
+    if (!existing) {
+      return handle;
+    }
+  }
+
+  const fallback = `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  return fallback;
+};
+
 const loginRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 5,
@@ -83,10 +101,7 @@ router.get('/google/callback',
         let userToReturn: User;
 
         if (existingUser) {
-          // Preserve immutable fields like handle; only update mutable profile fields and timestamps
-          const preservedHandle = existingUser.handle;
           const updates: any = {
-            // only update selected fields from OAuth
             firstName: userData.firstName,
             lastName: userData.lastName,
             name: userData.name,
@@ -97,8 +112,12 @@ router.get('/google/callback',
             lastLogin: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           };
-          // Ensure handle never changes once assigned
-          updates.handle = preservedHandle || existingUser.handle || userData.handle;
+
+          if (!existingUser.handle) {
+            const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
+            const uniqueHandle = await generateUniqueHandle(baseHandle);
+            updates.handle = uniqueHandle;
+          }
 
           await db.collection('users').updateOne(
             { id: existingUser.id },
@@ -107,10 +126,12 @@ router.get('/google/callback',
           console.log('Updated existing user after OAuth:', existingUser.id);
           userToReturn = { ...existingUser, ...updates } as User;
         } else {
-          // Create new user; generate and persist a handle once
+          const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
+          const uniqueHandle = await generateUniqueHandle(baseHandle);
+
           const newUser = {
             ...userData,
-            handle: userData.handle, // assigned once here
+            handle: uniqueHandle,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             lastLogin: new Date().toISOString(),
@@ -304,7 +325,6 @@ router.get('/github/callback',
         let userToReturn: User;
 
         if (existingUser) {
-          const preservedHandle = existingUser.handle;
           const updates: any = {
             firstName: userData.firstName,
             lastName: userData.lastName,
@@ -316,7 +336,12 @@ router.get('/github/callback',
             lastLogin: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           };
-          updates.handle = preservedHandle || existingUser.handle || userData.handle;
+
+          if (!existingUser.handle) {
+            const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
+            const uniqueHandle = await generateUniqueHandle(baseHandle);
+            updates.handle = uniqueHandle;
+          }
 
           await db.collection('users').updateOne(
             { id: existingUser.id },
@@ -325,9 +350,12 @@ router.get('/github/callback',
           console.log('Updated existing user after GitHub OAuth:', existingUser.id);
           userToReturn = { ...existingUser, ...updates } as User;
         } else {
+          const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
+          const uniqueHandle = await generateUniqueHandle(baseHandle);
+
           const newUser = {
             ...userData,
-            handle: userData.handle,
+            handle: uniqueHandle,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             lastLogin: new Date().toISOString(),
@@ -630,12 +658,11 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
 
-    // Hash Password
     const passwordHash = await bcrypt.hash(password, 10);
     
-    // Create new user
     const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const handle = `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`;
+    const baseHandle = `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}`;
+    const handle = await generateUniqueHandle(baseHandle);
     
     const newUser = {
       id: userId,

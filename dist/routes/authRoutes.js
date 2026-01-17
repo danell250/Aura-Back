@@ -21,6 +21,21 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const jwtUtils_1 = require("../utils/jwtUtils");
 const securityLogger_1 = require("../utils/securityLogger");
 const router = (0, express_1.Router)();
+const generateUniqueHandle = (base_1, ...args_1) => __awaiter(void 0, [base_1, ...args_1], void 0, function* (base, maxAttempts = 10) {
+    const db = (0, db_1.getDB)();
+    const trimmed = base.trim().toLowerCase().replace(/\s+/g, '');
+    const prefix = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const suffix = attempt === 0 ? '' : Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+        const handle = `${prefix}${suffix}`;
+        const existing = yield db.collection('users').findOne({ handle });
+        if (!existing) {
+            return handle;
+        }
+    }
+    const fallback = `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    return fallback;
+});
 const loginRateLimiter = (0, express_rate_limit_1.default)({
     windowMs: 60 * 1000,
     max: 5,
@@ -76,10 +91,7 @@ router.get('/google/callback', (req, res, next) => {
             });
             let userToReturn;
             if (existingUser) {
-                // Preserve immutable fields like handle; only update mutable profile fields and timestamps
-                const preservedHandle = existingUser.handle;
                 const updates = {
-                    // only update selected fields from OAuth
                     firstName: userData.firstName,
                     lastName: userData.lastName,
                     name: userData.name,
@@ -90,15 +102,19 @@ router.get('/google/callback', (req, res, next) => {
                     lastLogin: new Date().toISOString(),
                     updatedAt: new Date().toISOString()
                 };
-                // Ensure handle never changes once assigned
-                updates.handle = preservedHandle || existingUser.handle || userData.handle;
+                if (!existingUser.handle) {
+                    const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
+                    const uniqueHandle = yield generateUniqueHandle(baseHandle);
+                    updates.handle = uniqueHandle;
+                }
                 yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
                 console.log('Updated existing user after OAuth:', existingUser.id);
                 userToReturn = Object.assign(Object.assign({}, existingUser), updates);
             }
             else {
-                // Create new user; generate and persist a handle once
-                const newUser = Object.assign(Object.assign({}, userData), { handle: userData.handle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
+                const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
+                const uniqueHandle = yield generateUniqueHandle(baseHandle);
+                const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
                 yield db.collection('users').insertOne(newUser);
                 console.log('Created new user after OAuth:', newUser.id);
                 userToReturn = newUser;
@@ -245,7 +261,6 @@ router.get('/github/callback', (req, res, next) => {
             });
             let userToReturn;
             if (existingUser) {
-                const preservedHandle = existingUser.handle;
                 const updates = {
                     firstName: userData.firstName,
                     lastName: userData.lastName,
@@ -257,13 +272,19 @@ router.get('/github/callback', (req, res, next) => {
                     lastLogin: new Date().toISOString(),
                     updatedAt: new Date().toISOString()
                 };
-                updates.handle = preservedHandle || existingUser.handle || userData.handle;
+                if (!existingUser.handle) {
+                    const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
+                    const uniqueHandle = yield generateUniqueHandle(baseHandle);
+                    updates.handle = uniqueHandle;
+                }
                 yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
                 console.log('Updated existing user after GitHub OAuth:', existingUser.id);
                 userToReturn = Object.assign(Object.assign({}, existingUser), updates);
             }
             else {
-                const newUser = Object.assign(Object.assign({}, userData), { handle: userData.handle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
+                const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
+                const uniqueHandle = yield generateUniqueHandle(baseHandle);
+                const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
                 yield db.collection('users').insertOne(newUser);
                 console.log('Created new user after GitHub OAuth:', newUser.id);
                 userToReturn = newUser;
@@ -513,11 +534,10 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
                 message: 'An account with this email already exists'
             });
         }
-        // Hash Password
         const passwordHash = yield bcryptjs_1.default.hash(password, 10);
-        // Create new user
         const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        const handle = `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`;
+        const baseHandle = `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}`;
+        const handle = yield generateUniqueHandle(baseHandle);
         const newUser = {
             id: userId,
             firstName: firstName.trim(),
