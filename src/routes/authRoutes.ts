@@ -4,36 +4,66 @@ import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { getDB } from '../db';
 import { requireAuth, attachUser } from '../middleware/authMiddleware';
-import { 
-  generateAccessToken, 
-  generateRefreshToken, 
-  setTokenCookies, 
-  clearTokenCookies, 
-  verifyRefreshToken 
+import {
+  generateAccessToken,
+  generateRefreshToken,
+  setTokenCookies,
+  clearTokenCookies,
+  verifyRefreshToken
 } from '../utils/jwtUtils';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { User } from '../types';
 
 const router = Router();
 
-const generateUniqueHandle = async (base: string, maxAttempts = 10): Promise<string> => {
+// ============ HANDLE GENERATION FUNCTION ============
+const generateUniqueHandle = async (firstName: string, lastName: string): Promise<string> => {
   const db = getDB();
-  const trimmed = base.trim().toLowerCase().replace(/\s+/g, '');
-  const prefix = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const suffix = attempt === 0 ? '' : Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-    const handle = `${prefix}${suffix}`;
-    const existing = await db.collection('users').findOne({ handle });
-    if (!existing) {
-      return handle;
+  // Sanitize input
+  const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
+  const lastNameSafe = (lastName || '').toLowerCase().trim().replace(/\s+/g, '');
+
+  // Build base handle
+  const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
+
+  // Try 1: Use base handle as-is
+  try {
+    let existingUser = await db.collection('users').findOne({ handle: baseHandle });
+    if (!existingUser) {
+      console.log('✓ Handle available:', baseHandle);
+      return baseHandle;
+    }
+  } catch (error) {
+    console.error('Error checking base handle:', error);
+  }
+
+  // Try 2: Add random numbers until we find an available one
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const randomNum = Math.floor(Math.random() * 100000);
+    const candidateHandle = `${baseHandle}${randomNum}`;
+
+    try {
+      const existingUser = await db.collection('users').findOne({ handle: candidateHandle });
+      if (!existingUser) {
+        console.log('✓ Handle available:', candidateHandle);
+        return candidateHandle;
+      }
+    } catch (error) {
+      console.error(`Error checking handle ${candidateHandle}:`, error);
+      continue;
     }
   }
 
-  const fallback = `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  return fallback;
+  // Fallback: Use timestamp + random string (guaranteed unique)
+  const timestamp = Date.now();
+  const randomStr = Math.random().toString(36).substring(2, 9);
+  const fallbackHandle = `@user${timestamp}${randomStr}`;
+  console.log('⚠ Using fallback handle:', fallbackHandle);
+  return fallbackHandle;
 };
 
+// ============ RATE LIMITER ============
 const loginRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 5,
@@ -59,13 +89,13 @@ const loginRateLimiter = rateLimit({
   }
 });
 
-// Google OAuth routes
+// ============ GOOGLE OAUTH ============
 router.get('/google',
   (req, res, next) => {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-      return res.status(503).json({ 
-        success: false, 
-        message: 'Google login is not configured on the server.' 
+      return res.status(503).json({
+        success: false,
+        message: 'Google login is not configured on the server.'
       });
     }
     next();
@@ -83,13 +113,11 @@ router.get('/google/callback',
   passport.authenticate('google', { failureRedirect: '/login' }),
   async (req: Request, res: Response) => {
     try {
-      // Save or update user in database after successful OAuth
       if (req.user) {
         const db = getDB();
         const userData = req.user as any;
-        
-        // Check if user exists
-        const existingUser = await db.collection('users').findOne({ 
+
+        const existingUser = await db.collection('users').findOne({
           $or: [
             { id: userData.id },
             { googleId: userData.googleId },
@@ -97,10 +125,11 @@ router.get('/google/callback',
             { email: userData.email }
           ]
         });
-        
+
         let userToReturn: User;
 
         if (existingUser) {
+          // PRESERVE existing handle - NEVER change it
           const updates: any = {
             firstName: userData.firstName,
             lastName: userData.lastName,
@@ -112,22 +141,20 @@ router.get('/google/callback',
             lastLogin: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           };
-
-          if (!existingUser.handle) {
-            const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
-            const uniqueHandle = await generateUniqueHandle(baseHandle);
-            updates.handle = uniqueHandle;
-          }
+          updates.handle = existingUser.handle; // CRITICAL: Keep original handle
 
           await db.collection('users').updateOne(
             { id: existingUser.id },
             { $set: updates }
           );
-          console.log('Updated existing user after OAuth:', existingUser.id);
+          console.log('✓ Updated existing user after OAuth:', existingUser.id);
           userToReturn = { ...existingUser, ...updates } as User;
         } else {
-          const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
-          const uniqueHandle = await generateUniqueHandle(baseHandle);
+          // NEW USER: Generate unique handle
+          const uniqueHandle = await generateUniqueHandle(
+            userData.firstName || 'User',
+            userData.lastName || ''
+          );
 
           const newUser = {
             ...userData,
@@ -135,38 +162,34 @@ router.get('/google/callback',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             lastLogin: new Date().toISOString(),
-            auraCredits: 100, // Welcome credits
+            auraCredits: 100,
             trustScore: 10,
             activeGlow: 'none',
             acquaintances: [],
             blockedUsers: [],
             refreshTokens: []
           };
-          
+
           await db.collection('users').insertOne(newUser);
-          console.log('Created new user after OAuth:', newUser.id);
+          console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
           userToReturn = newUser as User;
         }
-      
-        // Generate Tokens
+
         const accessToken = generateAccessToken(userToReturn);
         const refreshToken = generateRefreshToken(userToReturn);
 
-        // Store Refresh Token in DB
         await db.collection('users').updateOne(
           { id: userToReturn.id },
-          { 
+          {
             $push: { refreshTokens: refreshToken } as any
           }
         );
 
-        // Set Cookies
         setTokenCookies(res, accessToken, refreshToken);
 
-        // Successful authentication, redirect to frontend (cookies carry auth)
         const frontendUrl = process.env.VITE_FRONTEND_URL ||
           (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
-        
+
         console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
         res.redirect(`${frontendUrl}/feed`);
       }
@@ -177,7 +200,7 @@ router.get('/google/callback',
   }
 );
 
-// Refresh Token Endpoint
+// ============ REFRESH TOKEN ============
 router.post('/refresh-token', async (req: Request, res: Response) => {
   try {
     const refreshToken = req.cookies.refreshToken;
@@ -190,10 +213,10 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
           reason: 'missing_token'
         }
       });
-      return res.status(401).json({ 
-        success: false, 
+      return res.status(401).json({
+        success: false,
         error: 'Refresh token required',
-        message: 'Please log in again' 
+        message: 'Please log in again'
       });
     }
 
@@ -207,10 +230,10 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
           reason: 'invalid_or_expired_token'
         }
       });
-      return res.status(403).json({ 
-        success: false, 
+      return res.status(403).json({
+        success: false,
         error: 'Invalid refresh token',
-        message: 'Session expired, please log in again' 
+        message: 'Session expired, please log in again'
       });
     }
 
@@ -227,29 +250,28 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
           reason: 'token_not_found_for_user'
         }
       });
-      return res.status(403).json({ 
-        success: false, 
+      return res.status(403).json({
+        success: false,
         error: 'Invalid refresh token',
-        message: 'Session invalid' 
+        message: 'Session invalid'
       });
     }
 
-    // Token Rotation: Remove old, add new
     const newAccessToken = generateAccessToken(user);
     const newRefreshToken = generateRefreshToken(user);
 
     await db.collection('users').updateOne(
       { id: user.id },
-      { 
+      {
         $pull: { refreshTokens: refreshToken } as any,
       }
     );
-    
+
     await db.collection('users').updateOne(
-        { id: user.id },
-        {
-            $push: { refreshTokens: newRefreshToken } as any
-        }
+      { id: user.id },
+      {
+        $push: { refreshTokens: newRefreshToken } as any
+      }
     );
 
     setTokenCookies(res, newAccessToken, newRefreshToken);
@@ -278,21 +300,21 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
         errorMessage: error instanceof Error ? error.message : String(error)
       }
     });
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       error: 'Refresh failed',
-      message: 'Internal server error' 
+      message: 'Internal server error'
     });
   }
 });
 
-// GitHub OAuth routes
+// ============ GITHUB OAUTH ============
 router.get('/github',
   (req, res, next) => {
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-      return res.status(503).json({ 
-        success: false, 
-        message: 'GitHub login is not configured on the server.' 
+      return res.status(503).json({
+        success: false,
+        message: 'GitHub login is not configured on the server.'
       });
     }
     next();
@@ -313,18 +335,19 @@ router.get('/github/callback',
       if (req.user) {
         const db = getDB();
         const userData = req.user as any;
-        
-        const existingUser = await db.collection('users').findOne({ 
+
+        const existingUser = await db.collection('users').findOne({
           $or: [
             { id: userData.id },
             { githubId: userData.githubId },
             { email: userData.email }
           ]
         });
-        
+
         let userToReturn: User;
 
         if (existingUser) {
+          // PRESERVE existing handle - NEVER change it
           const updates: any = {
             firstName: userData.firstName,
             lastName: userData.lastName,
@@ -336,22 +359,20 @@ router.get('/github/callback',
             lastLogin: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           };
-
-          if (!existingUser.handle) {
-            const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
-            const uniqueHandle = await generateUniqueHandle(baseHandle);
-            updates.handle = uniqueHandle;
-          }
+          updates.handle = existingUser.handle; // CRITICAL: Keep original handle
 
           await db.collection('users').updateOne(
             { id: existingUser.id },
             { $set: updates }
           );
-          console.log('Updated existing user after GitHub OAuth:', existingUser.id);
+          console.log('✓ Updated existing user after GitHub OAuth:', existingUser.id);
           userToReturn = { ...existingUser, ...updates } as User;
         } else {
-          const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
-          const uniqueHandle = await generateUniqueHandle(baseHandle);
+          // NEW USER: Generate unique handle
+          const uniqueHandle = await generateUniqueHandle(
+            userData.firstName || 'User',
+            userData.lastName || ''
+          );
 
           const newUser = {
             ...userData,
@@ -366,18 +387,18 @@ router.get('/github/callback',
             blockedUsers: [],
             refreshTokens: []
           };
-          
+
           await db.collection('users').insertOne(newUser);
-          console.log('Created new user after GitHub OAuth:', newUser.id);
+          console.log('✓ Created new user after GitHub OAuth:', newUser.id, '| Handle:', uniqueHandle);
           userToReturn = newUser as User;
         }
-      
+
         const accessToken = generateAccessToken(userToReturn);
         const refreshToken = generateRefreshToken(userToReturn);
 
         await db.collection('users').updateOne(
           { id: userToReturn.id },
-          { 
+          {
             $push: { refreshTokens: refreshToken } as any
           }
         );
@@ -386,7 +407,7 @@ router.get('/github/callback',
 
         const frontendUrl = process.env.VITE_FRONTEND_URL ||
           (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
-        
+
         console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}/feed`);
         res.redirect(`${frontendUrl}/feed`);
       } else {
@@ -399,7 +420,7 @@ router.get('/github/callback',
   }
 );
 
-// Get current authenticated user (JWT or session)
+// ============ GET CURRENT USER ============
 router.get('/user', requireAuth, (req: Request, res: Response) => {
   const user = req.user as User | undefined;
   if (!user) {
@@ -414,16 +435,13 @@ router.get('/user', requireAuth, (req: Request, res: Response) => {
   });
 });
 
-// Logout route
+// ============ LOGOUT ============
 router.post('/logout', async (req: Request, res: Response) => {
   try {
     const refreshToken = req.cookies.refreshToken;
-    
+
     if (refreshToken) {
       const db = getDB();
-      // Try to find user with this refresh token and remove it
-      // Since we don't have user ID in request guaranteed if token expired, we search by token
-      // But efficiently we might need ID. Let's try verify first.
       const decoded = verifyRefreshToken(refreshToken);
       if (decoded) {
         await db.collection('users').updateOne(
@@ -439,37 +457,37 @@ router.post('/logout', async (req: Request, res: Response) => {
       if (err) {
         console.error('Error during passport logout:', err);
       }
-      
+
       req.session.destroy((err) => {
         if (err) {
           console.error('Error destroying session:', err);
         }
-        res.json({ 
-          success: true, 
-          message: 'Logged out successfully' 
+        res.json({
+          success: true,
+          message: 'Logged out successfully'
         });
       });
     });
   } catch (error) {
     console.error('Error in logout:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       error: 'Logout error',
-      message: 'Internal server error' 
+      message: 'Internal server error'
     });
   }
 });
 
-// Get current user info
-router.get('/user', attachUser, (req: Request, res: Response) => {
+// ============ GET USER INFO (ATTACHUSER) ============
+router.get('/user-info', attachUser, (req: Request, res: Response) => {
   if ((req as any).user) {
-    res.json({ 
+    res.json({
       success: true,
       user: (req as any).user,
       authenticated: true
     });
   } else {
-    res.status(401).json({ 
+    res.status(401).json({
       success: false,
       error: 'Not authenticated',
       authenticated: false
@@ -477,7 +495,7 @@ router.get('/user', attachUser, (req: Request, res: Response) => {
   }
 });
 
-// Check authentication status
+// ============ CHECK AUTHENTICATION STATUS ============
 router.get('/status', attachUser, (req: Request, res: Response) => {
   const isAuthenticated = !!(req as any).user;
   res.json({
@@ -487,10 +505,11 @@ router.get('/status', attachUser, (req: Request, res: Response) => {
   });
 });
 
+// ============ LOGIN ============
 router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   try {
     const { identifier, password } = req.body;
-    
+
     if (!identifier || !password) {
       logSecurityEvent({
         req,
@@ -506,17 +525,17 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
         message: 'Email/username and password are required'
       });
     }
-    
+
     const db = getDB();
     const normalizedIdentifier = identifier.toLowerCase().trim();
-    
+
     const user = await db.collection('users').findOne({
       $or: [
         { email: normalizedIdentifier },
         { handle: normalizedIdentifier }
       ]
     }) as unknown as User;
-    
+
     if (!user) {
       logSecurityEvent({
         req,
@@ -532,7 +551,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
         message: 'User not found'
       });
     }
-    
+
     if (!user.passwordHash) {
       logSecurityEvent({
         req,
@@ -543,7 +562,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
           reason: 'no_password_hash'
         }
       });
-       return res.status(401).json({
+      return res.status(401).json({
         success: false,
         error: 'Invalid credentials',
         message: 'Please log in with Google or reset your password'
@@ -551,7 +570,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
     }
 
     const isValidPassword = await bcrypt.compare(password, user.passwordHash);
-    
+
     if (!isValidPassword) {
       logSecurityEvent({
         req,
@@ -568,17 +587,17 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
         message: 'Invalid password'
       });
     }
-    
+
     await db.collection('users').updateOne(
       { id: user.id },
-      { 
-        $set: { 
+      {
+        $set: {
           lastLogin: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
       }
     );
-    
+
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
@@ -600,15 +619,15 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
         userId: user.id,
         identifier: normalizedIdentifier
       });
-      
+
       res.json({
         success: true,
         user: user,
-        token: accessToken, // Return access token for immediate use if needed
+        token: accessToken,
         message: 'Login successful'
       });
     });
-    
+
   } catch (error) {
     console.error('Error in manual login:', error);
     logSecurityEvent({
@@ -628,12 +647,11 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   }
 });
 
-// Manual registration endpoint
+// ============ REGISTER ============
 router.post('/register', async (req: Request, res: Response) => {
   try {
     const { firstName, lastName, email, phone, dob, password } = req.body;
-    
-    // Validate required fields
+
     if (!firstName || !lastName || !email || !password) {
       return res.status(400).json({
         success: false,
@@ -641,15 +659,14 @@ router.post('/register', async (req: Request, res: Response) => {
         message: 'firstName, lastName, email, and password are required'
       });
     }
-    
+
     const db = getDB();
     const normalizedEmail = email.toLowerCase().trim();
-    
-    // Check if user already exists
+
     const existingUser = await db.collection('users').findOne({
       email: normalizedEmail
     });
-    
+
     if (existingUser) {
       return res.status(409).json({
         success: false,
@@ -659,11 +676,12 @@ router.post('/register', async (req: Request, res: Response) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    
+
+    // GENERATE UNIQUE HANDLE
+    const uniqueHandle = await generateUniqueHandle(firstName, lastName);
+
     const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const baseHandle = `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}`;
-    const handle = await generateUniqueHandle(baseHandle);
-    
+
     const newUser = {
       id: userId,
       firstName: firstName.trim(),
@@ -672,7 +690,7 @@ router.post('/register', async (req: Request, res: Response) => {
       email: normalizedEmail,
       phone: phone?.trim() || '',
       dob: dob || '',
-      handle: handle,
+      handle: uniqueHandle,
       bio: 'New to Aura',
       industry: 'Other',
       companyName: '',
@@ -686,31 +704,27 @@ router.post('/register', async (req: Request, res: Response) => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       lastLogin: new Date().toISOString(),
-      passwordHash: passwordHash, // Store hashed password
+      passwordHash: passwordHash,
       refreshTokens: []
     };
-    
+
     await db.collection('users').insertOne(newUser);
 
-    // Generate Tokens
     const accessToken = generateAccessToken(newUser as unknown as User);
     const refreshToken = generateRefreshToken(newUser as unknown as User);
 
-    // Store Refresh Token
     await db.collection('users').updateOne(
       { id: newUser.id },
       { $push: { refreshTokens: refreshToken } as any }
     );
 
-    // Set Cookies
     setTokenCookies(res, accessToken, refreshToken);
-    
-    // Create session for new user
+
     req.login(newUser, (err) => {
       if (err) {
         console.error('Error creating session for new user:', err);
       }
-      
+
       res.status(201).json({
         success: true,
         user: newUser,
@@ -718,7 +732,7 @@ router.post('/register', async (req: Request, res: Response) => {
         message: 'Registration successful'
       });
     });
-    
+
   } catch (error) {
     console.error('Error in registration:', error);
     res.status(500).json({

@@ -28,6 +28,42 @@ const axios_1 = __importDefault(require("axios"));
 const db_1 = require("../db");
 const trustService_1 = require("../services/trustService");
 const securityLogger_1 = require("../utils/securityLogger");
+const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
+    const db = (0, db_1.getDB)();
+    const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
+    const lastNameSafe = (lastName || '').toLowerCase().trim().replace(/\s+/g, '');
+    const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
+    try {
+        let existingUser = yield db.collection('users').findOne({ handle: baseHandle });
+        if (!existingUser) {
+            console.log('✓ Handle available:', baseHandle);
+            return baseHandle;
+        }
+    }
+    catch (error) {
+        console.error('Error checking base handle:', error);
+    }
+    for (let attempt = 0; attempt < 50; attempt++) {
+        const randomNum = Math.floor(Math.random() * 100000);
+        const candidateHandle = `${baseHandle}${randomNum}`;
+        try {
+            const existingUser = yield db.collection('users').findOne({ handle: candidateHandle });
+            if (!existingUser) {
+                console.log('✓ Handle available:', candidateHandle);
+                return candidateHandle;
+            }
+        }
+        catch (error) {
+            console.error(`Error checking handle ${candidateHandle}:`, error);
+            continue;
+        }
+    }
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substring(2, 9);
+    const fallbackHandle = `@user${timestamp}${randomStr}`;
+    console.log('⚠ Using fallback handle:', fallbackHandle);
+    return fallbackHandle;
+});
 const CREDIT_BUNDLE_CONFIG = {
     'Nano Pulse': { credits: 100, price: 9.99 },
     'Neural Spark': { credits: 500, price: 39.99 },
@@ -149,7 +185,6 @@ exports.usersController = {
     createUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const userData = req.body;
-            // Validate required fields
             if (!userData.firstName || !userData.lastName || !userData.email) {
                 return res.status(400).json({
                     success: false,
@@ -158,7 +193,6 @@ exports.usersController = {
                 });
             }
             const db = (0, db_1.getDB)();
-            // Check if user already exists
             const existingUser = yield db.collection('users').findOne({
                 $or: [
                     { email: userData.email },
@@ -172,14 +206,14 @@ exports.usersController = {
                     message: 'A user with this email or handle already exists'
                 });
             }
-            // Create new user with proper ID
+            const uniqueHandle = yield generateUniqueHandle(userData.firstName, userData.lastName);
             const userId = userData.id || `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
             const newUser = {
                 id: userId,
                 firstName: userData.firstName,
                 lastName: userData.lastName,
                 name: userData.name || `${userData.firstName} ${userData.lastName}`,
-                handle: userData.handle || `@${userData.firstName.toLowerCase()}${userData.lastName.toLowerCase()}`,
+                handle: uniqueHandle,
                 avatar: userData.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
                 avatarType: userData.avatarType || 'image',
                 email: userData.email,
@@ -192,17 +226,16 @@ exports.usersController = {
                 acquaintances: userData.acquaintances || [],
                 blockedUsers: userData.blockedUsers || [],
                 trustScore: userData.trustScore || 10,
-                auraCredits: userData.auraCredits || 100, // New users start with 100 free credits
+                auraCredits: userData.auraCredits || 100,
                 activeGlow: userData.activeGlow || 'none',
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
-            // Save to MongoDB
             const result = yield db.collection('users').insertOne(newUser);
             if (!result.acknowledged) {
                 throw new Error('Failed to insert user into database');
             }
-            console.log('User created successfully:', userId);
+            console.log('✓ User created:', userId, '| Handle:', uniqueHandle);
             res.status(201).json({
                 success: true,
                 data: newUser,

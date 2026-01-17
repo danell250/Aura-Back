@@ -4,6 +4,47 @@ import { getDB } from '../db';
 import { calculateUserTrust, recalculateAllTrustScores, getSerendipityMatchesForUser } from '../services/trustService';
 import { logSecurityEvent } from '../utils/securityLogger';
 
+const generateUniqueHandle = async (firstName: string, lastName: string): Promise<string> => {
+  const db = getDB();
+
+  const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
+  const lastNameSafe = (lastName || '').toLowerCase().trim().replace(/\s+/g, '');
+
+  const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
+
+  try {
+    let existingUser = await db.collection('users').findOne({ handle: baseHandle });
+    if (!existingUser) {
+      console.log('✓ Handle available:', baseHandle);
+      return baseHandle;
+    }
+  } catch (error) {
+    console.error('Error checking base handle:', error);
+  }
+
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const randomNum = Math.floor(Math.random() * 100000);
+    const candidateHandle = `${baseHandle}${randomNum}`;
+
+    try {
+      const existingUser = await db.collection('users').findOne({ handle: candidateHandle });
+      if (!existingUser) {
+        console.log('✓ Handle available:', candidateHandle);
+        return candidateHandle;
+      }
+    } catch (error) {
+      console.error(`Error checking handle ${candidateHandle}:`, error);
+      continue;
+    }
+  }
+
+  const timestamp = Date.now();
+  const randomStr = Math.random().toString(36).substring(2, 9);
+  const fallbackHandle = `@user${timestamp}${randomStr}`;
+  console.log('⚠ Using fallback handle:', fallbackHandle);
+  return fallbackHandle;
+};
+
 const CREDIT_BUNDLE_CONFIG: Record<string, { credits: number; price: number }> = {
   'Nano Pulse': { credits: 100, price: 9.99 },
   'Neural Spark': { credits: 500, price: 39.99 },
@@ -146,8 +187,7 @@ export const usersController = {
   createUser: async (req: Request, res: Response) => {
     try {
       const userData = req.body;
-      
-      // Validate required fields
+
       if (!userData.firstName || !userData.lastName || !userData.email) {
         return res.status(400).json({
           success: false,
@@ -157,15 +197,14 @@ export const usersController = {
       }
 
       const db = getDB();
-      
-      // Check if user already exists
-      const existingUser = await db.collection('users').findOne({ 
+
+      const existingUser = await db.collection('users').findOne({
         $or: [
           { email: userData.email },
           { handle: userData.handle }
         ]
       });
-      
+
       if (existingUser) {
         return res.status(409).json({
           success: false,
@@ -174,14 +213,15 @@ export const usersController = {
         });
       }
 
-      // Create new user with proper ID
+      const uniqueHandle = await generateUniqueHandle(userData.firstName, userData.lastName);
+
       const userId = userData.id || `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const newUser = {
         id: userId,
         firstName: userData.firstName,
         lastName: userData.lastName,
         name: userData.name || `${userData.firstName} ${userData.lastName}`,
-        handle: userData.handle || `@${userData.firstName.toLowerCase()}${userData.lastName.toLowerCase()}`,
+        handle: uniqueHandle,
         avatar: userData.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
         avatarType: userData.avatarType || 'image',
         email: userData.email,
@@ -194,20 +234,19 @@ export const usersController = {
         acquaintances: userData.acquaintances || [],
         blockedUsers: userData.blockedUsers || [],
         trustScore: userData.trustScore || 10,
-        auraCredits: userData.auraCredits || 100, // New users start with 100 free credits
+        auraCredits: userData.auraCredits || 100,
         activeGlow: userData.activeGlow || 'none',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
-      // Save to MongoDB
       const result = await db.collection('users').insertOne(newUser);
-      
+
       if (!result.acknowledged) {
         throw new Error('Failed to insert user into database');
       }
 
-      console.log('User created successfully:', userId);
+      console.log('✓ User created:', userId, '| Handle:', uniqueHandle);
 
       res.status(201).json({
         success: true,

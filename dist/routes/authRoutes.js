@@ -21,21 +21,49 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const jwtUtils_1 = require("../utils/jwtUtils");
 const securityLogger_1 = require("../utils/securityLogger");
 const router = (0, express_1.Router)();
-const generateUniqueHandle = (base_1, ...args_1) => __awaiter(void 0, [base_1, ...args_1], void 0, function* (base, maxAttempts = 10) {
+// ============ HANDLE GENERATION FUNCTION ============
+const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
-    const trimmed = base.trim().toLowerCase().replace(/\s+/g, '');
-    const prefix = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const suffix = attempt === 0 ? '' : Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-        const handle = `${prefix}${suffix}`;
-        const existing = yield db.collection('users').findOne({ handle });
-        if (!existing) {
-            return handle;
+    // Sanitize input
+    const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
+    const lastNameSafe = (lastName || '').toLowerCase().trim().replace(/\s+/g, '');
+    // Build base handle
+    const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
+    // Try 1: Use base handle as-is
+    try {
+        let existingUser = yield db.collection('users').findOne({ handle: baseHandle });
+        if (!existingUser) {
+            console.log('✓ Handle available:', baseHandle);
+            return baseHandle;
         }
     }
-    const fallback = `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    return fallback;
+    catch (error) {
+        console.error('Error checking base handle:', error);
+    }
+    // Try 2: Add random numbers until we find an available one
+    for (let attempt = 0; attempt < 50; attempt++) {
+        const randomNum = Math.floor(Math.random() * 100000);
+        const candidateHandle = `${baseHandle}${randomNum}`;
+        try {
+            const existingUser = yield db.collection('users').findOne({ handle: candidateHandle });
+            if (!existingUser) {
+                console.log('✓ Handle available:', candidateHandle);
+                return candidateHandle;
+            }
+        }
+        catch (error) {
+            console.error(`Error checking handle ${candidateHandle}:`, error);
+            continue;
+        }
+    }
+    // Fallback: Use timestamp + random string (guaranteed unique)
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substring(2, 9);
+    const fallbackHandle = `@user${timestamp}${randomStr}`;
+    console.log('⚠ Using fallback handle:', fallbackHandle);
+    return fallbackHandle;
 });
+// ============ RATE LIMITER ============
 const loginRateLimiter = (0, express_rate_limit_1.default)({
     windowMs: 60 * 1000,
     max: 5,
@@ -59,7 +87,7 @@ const loginRateLimiter = (0, express_rate_limit_1.default)({
         });
     }
 });
-// Google OAuth routes
+// ============ GOOGLE OAUTH ============
 router.get('/google', (req, res, next) => {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
         return res.status(503).json({
@@ -76,11 +104,9 @@ router.get('/google/callback', (req, res, next) => {
     next();
 }, passport_1.default.authenticate('google', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        // Save or update user in database after successful OAuth
         if (req.user) {
             const db = (0, db_1.getDB)();
             const userData = req.user;
-            // Check if user exists
             const existingUser = yield db.collection('users').findOne({
                 $or: [
                     { id: userData.id },
@@ -91,6 +117,7 @@ router.get('/google/callback', (req, res, next) => {
             });
             let userToReturn;
             if (existingUser) {
+                // PRESERVE existing handle - NEVER change it
                 const updates = {
                     firstName: userData.firstName,
                     lastName: userData.lastName,
@@ -102,33 +129,25 @@ router.get('/google/callback', (req, res, next) => {
                     lastLogin: new Date().toISOString(),
                     updatedAt: new Date().toISOString()
                 };
-                if (!existingUser.handle) {
-                    const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
-                    const uniqueHandle = yield generateUniqueHandle(baseHandle);
-                    updates.handle = uniqueHandle;
-                }
+                updates.handle = existingUser.handle; // CRITICAL: Keep original handle
                 yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
-                console.log('Updated existing user after OAuth:', existingUser.id);
+                console.log('✓ Updated existing user after OAuth:', existingUser.id);
                 userToReturn = Object.assign(Object.assign({}, existingUser), updates);
             }
             else {
-                const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
-                const uniqueHandle = yield generateUniqueHandle(baseHandle);
+                // NEW USER: Generate unique handle
+                const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
                 const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
                 yield db.collection('users').insertOne(newUser);
-                console.log('Created new user after OAuth:', newUser.id);
+                console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
                 userToReturn = newUser;
             }
-            // Generate Tokens
             const accessToken = (0, jwtUtils_1.generateAccessToken)(userToReturn);
             const refreshToken = (0, jwtUtils_1.generateRefreshToken)(userToReturn);
-            // Store Refresh Token in DB
             yield db.collection('users').updateOne({ id: userToReturn.id }, {
                 $push: { refreshTokens: refreshToken }
             });
-            // Set Cookies
             (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
-            // Successful authentication, redirect to frontend (cookies carry auth)
             const frontendUrl = process.env.VITE_FRONTEND_URL ||
                 (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
             console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
@@ -140,7 +159,7 @@ router.get('/google/callback', (req, res, next) => {
         res.redirect('/login?error=oauth_failed');
     }
 }));
-// Refresh Token Endpoint
+// ============ REFRESH TOKEN ============
 router.post('/refresh-token', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const refreshToken = req.cookies.refreshToken;
@@ -192,7 +211,6 @@ router.post('/refresh-token', (req, res) => __awaiter(void 0, void 0, void 0, fu
                 message: 'Session invalid'
             });
         }
-        // Token Rotation: Remove old, add new
         const newAccessToken = (0, jwtUtils_1.generateAccessToken)(user);
         const newRefreshToken = (0, jwtUtils_1.generateRefreshToken)(user);
         yield db.collection('users').updateOne({ id: user.id }, {
@@ -232,7 +250,7 @@ router.post('/refresh-token', (req, res) => __awaiter(void 0, void 0, void 0, fu
         });
     }
 }));
-// GitHub OAuth routes
+// ============ GITHUB OAUTH ============
 router.get('/github', (req, res, next) => {
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
         return res.status(503).json({
@@ -261,6 +279,7 @@ router.get('/github/callback', (req, res, next) => {
             });
             let userToReturn;
             if (existingUser) {
+                // PRESERVE existing handle - NEVER change it
                 const updates = {
                     firstName: userData.firstName,
                     lastName: userData.lastName,
@@ -272,21 +291,17 @@ router.get('/github/callback', (req, res, next) => {
                     lastLogin: new Date().toISOString(),
                     updatedAt: new Date().toISOString()
                 };
-                if (!existingUser.handle) {
-                    const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
-                    const uniqueHandle = yield generateUniqueHandle(baseHandle);
-                    updates.handle = uniqueHandle;
-                }
+                updates.handle = existingUser.handle; // CRITICAL: Keep original handle
                 yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
-                console.log('Updated existing user after GitHub OAuth:', existingUser.id);
+                console.log('✓ Updated existing user after GitHub OAuth:', existingUser.id);
                 userToReturn = Object.assign(Object.assign({}, existingUser), updates);
             }
             else {
-                const baseHandle = userData.handle || `@${userData.firstName.toLowerCase()}${(userData.lastName || '').toLowerCase().replace(/\s+/g, '')}`;
-                const uniqueHandle = yield generateUniqueHandle(baseHandle);
+                // NEW USER: Generate unique handle
+                const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
                 const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
                 yield db.collection('users').insertOne(newUser);
-                console.log('Created new user after GitHub OAuth:', newUser.id);
+                console.log('✓ Created new user after GitHub OAuth:', newUser.id, '| Handle:', uniqueHandle);
                 userToReturn = newUser;
             }
             const accessToken = (0, jwtUtils_1.generateAccessToken)(userToReturn);
@@ -309,7 +324,7 @@ router.get('/github/callback', (req, res, next) => {
         res.redirect('/login');
     }
 }));
-// Get current authenticated user (JWT or session)
+// ============ GET CURRENT USER ============
 router.get('/user', authMiddleware_1.requireAuth, (req, res) => {
     const user = req.user;
     if (!user) {
@@ -323,15 +338,12 @@ router.get('/user', authMiddleware_1.requireAuth, (req, res) => {
         user
     });
 });
-// Logout route
+// ============ LOGOUT ============
 router.post('/logout', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const refreshToken = req.cookies.refreshToken;
         if (refreshToken) {
             const db = (0, db_1.getDB)();
-            // Try to find user with this refresh token and remove it
-            // Since we don't have user ID in request guaranteed if token expired, we search by token
-            // But efficiently we might need ID. Let's try verify first.
             const decoded = (0, jwtUtils_1.verifyRefreshToken)(refreshToken);
             if (decoded) {
                 yield db.collection('users').updateOne({ id: decoded.id }, { $pull: { refreshTokens: refreshToken } });
@@ -362,8 +374,8 @@ router.post('/logout', (req, res) => __awaiter(void 0, void 0, void 0, function*
         });
     }
 }));
-// Get current user info
-router.get('/user', authMiddleware_1.attachUser, (req, res) => {
+// ============ GET USER INFO (ATTACHUSER) ============
+router.get('/user-info', authMiddleware_1.attachUser, (req, res) => {
     if (req.user) {
         res.json({
             success: true,
@@ -379,7 +391,7 @@ router.get('/user', authMiddleware_1.attachUser, (req, res) => {
         });
     }
 });
-// Check authentication status
+// ============ CHECK AUTHENTICATION STATUS ============
 router.get('/status', authMiddleware_1.attachUser, (req, res) => {
     const isAuthenticated = !!req.user;
     res.json({
@@ -388,6 +400,7 @@ router.get('/status', authMiddleware_1.attachUser, (req, res) => {
         user: isAuthenticated ? req.user : null
     });
 });
+// ============ LOGIN ============
 router.post('/login', loginRateLimiter, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     try {
@@ -486,7 +499,7 @@ router.post('/login', loginRateLimiter, (req, res) => __awaiter(void 0, void 0, 
             res.json({
                 success: true,
                 user: user,
-                token: accessToken, // Return access token for immediate use if needed
+                token: accessToken,
                 message: 'Login successful'
             });
         });
@@ -509,11 +522,10 @@ router.post('/login', loginRateLimiter, (req, res) => __awaiter(void 0, void 0, 
         });
     }
 }));
-// Manual registration endpoint
+// ============ REGISTER ============
 router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { firstName, lastName, email, phone, dob, password } = req.body;
-        // Validate required fields
         if (!firstName || !lastName || !email || !password) {
             return res.status(400).json({
                 success: false,
@@ -523,7 +535,6 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
         }
         const db = (0, db_1.getDB)();
         const normalizedEmail = email.toLowerCase().trim();
-        // Check if user already exists
         const existingUser = yield db.collection('users').findOne({
             email: normalizedEmail
         });
@@ -535,9 +546,9 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             });
         }
         const passwordHash = yield bcryptjs_1.default.hash(password, 10);
+        // GENERATE UNIQUE HANDLE
+        const uniqueHandle = yield generateUniqueHandle(firstName, lastName);
         const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        const baseHandle = `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}`;
-        const handle = yield generateUniqueHandle(baseHandle);
         const newUser = {
             id: userId,
             firstName: firstName.trim(),
@@ -546,7 +557,7 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             email: normalizedEmail,
             phone: (phone === null || phone === void 0 ? void 0 : phone.trim()) || '',
             dob: dob || '',
-            handle: handle,
+            handle: uniqueHandle,
             bio: 'New to Aura',
             industry: 'Other',
             companyName: '',
@@ -560,18 +571,14 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             lastLogin: new Date().toISOString(),
-            passwordHash: passwordHash, // Store hashed password
+            passwordHash: passwordHash,
             refreshTokens: []
         };
         yield db.collection('users').insertOne(newUser);
-        // Generate Tokens
         const accessToken = (0, jwtUtils_1.generateAccessToken)(newUser);
         const refreshToken = (0, jwtUtils_1.generateRefreshToken)(newUser);
-        // Store Refresh Token
         yield db.collection('users').updateOne({ id: newUser.id }, { $push: { refreshTokens: refreshToken } });
-        // Set Cookies
         (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
-        // Create session for new user
         req.login(newUser, (err) => {
             if (err) {
                 console.error('Error creating session for new user:', err);
