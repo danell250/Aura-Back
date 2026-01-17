@@ -21,15 +21,33 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const jwtUtils_1 = require("../utils/jwtUtils");
 const securityLogger_1 = require("../utils/securityLogger");
 const router = (0, express_1.Router)();
-// ============ HANDLE GENERATION FUNCTION ============
+const normalizeUserHandle = (rawHandle) => {
+    const base = (rawHandle || '').trim().toLowerCase();
+    const withoutAt = base.startsWith('@') ? base.slice(1) : base;
+    const cleaned = withoutAt.replace(/[^a-z0-9_.]/g, '');
+    if (!cleaned)
+        return '';
+    return `@${cleaned}`;
+};
+const validateHandleFormat = (handle) => {
+    const normalized = normalizeUserHandle(handle);
+    if (!normalized) {
+        return { ok: false, message: 'Handle is required' };
+    }
+    const core = normalized.slice(1);
+    if (core.length < 3 || core.length > 20) {
+        return { ok: false, message: 'Handle must be between 3 and 20 characters' };
+    }
+    if (!/^[a-z0-9_.]+$/.test(core)) {
+        return { ok: false, message: 'Handle can only use letters, numbers, dots and underscores' };
+    }
+    return { ok: true };
+};
 const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
-    // Sanitize input
     const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
     const lastNameSafe = (lastName || '').toLowerCase().trim().replace(/\s+/g, '');
-    // Build base handle
     const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
-    // Try 1: Use base handle as-is
     try {
         let existingUser = yield db.collection('users').findOne({ handle: baseHandle });
         if (!existingUser) {
@@ -40,7 +58,6 @@ const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, 
     catch (error) {
         console.error('Error checking base handle:', error);
     }
-    // Try 2: Add random numbers until we find an available one
     for (let attempt = 0; attempt < 50; attempt++) {
         const randomNum = Math.floor(Math.random() * 100000);
         const candidateHandle = `${baseHandle}${randomNum}`;
@@ -56,7 +73,6 @@ const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, 
             continue;
         }
     }
-    // Fallback: Use timestamp + random string (guaranteed unique)
     const timestamp = Date.now();
     const randomStr = Math.random().toString(36).substring(2, 9);
     const fallbackHandle = `@user${timestamp}${randomStr}`;
@@ -107,16 +123,17 @@ router.get('/google/callback', (req, res, next) => {
         if (req.user) {
             const db = (0, db_1.getDB)();
             const userData = req.user;
+            console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
+            // FIX: Only check for THIS SPECIFIC USER by ID or googleId, NOT by name/email
             const existingUser = yield db.collection('users').findOne({
                 $or: [
                     { id: userData.id },
-                    { googleId: userData.googleId },
-                    { githubId: userData.githubId },
-                    { email: userData.email }
+                    { googleId: userData.googleId }
                 ]
             });
             let userToReturn;
             if (existingUser) {
+                console.log('✓ Found existing user:', existingUser.id);
                 // PRESERVE existing handle - NEVER change it
                 const updates = {
                     firstName: userData.firstName,
@@ -131,10 +148,11 @@ router.get('/google/callback', (req, res, next) => {
                 };
                 updates.handle = existingUser.handle; // CRITICAL: Keep original handle
                 yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
-                console.log('✓ Updated existing user after OAuth:', existingUser.id);
+                console.log('✓ Updated existing user after OAuth:', existingUser.id, '| Handle preserved:', existingUser.handle);
                 userToReturn = Object.assign(Object.assign({}, existingUser), updates);
             }
             else {
+                console.log('➕ New user from Google OAuth');
                 // NEW USER: Generate unique handle
                 const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
                 const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
@@ -270,15 +288,17 @@ router.get('/github/callback', (req, res, next) => {
         if (req.user) {
             const db = (0, db_1.getDB)();
             const userData = req.user;
+            console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
+            // FIX: Only check for THIS SPECIFIC USER by ID or githubId, NOT by name/email
             const existingUser = yield db.collection('users').findOne({
                 $or: [
                     { id: userData.id },
-                    { githubId: userData.githubId },
-                    { email: userData.email }
+                    { githubId: userData.githubId }
                 ]
             });
             let userToReturn;
             if (existingUser) {
+                console.log('✓ Found existing user:', existingUser.id);
                 // PRESERVE existing handle - NEVER change it
                 const updates = {
                     firstName: userData.firstName,
@@ -293,10 +313,11 @@ router.get('/github/callback', (req, res, next) => {
                 };
                 updates.handle = existingUser.handle; // CRITICAL: Keep original handle
                 yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
-                console.log('✓ Updated existing user after GitHub OAuth:', existingUser.id);
+                console.log('✓ Updated existing user after GitHub OAuth:', existingUser.id, '| Handle preserved:', existingUser.handle);
                 userToReturn = Object.assign(Object.assign({}, existingUser), updates);
             }
             else {
+                console.log('➕ New user from GitHub OAuth');
                 // NEW USER: Generate unique handle
                 const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
                 const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
@@ -522,10 +543,87 @@ router.post('/login', loginRateLimiter, (req, res) => __awaiter(void 0, void 0, 
         });
     }
 }));
-// ============ REGISTER ============
+// ============ COMPLETE OAUTH PROFILE ============
+router.post('/complete-oauth-profile', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const { firstName, lastName, bio, industry, companyName, handle } = req.body;
+        const tempOAuthData = (_a = req.session) === null || _a === void 0 ? void 0 : _a.tempOAuthData;
+        if (!tempOAuthData) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing OAuth data',
+                message: 'Session expired. Please log in again.'
+            });
+        }
+        const db = (0, db_1.getDB)();
+        const handleValidation = validateHandleFormat(handle);
+        if (!handleValidation.ok) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid handle',
+                message: handleValidation.message || 'Invalid handle'
+            });
+        }
+        const normalizedHandle = normalizeUserHandle(handle);
+        const existingHandleUser = yield db.collection('users').findOne({ handle: normalizedHandle });
+        if (existingHandleUser) {
+            return res.status(409).json({
+                success: false,
+                error: 'Handle taken',
+                message: 'This handle is already taken. Please try another one.'
+            });
+        }
+        const newUser = {
+            id: tempOAuthData.id,
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            name: `${firstName.trim()} ${lastName.trim()}`,
+            email: tempOAuthData.email,
+            avatar: tempOAuthData.avatar,
+            avatarType: tempOAuthData.avatarType || 'image',
+            googleId: tempOAuthData.googleId,
+            githubId: tempOAuthData.githubId,
+            handle: normalizedHandle,
+            bio: (bio === null || bio === void 0 ? void 0 : bio.trim()) || '',
+            industry: industry || 'Other',
+            companyName: (companyName === null || companyName === void 0 ? void 0 : companyName.trim()) || '',
+            trustScore: 10,
+            auraCredits: 100,
+            activeGlow: 'none',
+            acquaintances: [],
+            blockedUsers: [],
+            refreshTokens: [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastLogin: new Date().toISOString()
+        };
+        yield db.collection('users').insertOne(newUser);
+        console.log('✓ Completed OAuth profile for new user:', newUser.id, '| Handle:', normalizedHandle);
+        const accessToken = (0, jwtUtils_1.generateAccessToken)(newUser);
+        const refreshToken = (0, jwtUtils_1.generateRefreshToken)(newUser);
+        yield db.collection('users').updateOne({ id: newUser.id }, { $push: { refreshTokens: refreshToken } });
+        (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
+        req.session.tempOAuthData = null;
+        res.json({
+            success: true,
+            user: newUser,
+            token: accessToken,
+            message: 'Profile completed successfully'
+        });
+    }
+    catch (error) {
+        console.error('Error completing OAuth profile:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to complete profile',
+            message: 'Internal server error'
+        });
+    }
+}));
 router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { firstName, lastName, email, phone, dob, password } = req.body;
+        const { firstName, lastName, email, phone, dob, password, handle } = req.body;
         if (!firstName || !lastName || !email || !password) {
             return res.status(400).json({
                 success: false,
@@ -545,9 +643,28 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
                 message: 'An account with this email already exists'
             });
         }
+        let normalizedHandle = null;
+        if (handle) {
+            const handleValidation = validateHandleFormat(handle);
+            if (!handleValidation.ok) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid handle',
+                    message: handleValidation.message || 'Invalid handle'
+                });
+            }
+            normalizedHandle = normalizeUserHandle(handle);
+            const existingByHandle = yield db.collection('users').findOne({ handle: normalizedHandle });
+            if (existingByHandle) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'Handle taken',
+                    message: 'This handle is already taken. Please try another one.'
+                });
+            }
+        }
         const passwordHash = yield bcryptjs_1.default.hash(password, 10);
-        // GENERATE UNIQUE HANDLE
-        const uniqueHandle = yield generateUniqueHandle(firstName, lastName);
+        const finalHandle = normalizedHandle || (yield generateUniqueHandle(firstName, lastName));
         const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         const newUser = {
             id: userId,
@@ -557,7 +674,7 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             email: normalizedEmail,
             phone: (phone === null || phone === void 0 ? void 0 : phone.trim()) || '',
             dob: dob || '',
-            handle: uniqueHandle,
+            handle: finalHandle,
             bio: 'New to Aura',
             industry: 'Other',
             companyName: '',

@@ -16,18 +16,37 @@ import { User } from '../types';
 
 const router = Router();
 
-// ============ HANDLE GENERATION FUNCTION ============
+const normalizeUserHandle = (rawHandle: string): string => {
+  const base = (rawHandle || '').trim().toLowerCase();
+  const withoutAt = base.startsWith('@') ? base.slice(1) : base;
+  const cleaned = withoutAt.replace(/[^a-z0-9_.]/g, '');
+  if (!cleaned) return '';
+  return `@${cleaned}`;
+};
+
+const validateHandleFormat = (handle: string): { ok: boolean; message?: string } => {
+  const normalized = normalizeUserHandle(handle);
+  if (!normalized) {
+    return { ok: false, message: 'Handle is required' };
+  }
+  const core = normalized.slice(1);
+  if (core.length < 3 || core.length > 20) {
+    return { ok: false, message: 'Handle must be between 3 and 20 characters' };
+  }
+  if (!/^[a-z0-9_.]+$/.test(core)) {
+    return { ok: false, message: 'Handle can only use letters, numbers, dots and underscores' };
+  }
+  return { ok: true };
+};
+
 const generateUniqueHandle = async (firstName: string, lastName: string): Promise<string> => {
   const db = getDB();
 
-  // Sanitize input
   const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
   const lastNameSafe = (lastName || '').toLowerCase().trim().replace(/\s+/g, '');
 
-  // Build base handle
   const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
 
-  // Try 1: Use base handle as-is
   try {
     let existingUser = await db.collection('users').findOne({ handle: baseHandle });
     if (!existingUser) {
@@ -38,7 +57,6 @@ const generateUniqueHandle = async (firstName: string, lastName: string): Promis
     console.error('Error checking base handle:', error);
   }
 
-  // Try 2: Add random numbers until we find an available one
   for (let attempt = 0; attempt < 50; attempt++) {
     const randomNum = Math.floor(Math.random() * 100000);
     const candidateHandle = `${baseHandle}${randomNum}`;
@@ -55,7 +73,6 @@ const generateUniqueHandle = async (firstName: string, lastName: string): Promis
     }
   }
 
-  // Fallback: Use timestamp + random string (guaranteed unique)
   const timestamp = Date.now();
   const randomStr = Math.random().toString(36).substring(2, 9);
   const fallbackHandle = `@user${timestamp}${randomStr}`;
@@ -657,7 +674,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
 // ============ COMPLETE OAUTH PROFILE ============
 router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
   try {
-    const { firstName, lastName, bio, industry, companyName } = req.body;
+    const { firstName, lastName, bio, industry, companyName, handle } = req.body;
     const tempOAuthData = (req.session as any)?.tempOAuthData;
 
     if (!tempOAuthData) {
@@ -670,10 +687,26 @@ router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
 
     const db = getDB();
 
-    // Generate unique handle
-    const uniqueHandle = await generateUniqueHandle(firstName, lastName);
+    const handleValidation = validateHandleFormat(handle);
+    if (!handleValidation.ok) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid handle',
+        message: handleValidation.message || 'Invalid handle'
+      });
+    }
 
-    // Create the complete user object
+    const normalizedHandle = normalizeUserHandle(handle);
+
+    const existingHandleUser = await db.collection('users').findOne({ handle: normalizedHandle });
+    if (existingHandleUser) {
+      return res.status(409).json({
+        success: false,
+        error: 'Handle taken',
+        message: 'This handle is already taken. Please try another one.'
+      });
+    }
+
     const newUser = {
       id: tempOAuthData.id,
       firstName: firstName.trim(),
@@ -684,7 +717,7 @@ router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
       avatarType: tempOAuthData.avatarType || 'image',
       googleId: tempOAuthData.googleId,
       githubId: tempOAuthData.githubId,
-      handle: uniqueHandle,
+      handle: normalizedHandle,
       bio: bio?.trim() || '',
       industry: industry || 'Other',
       companyName: companyName?.trim() || '',
@@ -699,24 +732,17 @@ router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
       lastLogin: new Date().toISOString()
     };
 
-    // Insert the new user
     await db.collection('users').insertOne(newUser);
-    console.log('✓ Completed OAuth profile for new user:', newUser.id, '| Handle:', uniqueHandle);
+    console.log('✓ Completed OAuth profile for new user:', newUser.id, '| Handle:', normalizedHandle);
 
-    // Generate tokens
     const accessToken = generateAccessToken(newUser as unknown as User);
     const refreshToken = generateRefreshToken(newUser as unknown as User);
-
-    // Store refresh token
     await db.collection('users').updateOne(
       { id: newUser.id },
       { $push: { refreshTokens: refreshToken } as any }
     );
 
-    // Set cookies
     setTokenCookies(res, accessToken, refreshToken);
-
-    // Clear temp OAuth data
     (req.session as any).tempOAuthData = null;
 
     res.json({
@@ -738,7 +764,7 @@ router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
 
 router.post('/register', async (req: Request, res: Response) => {
   try {
-    const { firstName, lastName, email, phone, dob, password } = req.body;
+    const { firstName, lastName, email, phone, dob, password, handle } = req.body;
 
     if (!firstName || !lastName || !email || !password) {
       return res.status(400).json({
@@ -763,10 +789,32 @@ router.post('/register', async (req: Request, res: Response) => {
       });
     }
 
+    let normalizedHandle: string | null = null;
+
+    if (handle) {
+      const handleValidation = validateHandleFormat(handle);
+      if (!handleValidation.ok) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid handle',
+          message: handleValidation.message || 'Invalid handle'
+        });
+      }
+      normalizedHandle = normalizeUserHandle(handle);
+
+      const existingByHandle = await db.collection('users').findOne({ handle: normalizedHandle });
+      if (existingByHandle) {
+        return res.status(409).json({
+          success: false,
+          error: 'Handle taken',
+          message: 'This handle is already taken. Please try another one.'
+        });
+      }
+    }
+
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // GENERATE UNIQUE HANDLE
-    const uniqueHandle = await generateUniqueHandle(firstName, lastName);
+    const finalHandle = normalizedHandle || await generateUniqueHandle(firstName, lastName);
 
     const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -778,7 +826,7 @@ router.post('/register', async (req: Request, res: Response) => {
       email: normalizedEmail,
       phone: phone?.trim() || '',
       dob: dob || '',
-      handle: uniqueHandle,
+      handle: finalHandle,
       bio: 'New to Aura',
       industry: 'Other',
       companyName: '',
