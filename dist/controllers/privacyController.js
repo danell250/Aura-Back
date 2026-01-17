@@ -273,38 +273,34 @@ exports.privacyController = {
                         updatedAt: new Date().toISOString()
                     }
                 });
-                // Create notification if profile owner allows it
-                if (privacySettings.emailNotifications !== false) {
-                    const newNotification = {
-                        id: `notif-view-${Date.now()}-${Math.random()}`,
-                        type: 'profile_view',
-                        fromUser: {
-                            id: viewer.id,
-                            name: viewer.name,
-                            handle: viewer.handle,
-                            avatar: viewer.avatar,
-                            avatarType: viewer.avatarType
-                        },
-                        message: 'viewed your profile',
-                        timestamp: Date.now(),
-                        isRead: false
-                    };
-                    // Add to profile owner's notifications
-                    yield db.collection('users').updateOne({ id: profileOwnerId }, {
-                        $push: {
-                            notifications: {
-                                $each: [newNotification],
-                                $position: 0
-                            }
+                const newNotification = {
+                    id: `notif-view-${Date.now()}-${Math.random()}`,
+                    type: 'profile_view',
+                    fromUser: {
+                        id: viewer.id,
+                        name: viewer.name,
+                        handle: viewer.handle,
+                        avatar: viewer.avatar,
+                        avatarType: viewer.avatarType
+                    },
+                    message: 'viewed your profile',
+                    timestamp: Date.now(),
+                    isRead: false
+                };
+                yield db.collection('users').updateOne({ id: profileOwnerId }, {
+                    $push: {
+                        notifications: {
+                            $each: [newNotification],
+                            $position: 0
                         }
-                    });
-                    console.log('Profile view notification created:', {
-                        profileOwnerId,
-                        viewerId,
-                        viewerName: viewer.name,
-                        timestamp: new Date().toISOString()
-                    });
-                }
+                    }
+                });
+                console.log('Profile view notification created:', {
+                    profileOwnerId,
+                    viewerId,
+                    viewerName: viewer.name,
+                    timestamp: new Date().toISOString()
+                });
             }
             res.json({
                 success: true,

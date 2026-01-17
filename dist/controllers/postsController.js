@@ -431,6 +431,13 @@ exports.postsController = {
                     console.error('Error creating mention notification:', err);
                 })));
             }
+            if (isTimeCapsule && timeCapsuleType === 'group' && Array.isArray(invitedUsers) && invitedUsers.length > 0) {
+                yield Promise.all(invitedUsers
+                    .filter((userId) => userId && userId !== authorEmbed.id)
+                    .map((userId) => (0, notificationsController_1.createNotificationInDB)(userId, 'time_capsule_invite', authorEmbed.id, `invited you to a Time Capsule${timeCapsuleTitle ? `: "${timeCapsuleTitle}"` : ''}`, postId).catch(err => {
+                    console.error('Error creating time capsule invite notification:', err);
+                })));
+            }
             res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
         }
         catch (error) {
