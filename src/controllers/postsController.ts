@@ -116,11 +116,19 @@ export const postsController = {
       const now = Date.now();
       if (!userId || userId !== currentUserId) {
         // For public feed or other users' profiles, hide locked time capsules
-        query.$or = [
+        const orConditions: any[] = [
           { isTimeCapsule: { $ne: true } }, // Regular posts
-          { isTimeCapsule: true, unlockDate: { $lte: now } }, // Unlocked time capsules
-          { isTimeCapsule: true, 'author.id': currentUserId } // Own time capsules (always visible to author)
+          { isTimeCapsule: true, unlockDate: { $lte: now } } // Unlocked time capsules
         ];
+
+        if (currentUserId) {
+          orConditions.push(
+            { isTimeCapsule: true, 'author.id': currentUserId }, // Own time capsules (always visible to author)
+            { isTimeCapsule: true, invitedUsers: currentUserId } // Invited users can see group time capsules
+          );
+        }
+
+        query.$or = orConditions;
       } else {
         // When viewing own profile, show all posts including locked time capsules
         // No additional filtering needed
@@ -325,8 +333,10 @@ export const postsController = {
 
       // Check if this is a locked Time Capsule that the user shouldn't see
       if (post.isTimeCapsule && post.unlockDate && Date.now() < post.unlockDate) {
-        // Only allow the author to see their own locked time capsules
-        if (!currentUserId || currentUserId !== post.author.id) {
+        // Only allow the author or invited users to see locked time capsules
+        const isAuthor = currentUserId && currentUserId === post.author.id;
+        const isInvited = currentUserId && Array.isArray(post.invitedUsers) && post.invitedUsers.includes(currentUserId);
+        if (!isAuthor && !isInvited) {
           return res.status(404).json({ success: false, error: 'Post not found', message: 'Time Capsule is not yet unlocked' });
         }
       }

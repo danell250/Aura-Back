@@ -1620,8 +1620,21 @@ export const usersController = {
   sendConnectionRequest: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { fromUserId } = req.body;
+      let { fromUserId } = req.body as { fromUserId?: string };
       const db = getDB();
+
+      // Fallback to authenticated user if fromUserId is not provided
+      if (!fromUserId && (req as any).user?.id) {
+        fromUserId = (req as any).user.id;
+      }
+
+      if (!fromUserId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing requester',
+          message: 'fromUserId is required to send a connection request'
+        });
+      }
 
       if (id === fromUserId) {
         return res.status(400).json({
