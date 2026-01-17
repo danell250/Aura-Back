@@ -172,6 +172,7 @@ export const messagesController = {
       }
 
       const messagesCollection = getMessagesCollection();
+      const db = getDB();
 
       const message: IMessage = {
         senderId,
@@ -187,6 +188,11 @@ export const messagesController = {
 
       const result = await messagesCollection.insertOne(message);
       const insertedMessage = await messagesCollection.findOne({ _id: result.insertedId });
+
+      await db.collection('users').updateOne(
+        { id: receiverId },
+        { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } }
+      );
 
       res.status(201).json({
         success: true,
