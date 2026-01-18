@@ -72,6 +72,7 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const db_1 = require("./db");
 const trustService_1 = require("./services/trustService");
+const socket_io_1 = require("socket.io");
 dotenv_1.default.config();
 // Passport Google OAuth Strategy Configuration
 if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
@@ -896,10 +897,29 @@ function startServer() {
             console.log('🚀 Starting Aura Social Backend...');
             console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
             console.log(`🔧 Port: ${PORT}`);
-            // Start the HTTP server first
             const server = app.listen(PORT, () => {
                 console.log(`🚀 Server is running on port ${PORT}`);
                 console.log(`🌐 Health check available at: http://localhost:${PORT}/health`);
+            });
+            const frontendUrl = process.env.VITE_FRONTEND_URL;
+            const allowedOrigins = [
+                frontendUrl,
+                'https://auraradiance.vercel.app',
+                'https://aura-front-s1bw.onrender.com',
+                'http://localhost:5173'
+            ].filter(Boolean);
+            const io = new socket_io_1.Server(server, {
+                cors: {
+                    origin: allowedOrigins,
+                    credentials: true
+                }
+            });
+            app.set('io', io);
+            io.on('connection', socket => {
+                console.log('🔌 Socket.IO client connected', socket.id);
+                socket.on('disconnect', () => {
+                    console.log('❌ Socket.IO client disconnected', socket.id);
+                });
             });
             // Then attempt database connection (non-blocking)
             console.log('🔄 Attempting database connection...');

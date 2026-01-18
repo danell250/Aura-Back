@@ -430,6 +430,14 @@ export const postsController = {
       const viewCount = result.value.viewCount || 0;
       broadcastPostViewUpdate({ postId: id, viewCount });
 
+      try {
+        const io = (req.app as any).get('io');
+        if (io && typeof io.emit === 'function') {
+          io.emit('post_view', { postId: id, viewCount });
+        }
+      } catch (e) {
+      }
+
       res.json({ success: true, data: { id, viewCount } });
     } catch (error) {
       res.json({ success: true, data: { id: (req.params as any).id, viewCount: 0 } });

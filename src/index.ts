@@ -25,6 +25,7 @@ import path from 'path';
 import fs from 'fs';
 import { connectDB, checkDBHealth, isDBConnected, getDB } from './db';
 import { recalculateAllTrustScores } from './services/trustService';
+import { Server as SocketIOServer } from 'socket.io';
 
 dotenv.config();
 
@@ -914,10 +915,33 @@ async function startServer() {
     console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🔧 Port: ${PORT}`);
     
-    // Start the HTTP server first
     const server = app.listen(PORT, () => {
       console.log(`🚀 Server is running on port ${PORT}`);
       console.log(`🌐 Health check available at: http://localhost:${PORT}/health`);
+    });
+    
+    const frontendUrl = process.env.VITE_FRONTEND_URL;
+    const allowedOrigins = [
+      frontendUrl,
+      'https://auraradiance.vercel.app',
+      'https://aura-front-s1bw.onrender.com',
+      'http://localhost:5173'
+    ].filter(Boolean) as string[];
+
+    const io = new SocketIOServer(server, {
+      cors: {
+        origin: allowedOrigins,
+        credentials: true
+      }
+    });
+
+    app.set('io', io);
+
+    io.on('connection', socket => {
+      console.log('🔌 Socket.IO client connected', socket.id);
+      socket.on('disconnect', () => {
+        console.log('❌ Socket.IO client disconnected', socket.id);
+      });
     });
     
     // Then attempt database connection (non-blocking)
