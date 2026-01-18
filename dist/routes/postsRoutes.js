@@ -35,6 +35,8 @@ const postsWriteRateLimiter = (0, express_rate_limit_1.default)({
 router.get('/health', postsController_1.postsController.health);
 // GET /api/posts/search - Search posts
 router.get('/search', authMiddleware_1.optionalAuth, postsController_1.postsController.searchPosts);
+// GET /api/posts/insights/me - Get insights for current user
+router.get('/insights/me', authMiddleware_1.requireAuth, postsController_1.postsController.getMyInsights);
 // GET /api/posts - Get all posts
 router.get('/', authMiddleware_1.optionalAuth, postsController_1.postsController.getAllPosts);
 // GET /api/posts/stream - Server-Sent Events stream for post updates

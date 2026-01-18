@@ -597,6 +597,65 @@ exports.postsController = {
             res.status(500).json({ success: false, error: 'Failed to add reaction', message: 'Internal server error' });
         }
     }),
+    getMyInsights: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f, _g;
+        try {
+            const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!userId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
+            const db = (0, db_1.getDB)();
+            const [agg] = yield db.collection(POSTS_COLLECTION).aggregate([
+                { $match: { 'author.id': userId } },
+                {
+                    $group: {
+                        _id: null,
+                        totalPosts: { $sum: 1 },
+                        totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
+                        boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
+                        totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
+                    }
+                }
+            ]).toArray();
+            const topPosts = yield db.collection(POSTS_COLLECTION)
+                .find({ 'author.id': userId })
+                .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
+                .sort({ viewCount: -1 })
+                .limit(5)
+                .toArray();
+            const user = yield db.collection(USERS_COLLECTION).findOne({ id: userId }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
+            return res.json({
+                success: true,
+                data: {
+                    totals: {
+                        totalPosts: (_b = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _b !== void 0 ? _b : 0,
+                        totalViews: (_c = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _c !== void 0 ? _c : 0,
+                        boostedPosts: (_d = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _d !== void 0 ? _d : 0,
+                        totalRadiance: (_e = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _e !== void 0 ? _e : 0
+                    },
+                    credits: {
+                        balance: (_f = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _f !== void 0 ? _f : 0,
+                        spent: (_g = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _g !== void 0 ? _g : 0
+                    },
+                    topPosts: topPosts.map((p) => {
+                        var _a, _b;
+                        return ({
+                            id: p.id,
+                            preview: (p.content || '').slice(0, 120),
+                            views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
+                            timestamp: p.timestamp,
+                            isBoosted: !!p.isBoosted,
+                            radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
+                        });
+                    })
+                }
+            });
+        }
+        catch (err) {
+            console.error('getMyInsights error', err);
+            return res.status(500).json({ success: false, error: 'Failed to load insights' });
+        }
+    }),
     // POST /api/posts/:id/boost - Boost post and deduct credits server-side
     boostPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
@@ -622,7 +681,10 @@ exports.postsController = {
                 return res.status(400).json({ success: false, error: 'Insufficient credits' });
             }
             const newCredits = currentCredits - creditsToSpend;
-            const creditUpdateResult = yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, { $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() } });
+            const creditUpdateResult = yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, {
+                $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() },
+                $inc: { auraCreditsSpent: creditsToSpend }
+            });
             if (!creditUpdateResult.matchedCount || !creditUpdateResult.modifiedCount) {
                 console.error('Failed to update user credits during boost', {
                     userId,

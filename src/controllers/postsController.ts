@@ -719,6 +719,69 @@ export const postsController = {
     }
   },
 
+  getMyInsights: async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).user?.id;
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const db = getDB();
+
+      const [agg] = await db.collection(POSTS_COLLECTION).aggregate([
+        { $match: { 'author.id': userId } },
+        {
+          $group: {
+            _id: null,
+            totalPosts: { $sum: 1 },
+            totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
+            boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
+            totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
+          }
+        }
+      ]).toArray();
+
+      const topPosts = await db.collection(POSTS_COLLECTION)
+        .find({ 'author.id': userId })
+        .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
+        .sort({ viewCount: -1 })
+        .limit(5)
+        .toArray();
+
+      const user = await db.collection(USERS_COLLECTION).findOne(
+        { id: userId },
+        { projection: { auraCredits: 1, auraCreditsSpent: 1 } }
+      );
+
+      return res.json({
+        success: true,
+        data: {
+          totals: {
+            totalPosts: agg?.totalPosts ?? 0,
+            totalViews: agg?.totalViews ?? 0,
+            boostedPosts: agg?.boostedPosts ?? 0,
+            totalRadiance: agg?.totalRadiance ?? 0
+          },
+          credits: {
+            balance: user?.auraCredits ?? 0,
+            spent: user?.auraCreditsSpent ?? 0
+          },
+          topPosts: topPosts.map((p: any) => ({
+            id: p.id,
+            preview: (p.content || '').slice(0, 120),
+            views: p.viewCount ?? 0,
+            timestamp: p.timestamp,
+            isBoosted: !!p.isBoosted,
+            radiance: p.radiance ?? 0
+          }))
+        }
+      });
+    } catch (err) {
+      console.error('getMyInsights error', err);
+      return res.status(500).json({ success: false, error: 'Failed to load insights' });
+    }
+  },
+
   // POST /api/posts/:id/boost - Boost post and deduct credits server-side
   boostPost: async (req: Request, res: Response) => {
     try {
@@ -751,7 +814,10 @@ export const postsController = {
       const newCredits = currentCredits - creditsToSpend;
       const creditUpdateResult = await db.collection(USERS_COLLECTION).updateOne(
         { id: userId },
-        { $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() } }
+        { 
+          $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() },
+          $inc: { auraCreditsSpent: creditsToSpend }
+        }
       );
       if (!creditUpdateResult.matchedCount || !creditUpdateResult.modifiedCount) {
         console.error('Failed to update user credits during boost', {
