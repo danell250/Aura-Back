@@ -320,7 +320,6 @@ exports.adSubscriptionsController = {
     }),
     // POST /api/ad-subscriptions/webhook - Handle PayPal webhooks
     handleWebhook: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
         try {
             const event = req.body;
             const isValid = yield verifyPayPalWebhookSignature(req);
@@ -359,24 +358,29 @@ exports.adSubscriptionsController = {
             const eventType = event.event_type;
             const resource = event.resource;
             console.log(`[AdSubscriptions] Webhook received: ${eventType}`);
-            if (eventType === 'PAYMENT.SALE.COMPLETED') {
-                const subscriptionId = resource.billing_agreement_id;
+            if (eventType === 'PAYMENT.SALE.COMPLETED' ||
+                eventType === 'BILLING.SUBSCRIPTION.PAYMENT.SUCCEEDED' ||
+                eventType === 'PAYMENT.CAPTURE.COMPLETED') {
+                const subscriptionId = resource.billing_agreement_id ||
+                    resource.id ||
+                    (resource.supplementary_data && resource.supplementary_data.related_ids && resource.supplementary_data.related_ids.billing_agreement_id);
                 if (subscriptionId) {
                     console.log(`[AdSubscriptions] Processing renewal for subscription: ${subscriptionId}`);
-                    // Find the subscription
                     const subscription = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({
                         paypalSubscriptionId: subscriptionId
                     });
                     if (subscription) {
-                        // Reset adsUsed for the new cycle and update timestamp
                         yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne({ _id: subscription._id }, {
                             $set: {
                                 adsUsed: 0,
                                 updatedAt: Date.now(),
-                                status: 'active' // Ensure it's active
+                                status: 'active'
                             }
                         });
-                        // Log the renewal transaction
+                        const amount = (resource.amount && (resource.amount.total || resource.amount.value)) ||
+                            undefined;
+                        const currency = (resource.amount && (resource.amount.currency || resource.amount.currency_code)) ||
+                            undefined;
                         yield db.collection('transactions').insertOne({
                             userId: subscription.userId,
                             type: 'ad_subscription_renewal',
@@ -385,8 +389,8 @@ exports.adSubscriptionsController = {
                             transactionId: resource.id,
                             paymentMethod: 'paypal_subscription',
                             status: 'completed',
-                            amount: (_a = resource.amount) === null || _a === void 0 ? void 0 : _a.total,
-                            currency: (_b = resource.amount) === null || _b === void 0 ? void 0 : _b.currency,
+                            amount,
+                            currency,
                             details: {
                                 subscriptionId: subscription.id,
                                 paypalSubscriptionId: subscriptionId

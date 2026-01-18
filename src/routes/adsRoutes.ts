@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { adsController } from '../controllers/adsController';
 import { AD_PLANS } from '../constants/adPlans';
+import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -32,18 +33,18 @@ router.get('/plans/:planId', (req, res) => {
   });
 });
 
-router.get('/analytics/campaign/:userId', adsController.getCampaignPerformance);
-router.get('/analytics/user/:userId', adsController.getUserAdPerformance);
-router.get('/:id/analytics', adsController.getAdAnalytics);
+router.get('/analytics/campaign/:userId', requireAuth, adsController.getCampaignPerformance);
+router.get('/analytics/user/:userId', requireAuth, adsController.getUserAdPerformance);
+router.get('/:id/analytics', requireAuth, adsController.getAdAnalytics);
 router.post('/:id/impression', adsController.trackImpression);
 router.post('/:id/click', adsController.trackClick);
 router.post('/:id/engagement', adsController.trackEngagement);
-router.get('/', adsController.getAllAds);
-router.get('/:id', adsController.getAdById);
-router.post('/', adsController.createAd);
-router.put('/:id', adsController.updateAd);
-router.delete('/:id', adsController.deleteAd);
-router.post('/:id/react', adsController.reactToAd);
-router.put('/:id/status', adsController.updateAdStatus);
+router.get('/', optionalAuth, adsController.getAllAds);
+router.get('/:id', optionalAuth, adsController.getAdById);
+router.post('/', requireAuth, adsController.createAd);
+router.put('/:id', requireAuth, adsController.updateAd);
+router.delete('/:id', requireAuth, adsController.deleteAd);
+router.post('/:id/react', requireAuth, adsController.reactToAd);
+router.put('/:id/status', requireAuth, adsController.updateAdStatus);
 
 export default router;

@@ -408,31 +408,42 @@ export const adSubscriptionsController = {
       
       console.log(`[AdSubscriptions] Webhook received: ${eventType}`);
 
-      if (eventType === 'PAYMENT.SALE.COMPLETED') {
-        const subscriptionId = resource.billing_agreement_id;
+      if (
+        eventType === 'PAYMENT.SALE.COMPLETED' ||
+        eventType === 'BILLING.SUBSCRIPTION.PAYMENT.SUCCEEDED' ||
+        eventType === 'PAYMENT.CAPTURE.COMPLETED'
+      ) {
+        const subscriptionId =
+          resource.billing_agreement_id ||
+          resource.id ||
+          (resource.supplementary_data && resource.supplementary_data.related_ids && resource.supplementary_data.related_ids.billing_agreement_id);
         
         if (subscriptionId) {
           console.log(`[AdSubscriptions] Processing renewal for subscription: ${subscriptionId}`);
           
-          // Find the subscription
           const subscription = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ 
             paypalSubscriptionId: subscriptionId 
           });
           
           if (subscription) {
-            // Reset adsUsed for the new cycle and update timestamp
             await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
               { _id: subscription._id },
               { 
                 $set: { 
                   adsUsed: 0,
                   updatedAt: Date.now(),
-                  status: 'active' // Ensure it's active
+                  status: 'active'
                 } 
               }
             );
+
+            const amount =
+              (resource.amount && (resource.amount.total || resource.amount.value)) ||
+              undefined;
+            const currency =
+              (resource.amount && (resource.amount.currency || resource.amount.currency_code)) ||
+              undefined;
             
-            // Log the renewal transaction
             await db.collection('transactions').insertOne({
               userId: subscription.userId,
               type: 'ad_subscription_renewal',
@@ -441,8 +452,8 @@ export const adSubscriptionsController = {
               transactionId: resource.id,
               paymentMethod: 'paypal_subscription',
               status: 'completed',
-              amount: resource.amount?.total,
-              currency: resource.amount?.currency,
+              amount,
+              currency,
               details: {
                 subscriptionId: subscription.id,
                 paypalSubscriptionId: subscriptionId

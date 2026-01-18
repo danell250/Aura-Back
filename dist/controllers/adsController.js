@@ -82,24 +82,46 @@ exports.adsController = {
     // POST /api/ads - Create a new ad
     createAd: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const adData = req.body;
             const db = (0, db_1.getDB)();
+            const currentUser = req.user;
+            const adData = req.body;
+            if (!currentUser || !currentUser.id) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
+            const userId = currentUser.id;
             // Ensure required fields
-            if (!adData.ownerId || !adData.headline) {
+            if (!adData.headline) {
                 return res.status(400).json({ success: false, error: 'Missing required fields' });
             }
+            if (adData.ownerId && adData.ownerId !== userId) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Owner mismatch',
+                    message: 'ownerId must match the authenticated user'
+                });
+            }
             // Check if this is a special user (bypass subscription validation)
-            const isSpecialUser = adData.ownerId === '1' ||
-                (adData.ownerEmail && adData.ownerEmail.toLowerCase() === 'danelloosthuizen3@gmail.com');
-            // Check subscription limits if subscriptionId is provided and not special user
+            const isSpecialUser = process.env.NODE_ENV !== 'production' &&
+                adData.ownerEmail &&
+                adData.ownerEmail.toLowerCase() === 'danelloosthuizen3@gmail.com';
+            let reservedSubscriptionId = null;
+            let subscription = null;
+            const now = Date.now();
+            // Check subscription limits and reserve slot atomically if subscriptionId is provided and not special user
             if (adData.subscriptionId && !isSpecialUser) {
-                const subscription = yield db.collection('adSubscriptions').findOne({
+                subscription = yield db.collection('adSubscriptions').findOne({
                     id: adData.subscriptionId
                 });
                 if (!subscription) {
                     return res.status(404).json({
                         success: false,
                         error: 'Subscription not found'
+                    });
+                }
+                if (subscription.userId !== userId) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Subscription does not belong to the authenticated user'
                     });
                 }
                 if (subscription.status !== 'active') {
@@ -109,14 +131,23 @@ exports.adsController = {
                     });
                 }
                 // Check if subscription has expired
-                if (subscription.endDate && Date.now() > subscription.endDate) {
+                if (subscription.endDate && now > subscription.endDate) {
+                    yield db.collection('adSubscriptions').updateOne({ id: subscription.id }, {
+                        $set: {
+                            status: 'expired',
+                            updatedAt: now
+                        }
+                    });
                     return res.status(400).json({
                         success: false,
                         error: 'Subscription has expired'
                     });
                 }
-                // Check if user has reached ad limit
-                if (subscription.adsUsed >= subscription.adLimit) {
+                const reserve = yield db.collection('adSubscriptions').updateOne(Object.assign(Object.assign({ id: subscription.id, userId, status: 'active' }, (subscription.endDate ? { endDate: { $gt: now } } : {})), { $expr: { $lt: ['$adsUsed', '$adLimit'] } }), {
+                    $inc: { adsUsed: 1 },
+                    $set: { updatedAt: now }
+                });
+                if (reserve.matchedCount === 0) {
                     return res.status(400).json({
                         success: false,
                         error: `Ad limit reached. You can create ${subscription.adLimit} ads with this plan.`,
@@ -124,27 +155,32 @@ exports.adsController = {
                         used: subscription.adsUsed
                     });
                 }
+                reservedSubscriptionId = subscription.id;
             }
-            const newAd = Object.assign(Object.assign({}, adData), { id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, timestamp: Date.now(), reactions: {}, reactionUsers: {}, hashtags: (0, hashtagUtils_1.getHashtagsFromText)(adData.description || '') });
-            yield db.collection('ads').insertOne(newAd);
-            yield db.collection('adAnalytics').insertOne({
-                adId: newAd.id,
-                ownerId: newAd.ownerId,
-                impressions: 0,
-                clicks: 0,
-                ctr: 0,
-                reach: 0,
-                engagement: 0,
-                conversions: 0,
-                spend: 0,
-                lastUpdated: Date.now()
-            });
-            // Increment ads used count if subscription is linked and not special user
-            if (adData.subscriptionId && !isSpecialUser) {
-                yield db.collection('adSubscriptions').updateOne({ id: adData.subscriptionId }, {
-                    $inc: { adsUsed: 1 },
-                    $set: { updatedAt: Date.now() }
+            const newAd = Object.assign(Object.assign({}, adData), { ownerId: userId, id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, timestamp: Date.now(), reactions: {}, reactionUsers: {}, hashtags: (0, hashtagUtils_1.getHashtagsFromText)(adData.description || '') });
+            try {
+                yield db.collection('ads').insertOne(newAd);
+                yield db.collection('adAnalytics').insertOne({
+                    adId: newAd.id,
+                    ownerId: newAd.ownerId,
+                    impressions: 0,
+                    clicks: 0,
+                    ctr: 0,
+                    reach: 0,
+                    engagement: 0,
+                    conversions: 0,
+                    spend: 0,
+                    lastUpdated: Date.now()
                 });
+            }
+            catch (error) {
+                if (reservedSubscriptionId) {
+                    yield db.collection('adSubscriptions').updateOne({ id: reservedSubscriptionId }, {
+                        $inc: { adsUsed: -1 },
+                        $set: { updatedAt: Date.now() }
+                    });
+                }
+                throw error;
             }
             res.status(201).json({
                 success: true,
@@ -289,6 +325,15 @@ exports.adsController = {
             if (!ad) {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
             }
+            const currentUser = req.user;
+            const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
+            if (!isAdmin && (!currentUser || currentUser.id !== ad.ownerId)) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'You do not have access to this ad analytics'
+                });
+            }
             const analytics = yield db.collection('adAnalytics').findOne({ adId: id });
             const impressions = (analytics === null || analytics === void 0 ? void 0 : analytics.impressions) || 0;
             const clicks = (analytics === null || analytics === void 0 ? void 0 : analytics.clicks) || 0;
@@ -322,6 +367,15 @@ exports.adsController = {
         try {
             const { userId } = req.params;
             const db = (0, db_1.getDB)();
+            const currentUser = req.user;
+            const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
+            if (!isAdmin && (!currentUser || currentUser.id !== userId)) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'You can only view analytics for your own ads'
+                });
+            }
             const ads = yield db.collection('ads').find({ ownerId: userId }).toArray();
             if (!ads || ads.length === 0) {
                 return res.json({ success: true, data: [] });
@@ -370,6 +424,15 @@ exports.adsController = {
         try {
             const { userId } = req.params;
             const db = (0, db_1.getDB)();
+            const currentUser = req.user;
+            const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
+            if (!isAdmin && (!currentUser || currentUser.id !== userId)) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'You can only view campaign analytics for your own ads'
+                });
+            }
             const ads = yield db.collection('ads').find({ ownerId: userId }).toArray();
             if (!ads || ads.length === 0) {
                 return res.json({
