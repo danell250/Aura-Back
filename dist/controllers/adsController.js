@@ -100,9 +100,7 @@ exports.adsController = {
                     message: 'ownerId must match the authenticated user'
                 });
             }
-            // Check if this is a special user (bypass subscription validation)
-            const isSpecialUser = process.env.NODE_ENV !== 'production' &&
-                adData.ownerEmail &&
+            const isSpecialUser = adData.ownerEmail &&
                 adData.ownerEmail.toLowerCase() === 'danelloosthuizen3@gmail.com';
             let reservedSubscriptionId = null;
             let subscription = null;
@@ -289,6 +287,26 @@ exports.adsController = {
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
+            const currentUser = req.user;
+            if (!currentUser || !currentUser.id) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required',
+                    message: 'Please log in to delete ads'
+                });
+            }
+            const ad = yield db.collection('ads').findOne({ id });
+            if (!ad) {
+                return res.status(404).json({ success: false, error: 'Ad not found' });
+            }
+            const isAdmin = currentUser.role === 'admin' || currentUser.isAdmin === true;
+            if (!isAdmin && ad.ownerId !== currentUser.id) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'You can only delete your own ads'
+                });
+            }
             const result = yield db.collection('ads').deleteOne({ id });
             if (result.deletedCount === 0) {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
