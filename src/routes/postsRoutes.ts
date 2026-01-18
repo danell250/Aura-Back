@@ -39,6 +39,9 @@ router.get('/search', optionalAuth, postsController.searchPosts);
 // GET /api/posts - Get all posts
 router.get('/', optionalAuth, postsController.getAllPosts);
 
+// GET /api/posts/stream - Server-Sent Events stream for post updates
+router.get('/stream', optionalAuth, postsController.streamEvents);
+
 // GET /api/posts/hashtags/trending - Get trending hashtags
 router.get('/hashtags/trending', postsController.getTrendingHashtags);
 

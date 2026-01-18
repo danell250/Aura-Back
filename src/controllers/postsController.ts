@@ -6,6 +6,21 @@ import { createNotificationInDB } from './notificationsController';
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 
+interface PostSseClient {
+  id: string;
+  res: Response;
+}
+
+const postSseClients: PostSseClient[] = [];
+
+const broadcastPostViewUpdate = (payload: { postId: string; viewCount: number }) => {
+  if (!postSseClients.length) return;
+  const msg = `event: post_view\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of postSseClients) {
+    client.res.write(msg);
+  }
+};
+
 export const postsController = {
   health: async (_req: Request, res: Response) => {
     res.json({
@@ -15,8 +30,27 @@ export const postsController = {
       endpoints: [
         'GET /api/posts',
         'GET /api/posts/:id',
-        'POST /api/posts/:id/boost'
+        'POST /api/posts/:id/boost',
+        'GET /api/posts/stream'
       ]
+    });
+  },
+  streamEvents: (req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    (res as any).flushHeaders?.();
+
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    postSseClients.push({ id, res });
+
+    res.write(`event: hello\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+
+    req.on('close', () => {
+      const index = postSseClients.findIndex(client => client.id === id);
+      if (index !== -1) {
+        postSseClients.splice(index, 1);
+      }
     });
   },
   // GET /api/posts/search - Search posts
@@ -393,7 +427,10 @@ export const postsController = {
         return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
       }
 
-      res.json({ success: true, data: { id, viewCount: result.value.viewCount || 0 } });
+      const viewCount = result.value.viewCount || 0;
+      broadcastPostViewUpdate({ postId: id, viewCount });
+
+      res.json({ success: true, data: { id, viewCount } });
     } catch (error) {
       res.json({ success: true, data: { id: (req.params as any).id, viewCount: 0 } });
     }

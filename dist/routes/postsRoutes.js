@@ -37,6 +37,8 @@ router.get('/health', postsController_1.postsController.health);
 router.get('/search', authMiddleware_1.optionalAuth, postsController_1.postsController.searchPosts);
 // GET /api/posts - Get all posts
 router.get('/', authMiddleware_1.optionalAuth, postsController_1.postsController.getAllPosts);
+// GET /api/posts/stream - Server-Sent Events stream for post updates
+router.get('/stream', authMiddleware_1.optionalAuth, postsController_1.postsController.streamEvents);
 // GET /api/posts/hashtags/trending - Get trending hashtags
 router.get('/hashtags/trending', postsController_1.postsController.getTrendingHashtags);
 // GET /api/posts/:id - Get post by ID
