@@ -20,27 +20,35 @@ const jwtUtils_1 = require("../utils/jwtUtils");
 const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     // 1. Check JWT Token (Cookie or Header)
     let token = null;
+    let decoded = null;
     if (req.cookies && req.cookies.accessToken) {
         token = req.cookies.accessToken;
+        decoded = (0, jwtUtils_1.verifyAccessToken)(token);
     }
-    else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-        token = req.headers.authorization.split(' ')[1];
+    // If cookie token is missing or invalid, try Authorization header
+    if ((!decoded || !token) && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        const headerToken = req.headers.authorization.split(' ')[1];
+        // Avoid re-verifying the same token
+        if (!token || headerToken !== token) {
+            const headerDecoded = (0, jwtUtils_1.verifyAccessToken)(headerToken);
+            if (headerDecoded) {
+                token = headerToken;
+                decoded = headerDecoded;
+            }
+        }
     }
-    if (token) {
-        const decoded = (0, jwtUtils_1.verifyAccessToken)(token);
-        if (decoded) {
-            try {
-                const db = (0, db_1.getDB)();
-                const user = yield db.collection('users').findOne({ id: decoded.id });
-                if (user) {
-                    req.user = user;
-                    req.isAuthenticated = (() => true);
-                    return next();
-                }
+    if (decoded && token) {
+        try {
+            const db = (0, db_1.getDB)();
+            const user = yield db.collection('users').findOne({ id: decoded.id });
+            if (user) {
+                req.user = user;
+                req.isAuthenticated = (() => true);
+                return next();
             }
-            catch (error) {
-                console.error('Error retrieving user from database:', error);
-            }
+        }
+        catch (error) {
+            console.error('Error retrieving user from database:', error);
         }
         return res.status(401).json({
             success: false,

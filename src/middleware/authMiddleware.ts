@@ -7,32 +7,41 @@ import { verifyAccessToken } from '../utils/jwtUtils';
 // Middleware to check if user is authenticated via JWT or Firebase
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   // 1. Check JWT Token (Cookie or Header)
-  let token = null;
+  let token: string | null = null;
+  let decoded: { id: string; email?: string; name?: string } | null = null;
   
   if (req.cookies && req.cookies.accessToken) {
     token = req.cookies.accessToken;
-  } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-    token = req.headers.authorization.split(' ')[1];
+    decoded = verifyAccessToken(token as string);
   }
 
-  if (token) {
-    const decoded = verifyAccessToken(token);
-    
-    if (decoded) {
-      try {
-        const db = getDB();
-        const user = await db.collection('users').findOne({ id: decoded.id });
-        
-        if (user) {
-          req.user = user as unknown as User;
-          req.isAuthenticated = (() => true) as any;
-          return next();
-        }
-      } catch (error) {
-        console.error('Error retrieving user from database:', error);
+  // If cookie token is missing or invalid, try Authorization header
+  if ((!decoded || !token) && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    const headerToken = req.headers.authorization.split(' ')[1];
+    // Avoid re-verifying the same token
+    if (!token || headerToken !== token) {
+      const headerDecoded = verifyAccessToken(headerToken as string);
+      if (headerDecoded) {
+        token = headerToken;
+        decoded = headerDecoded;
       }
     }
-    
+  }
+
+  if (decoded && token) {
+    try {
+      const db = getDB();
+      const user = await db.collection('users').findOne({ id: decoded.id });
+      
+      if (user) {
+        req.user = user as unknown as User;
+        req.isAuthenticated = (() => true) as any;
+        return next();
+      }
+    } catch (error) {
+      console.error('Error retrieving user from database:', error);
+    }
+
     return res.status(401).json({
       success: false,
       error: 'Invalid token',
