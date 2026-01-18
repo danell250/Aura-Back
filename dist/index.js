@@ -917,6 +917,16 @@ function startServer() {
             app.set('io', io);
             io.on('connection', socket => {
                 console.log('🔌 Socket.IO client connected', socket.id);
+                socket.on('join_user_room', (userId) => {
+                    if (typeof userId === 'string' && userId.trim()) {
+                        socket.join(`user:${userId}`);
+                    }
+                });
+                socket.on('leave_user_room', (userId) => {
+                    if (typeof userId === 'string' && userId.trim()) {
+                        socket.leave(`user:${userId}`);
+                    }
+                });
                 socket.on('disconnect', () => {
                     console.log('❌ Socket.IO client disconnected', socket.id);
                 });

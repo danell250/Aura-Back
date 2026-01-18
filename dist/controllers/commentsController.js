@@ -77,6 +77,7 @@ exports.commentsController = {
         }
     }),
     createComment: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f;
         try {
             const { postId } = req.params;
             const { text, authorId, parentId, taggedUserIds } = req.body;
@@ -126,6 +127,63 @@ exports.commentsController = {
                     yield Promise.all(uniqueTagIds.map(id => (0, notificationsController_1.createNotificationInDB)(id, 'link', authorEmbed.id, 'mentioned you in a comment', postId).catch(err => {
                         console.error('Error creating comment mention notification:', err);
                     })));
+                }
+                if (post && post.author && post.author.id) {
+                    try {
+                        const authorIdForAnalytics = post.author.id;
+                        const [agg] = yield db.collection('posts').aggregate([
+                            { $match: { 'author.id': authorIdForAnalytics } },
+                            {
+                                $group: {
+                                    _id: null,
+                                    totalPosts: { $sum: 1 },
+                                    totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
+                                    boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
+                                    totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
+                                }
+                            }
+                        ]).toArray();
+                        const topPosts = yield db.collection('posts')
+                            .find({ 'author.id': authorIdForAnalytics })
+                            .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
+                            .sort({ viewCount: -1 })
+                            .limit(5)
+                            .toArray();
+                        const user = yield db.collection(USERS_COLLECTION).findOne({ id: authorIdForAnalytics }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
+                        const appInstance = req.app;
+                        const io = (appInstance === null || appInstance === void 0 ? void 0 : appInstance.get) && appInstance.get('io');
+                        if (io && typeof io.to === 'function') {
+                            io.to(`user:${authorIdForAnalytics}`).emit('analytics_update', {
+                                userId: authorIdForAnalytics,
+                                stats: {
+                                    totals: {
+                                        totalPosts: (_a = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _a !== void 0 ? _a : 0,
+                                        totalViews: (_b = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _b !== void 0 ? _b : 0,
+                                        boostedPosts: (_c = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _c !== void 0 ? _c : 0,
+                                        totalRadiance: (_d = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _d !== void 0 ? _d : 0
+                                    },
+                                    credits: {
+                                        balance: (_e = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _e !== void 0 ? _e : 0,
+                                        spent: (_f = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _f !== void 0 ? _f : 0
+                                    },
+                                    topPosts: topPosts.map((p) => {
+                                        var _a, _b;
+                                        return ({
+                                            id: p.id,
+                                            preview: (p.content || '').slice(0, 120),
+                                            views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
+                                            timestamp: p.timestamp,
+                                            isBoosted: !!p.isBoosted,
+                                            radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
+                                        });
+                                    })
+                                }
+                            });
+                        }
+                    }
+                    catch (err) {
+                        console.error('Error emitting analytics update for comment:', err);
+                    }
                 }
             }
             catch (e) {

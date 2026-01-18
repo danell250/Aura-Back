@@ -24,6 +24,65 @@ const broadcastPostViewUpdate = (payload) => {
         client.res.write(msg);
     }
 };
+const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d, _e, _f;
+    try {
+        if (!authorId)
+            return;
+        const io = (app === null || app === void 0 ? void 0 : app.get) && app.get('io');
+        if (!io || typeof io.to !== 'function')
+            return;
+        const db = (0, db_1.getDB)();
+        const [agg] = yield db.collection(POSTS_COLLECTION).aggregate([
+            { $match: { 'author.id': authorId } },
+            {
+                $group: {
+                    _id: null,
+                    totalPosts: { $sum: 1 },
+                    totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
+                    boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
+                    totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
+                }
+            }
+        ]).toArray();
+        const topPosts = yield db.collection(POSTS_COLLECTION)
+            .find({ 'author.id': authorId })
+            .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
+            .sort({ viewCount: -1 })
+            .limit(5)
+            .toArray();
+        const user = yield db.collection(USERS_COLLECTION).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
+        io.to(`user:${authorId}`).emit('analytics_update', {
+            userId: authorId,
+            stats: {
+                totals: {
+                    totalPosts: (_a = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _a !== void 0 ? _a : 0,
+                    totalViews: (_b = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _b !== void 0 ? _b : 0,
+                    boostedPosts: (_c = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _c !== void 0 ? _c : 0,
+                    totalRadiance: (_d = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _d !== void 0 ? _d : 0
+                },
+                credits: {
+                    balance: (_e = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _e !== void 0 ? _e : 0,
+                    spent: (_f = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _f !== void 0 ? _f : 0
+                },
+                topPosts: topPosts.map((p) => {
+                    var _a, _b;
+                    return ({
+                        id: p.id,
+                        preview: (p.content || '').slice(0, 120),
+                        views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
+                        timestamp: p.timestamp,
+                        isBoosted: !!p.isBoosted,
+                        radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
+                    });
+                })
+            }
+        });
+    }
+    catch (err) {
+        console.error('emitAuthorInsightsUpdate error', err);
+    }
+});
 exports.postsController = {
     health: (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
         res.json({
@@ -374,7 +433,7 @@ exports.postsController = {
         }
     }),
     incrementPostViews: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const { id } = req.params;
             if (!(0, db_1.isDBConnected)()) {
@@ -397,6 +456,7 @@ exports.postsController = {
                 return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
             }
             const viewCount = result.value.viewCount || 0;
+            const authorId = (_b = result.value.author) === null || _b === void 0 ? void 0 : _b.id;
             broadcastPostViewUpdate({ postId: id, viewCount });
             try {
                 const io = req.app.get('io');
@@ -405,6 +465,9 @@ exports.postsController = {
                 }
             }
             catch (e) {
+            }
+            if (authorId) {
+                emitAuthorInsightsUpdate(req.app, authorId);
             }
             res.json({ success: true, data: { id, viewCount } });
         }
@@ -590,6 +653,9 @@ exports.postsController = {
             else {
                 updatedPost.userReactions = [];
             }
+            if (updatedPost.author && updatedPost.author.id) {
+                emitAuthorInsightsUpdate(req.app, updatedPost.author.id);
+            }
             res.json({ success: true, data: updatedPost, message: `Reaction ${action} successfully` });
         }
         catch (error) {
@@ -658,6 +724,7 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/boost - Boost post and deduct credits server-side
     boostPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
             const { userId, credits } = req.body;
@@ -712,6 +779,16 @@ exports.postsController = {
                 }
                 catch (e) {
                     console.error('Error creating boost notification:', e);
+                }
+                try {
+                    const appInstance = req.app;
+                    const authorId = ((_a = boostedDoc.author) === null || _a === void 0 ? void 0 : _a.id) || post.author.id;
+                    if (authorId) {
+                        yield emitAuthorInsightsUpdate(appInstance, authorId);
+                    }
+                }
+                catch (e) {
+                    console.error('Error emitting analytics update after boost:', e);
                 }
                 return res.json({ success: true, data: boostedDoc, message: 'Post boosted successfully' });
             }

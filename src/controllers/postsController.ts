@@ -21,6 +21,67 @@ const broadcastPostViewUpdate = (payload: { postId: string; viewCount: number })
   }
 };
 
+const emitAuthorInsightsUpdate = async (app: any, authorId: string) => {
+  try {
+    if (!authorId) return;
+    const io = app?.get && app.get('io');
+    if (!io || typeof io.to !== 'function') return;
+
+    const db = getDB();
+
+    const [agg] = await db.collection(POSTS_COLLECTION).aggregate([
+      { $match: { 'author.id': authorId } },
+      {
+        $group: {
+          _id: null,
+          totalPosts: { $sum: 1 },
+          totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
+          boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
+          totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
+        }
+      }
+    ]).toArray();
+
+    const topPosts = await db.collection(POSTS_COLLECTION)
+      .find({ 'author.id': authorId })
+      .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
+      .sort({ viewCount: -1 })
+      .limit(5)
+      .toArray();
+
+    const user = await db.collection(USERS_COLLECTION).findOne(
+      { id: authorId },
+      { projection: { auraCredits: 1, auraCreditsSpent: 1 } }
+    );
+
+    io.to(`user:${authorId}`).emit('analytics_update', {
+      userId: authorId,
+      stats: {
+        totals: {
+          totalPosts: agg?.totalPosts ?? 0,
+          totalViews: agg?.totalViews ?? 0,
+          boostedPosts: agg?.boostedPosts ?? 0,
+          totalRadiance: agg?.totalRadiance ?? 0
+        },
+        credits: {
+          balance: user?.auraCredits ?? 0,
+          spent: user?.auraCreditsSpent ?? 0
+        },
+        topPosts: topPosts.map((p: any) => ({
+          id: p.id,
+          preview: (p.content || '').slice(0, 120),
+          views: p.viewCount ?? 0,
+          timestamp: p.timestamp,
+          isBoosted: !!p.isBoosted,
+          radiance: p.radiance ?? 0
+        }))
+      }
+    });
+  } catch (err) {
+    console.error('emitAuthorInsightsUpdate error', err);
+  }
+};
+
 export const postsController = {
   health: async (_req: Request, res: Response) => {
     res.json({
@@ -428,6 +489,7 @@ export const postsController = {
       }
 
       const viewCount = result.value.viewCount || 0;
+      const authorId = (result.value as any).author?.id;
       broadcastPostViewUpdate({ postId: id, viewCount });
 
       try {
@@ -436,6 +498,10 @@ export const postsController = {
           io.emit('post_view', { postId: id, viewCount });
         }
       } catch (e) {
+      }
+
+      if (authorId) {
+        emitAuthorInsightsUpdate(req.app, authorId);
       }
 
       res.json({ success: true, data: { id, viewCount } });
@@ -712,6 +778,10 @@ export const postsController = {
         updatedPost.userReactions = [];
       }
 
+      if (updatedPost.author && updatedPost.author.id) {
+        emitAuthorInsightsUpdate(req.app, updatedPost.author.id);
+      }
+
       res.json({ success: true, data: updatedPost, message: `Reaction ${action} successfully` });
     } catch (error) {
       console.error('Error adding reaction:', error);
@@ -860,6 +930,16 @@ export const postsController = {
           }
         } catch (e) {
           console.error('Error creating boost notification:', e);
+        }
+
+        try {
+          const appInstance: any = (req as any).app;
+          const authorId = boostedDoc.author?.id || post.author.id;
+          if (authorId) {
+            await emitAuthorInsightsUpdate(appInstance, authorId);
+          }
+        } catch (e) {
+          console.error('Error emitting analytics update after boost:', e);
         }
 
         return res.json({ success: true, data: boostedDoc, message: 'Post boosted successfully' });

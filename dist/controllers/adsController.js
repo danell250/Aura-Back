@@ -541,6 +541,44 @@ exports.adsController = {
                     lastUpdated: Date.now()
                 }
             }, { upsert: true });
+            try {
+                const ownerId = ad === null || ad === void 0 ? void 0 : ad.ownerId;
+                if (ownerId) {
+                    const appInstance = req.app;
+                    const io = (appInstance === null || appInstance === void 0 ? void 0 : appInstance.get) && appInstance.get('io');
+                    if (io && typeof io.to === 'function') {
+                        const analyticsDoc = yield db.collection('adAnalytics').findOne({ adId: id });
+                        const impressions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.impressions) || 0;
+                        const clicks = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.clicks) || 0;
+                        const engagement = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.engagement) || 0;
+                        const conversions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.conversions) || 0;
+                        const spend = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.spend) || 0;
+                        const reach = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.reach) || impressions;
+                        const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+                        const lastUpdated = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.lastUpdated) || Date.now();
+                        io.to(`user:${ownerId}`).emit('analytics_update', {
+                            userId: ownerId,
+                            stats: {
+                                adMetrics: {
+                                    adId: id,
+                                    impressions,
+                                    clicks,
+                                    ctr,
+                                    reach,
+                                    engagement,
+                                    conversions,
+                                    spend,
+                                    lastUpdated
+                                }
+                            }
+                        });
+                        io.to(`user:${ownerId}`).emit('ad_impression', { adId: id, ownerId });
+                    }
+                }
+            }
+            catch (error) {
+                console.error('Error emitting ad analytics update after impression:', error);
+            }
             res.json({ success: true });
         }
         catch (error) {
@@ -553,7 +591,7 @@ exports.adsController = {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
             const ad = yield db.collection('ads').findOne({ id });
-            yield db.collection('adAnalytics').updateOne({ adId: id }, {
+            const updateResult = yield db.collection('adAnalytics').updateOne({ adId: id }, {
                 $setOnInsert: {
                     adId: id,
                     ownerId: (ad === null || ad === void 0 ? void 0 : ad.ownerId) || null,
@@ -570,6 +608,43 @@ exports.adsController = {
                     lastUpdated: Date.now()
                 }
             }, { upsert: true });
+            try {
+                const ownerId = (ad === null || ad === void 0 ? void 0 : ad.ownerId) || updateResult.ownerId;
+                if (ownerId) {
+                    const appInstance = req.app;
+                    const io = (appInstance === null || appInstance === void 0 ? void 0 : appInstance.get) && appInstance.get('io');
+                    if (io && typeof io.to === 'function') {
+                        const analyticsDoc = yield db.collection('adAnalytics').findOne({ adId: id });
+                        const impressions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.impressions) || 0;
+                        const clicks = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.clicks) || 0;
+                        const engagement = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.engagement) || 0;
+                        const conversions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.conversions) || 0;
+                        const spend = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.spend) || 0;
+                        const reach = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.reach) || impressions;
+                        const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+                        const lastUpdated = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.lastUpdated) || Date.now();
+                        io.to(`user:${ownerId}`).emit('analytics_update', {
+                            userId: ownerId,
+                            stats: {
+                                adMetrics: {
+                                    adId: id,
+                                    impressions,
+                                    clicks,
+                                    ctr,
+                                    reach,
+                                    engagement,
+                                    conversions,
+                                    spend,
+                                    lastUpdated
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+            catch (error) {
+                console.error('Error emitting ad analytics update after click:', error);
+            }
             res.json({ success: true });
         }
         catch (error) {
@@ -596,6 +671,44 @@ exports.adsController = {
                     lastUpdated: Date.now()
                 }
             }, { upsert: true });
+            try {
+                const ownerId = ad === null || ad === void 0 ? void 0 : ad.ownerId;
+                if (ownerId) {
+                    const appInstance = req.app;
+                    const io = (appInstance === null || appInstance === void 0 ? void 0 : appInstance.get) && appInstance.get('io');
+                    if (io && typeof io.to === 'function') {
+                        const analyticsDoc = yield db.collection('adAnalytics').findOne({ adId: id });
+                        const impressions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.impressions) || 0;
+                        const clicks = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.clicks) || 0;
+                        const engagement = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.engagement) || 0;
+                        const conversions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.conversions) || 0;
+                        const spend = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.spend) || 0;
+                        const reach = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.reach) || impressions;
+                        const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+                        const lastUpdated = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.lastUpdated) || Date.now();
+                        io.to(`user:${ownerId}`).emit('analytics_update', {
+                            userId: ownerId,
+                            stats: {
+                                adMetrics: {
+                                    adId: id,
+                                    impressions,
+                                    clicks,
+                                    ctr,
+                                    reach,
+                                    engagement,
+                                    conversions,
+                                    spend,
+                                    lastUpdated
+                                }
+                            }
+                        });
+                        io.to(`user:${ownerId}`).emit('ad_engagement', { adId: id, ownerId });
+                    }
+                }
+            }
+            catch (error) {
+                console.error('Error emitting ad analytics update after engagement:', error);
+            }
             res.json({ success: true });
         }
         catch (error) {

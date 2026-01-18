@@ -651,6 +651,46 @@ export const adsController = {
         { upsert: true }
       );
 
+      try {
+        const ownerId = ad?.ownerId;
+        if (ownerId) {
+          const appInstance: any = (req as any).app;
+          const io = appInstance?.get && appInstance.get('io');
+          if (io && typeof io.to === 'function') {
+            const analyticsDoc = await db.collection('adAnalytics').findOne({ adId: id });
+            const impressions = analyticsDoc?.impressions || 0;
+            const clicks = analyticsDoc?.clicks || 0;
+            const engagement = analyticsDoc?.engagement || 0;
+            const conversions = analyticsDoc?.conversions || 0;
+            const spend = analyticsDoc?.spend || 0;
+            const reach = analyticsDoc?.reach || impressions;
+            const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+            const lastUpdated = analyticsDoc?.lastUpdated || Date.now();
+
+            io.to(`user:${ownerId}`).emit('analytics_update', {
+              userId: ownerId,
+              stats: {
+                adMetrics: {
+                  adId: id,
+                  impressions,
+                  clicks,
+                  ctr,
+                  reach,
+                  engagement,
+                  conversions,
+                  spend,
+                  lastUpdated
+                }
+              }
+            });
+
+            io.to(`user:${ownerId}`).emit('ad_impression', { adId: id, ownerId });
+          }
+        }
+      } catch (error) {
+        console.error('Error emitting ad analytics update after impression:', error);
+      }
+
       res.json({ success: true });
     } catch (error) {
       console.error('Error tracking ad impression:', error);
@@ -665,7 +705,7 @@ export const adsController = {
 
       const ad = await db.collection('ads').findOne({ id });
 
-      await db.collection('adAnalytics').updateOne(
+      const updateResult = await db.collection('adAnalytics').updateOne(
         { adId: id },
         {
           $setOnInsert: {
@@ -686,6 +726,44 @@ export const adsController = {
         },
         { upsert: true }
       );
+
+      try {
+        const ownerId = ad?.ownerId || (updateResult as any).ownerId;
+        if (ownerId) {
+          const appInstance: any = (req as any).app;
+          const io = appInstance?.get && appInstance.get('io');
+          if (io && typeof io.to === 'function') {
+            const analyticsDoc = await db.collection('adAnalytics').findOne({ adId: id });
+            const impressions = analyticsDoc?.impressions || 0;
+            const clicks = analyticsDoc?.clicks || 0;
+            const engagement = analyticsDoc?.engagement || 0;
+            const conversions = analyticsDoc?.conversions || 0;
+            const spend = analyticsDoc?.spend || 0;
+            const reach = analyticsDoc?.reach || impressions;
+            const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+            const lastUpdated = analyticsDoc?.lastUpdated || Date.now();
+
+            io.to(`user:${ownerId}`).emit('analytics_update', {
+              userId: ownerId,
+              stats: {
+                adMetrics: {
+                  adId: id,
+                  impressions,
+                  clicks,
+                  ctr,
+                  reach,
+                  engagement,
+                  conversions,
+                  spend,
+                  lastUpdated
+                }
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error emitting ad analytics update after click:', error);
+      }
 
       res.json({ success: true });
     } catch (error) {
@@ -719,6 +797,46 @@ export const adsController = {
         },
         { upsert: true }
       );
+
+      try {
+        const ownerId = ad?.ownerId;
+        if (ownerId) {
+          const appInstance: any = (req as any).app;
+          const io = appInstance?.get && appInstance.get('io');
+          if (io && typeof io.to === 'function') {
+            const analyticsDoc = await db.collection('adAnalytics').findOne({ adId: id });
+            const impressions = analyticsDoc?.impressions || 0;
+            const clicks = analyticsDoc?.clicks || 0;
+            const engagement = analyticsDoc?.engagement || 0;
+            const conversions = analyticsDoc?.conversions || 0;
+            const spend = analyticsDoc?.spend || 0;
+            const reach = analyticsDoc?.reach || impressions;
+            const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+            const lastUpdated = analyticsDoc?.lastUpdated || Date.now();
+
+            io.to(`user:${ownerId}`).emit('analytics_update', {
+              userId: ownerId,
+              stats: {
+                adMetrics: {
+                  adId: id,
+                  impressions,
+                  clicks,
+                  ctr,
+                  reach,
+                  engagement,
+                  conversions,
+                  spend,
+                  lastUpdated
+                }
+              }
+            });
+
+            io.to(`user:${ownerId}`).emit('ad_engagement', { adId: id, ownerId });
+          }
+        }
+      } catch (error) {
+        console.error('Error emitting ad analytics update after engagement:', error);
+      }
 
       res.json({ success: true });
     } catch (error) {

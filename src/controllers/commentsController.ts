@@ -144,6 +144,66 @@ export const commentsController = {
             )
           );
         }
+
+        if (post && post.author && post.author.id) {
+          try {
+            const authorIdForAnalytics = post.author.id as string;
+            const [agg] = await db.collection('posts').aggregate([
+              { $match: { 'author.id': authorIdForAnalytics } },
+              {
+                $group: {
+                  _id: null,
+                  totalPosts: { $sum: 1 },
+                  totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
+                  boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
+                  totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
+                }
+              }
+            ]).toArray();
+
+            const topPosts = await db.collection('posts')
+              .find({ 'author.id': authorIdForAnalytics })
+              .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
+              .sort({ viewCount: -1 })
+              .limit(5)
+              .toArray();
+
+            const user = await db.collection(USERS_COLLECTION).findOne(
+              { id: authorIdForAnalytics },
+              { projection: { auraCredits: 1, auraCreditsSpent: 1 } }
+            );
+
+            const appInstance: any = req.app;
+            const io = appInstance?.get && appInstance.get('io');
+            if (io && typeof io.to === 'function') {
+              io.to(`user:${authorIdForAnalytics}`).emit('analytics_update', {
+                userId: authorIdForAnalytics,
+                stats: {
+                  totals: {
+                    totalPosts: agg?.totalPosts ?? 0,
+                    totalViews: agg?.totalViews ?? 0,
+                    boostedPosts: agg?.boostedPosts ?? 0,
+                    totalRadiance: agg?.totalRadiance ?? 0
+                  },
+                  credits: {
+                    balance: user?.auraCredits ?? 0,
+                    spent: user?.auraCreditsSpent ?? 0
+                  },
+                  topPosts: topPosts.map((p: any) => ({
+                    id: p.id,
+                    preview: (p.content || '').slice(0, 120),
+                    views: p.viewCount ?? 0,
+                    timestamp: p.timestamp,
+                    isBoosted: !!p.isBoosted,
+                    radiance: p.radiance ?? 0
+                  }))
+                }
+              });
+            }
+          } catch (err) {
+            console.error('Error emitting analytics update for comment:', err);
+          }
+        }
       } catch (e) {
         console.error('Error creating comment notification:', e);
       }
