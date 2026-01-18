@@ -1,8 +1,16 @@
 import { Request, Response } from 'express';
 import { getDB, isDBConnected } from '../db';
 
-// Helper function to create a notification in the database
-export const createNotificationInDB = async (userId: string, type: string, fromUserId: string, message: string, postId?: string, connectionId?: string) => {
+export const createNotificationInDB = async (
+  userId: string,
+  type: string,
+  fromUserId: string,
+  message: string,
+  postId?: string,
+  connectionId?: string,
+  meta?: any,
+  yearKey?: string
+) => {
   let db: any = null;
   if (isDBConnected()) {
     try {
@@ -18,6 +26,25 @@ export const createNotificationInDB = async (userId: string, type: string, fromU
       fromUserDoc = await db.collection('users').findOne({ id: fromUserId });
     } catch (error) {
       console.error('Error fetching notification fromUser in DB:', error);
+    }
+  }
+
+  if (db && yearKey) {
+    try {
+      const existingUser = await db.collection('users').findOne({
+        id: userId,
+        notifications: { $elemMatch: { yearKey, type } }
+      });
+      if (existingUser && Array.isArray(existingUser.notifications)) {
+        const existingNotification = existingUser.notifications.find(
+          (n: any) => n.yearKey === yearKey && n.type === type
+        );
+        if (existingNotification) {
+          return existingNotification;
+        }
+      }
+    } catch (error) {
+      console.error('Error checking existing notification in DB:', error);
     }
   }
 
@@ -46,7 +73,9 @@ export const createNotificationInDB = async (userId: string, type: string, fromU
     timestamp: Date.now(),
     isRead: false,
     postId: postId || '',
-    connectionId: connectionId || undefined
+    connectionId: connectionId || undefined,
+    meta: meta || undefined,
+    yearKey: yearKey || undefined
   };
 
   if (db) {

@@ -57,6 +57,7 @@ router.delete('/:id', postsWriteRateLimiter, requireAuth, postsController.delete
 router.post('/:id/react', postsWriteRateLimiter, requireAuth, postsController.reactToPost);
 router.post('/:id/boost', postsWriteRateLimiter, requireAuth, postsController.boostPost);
 router.post('/:id/share', postsWriteRateLimiter, requireAuth, postsController.sharePost);
+router.post('/:id/share-birthday', postsWriteRateLimiter, requireAuth, postsController.shareBirthdayPost);
 router.post('/:id/report', postsWriteRateLimiter, requireAuth, postsController.reportPost);
 router.post('/:id/view', optionalAuth, postsController.incrementPostViews);
 

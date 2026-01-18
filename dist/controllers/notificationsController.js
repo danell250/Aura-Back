@@ -11,8 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.notificationsController = exports.createNotificationInDB = void 0;
 const db_1 = require("../db");
-// Helper function to create a notification in the database
-const createNotificationInDB = (userId, type, fromUserId, message, postId, connectionId) => __awaiter(void 0, void 0, void 0, function* () {
+const createNotificationInDB = (userId, type, fromUserId, message, postId, connectionId, meta, yearKey) => __awaiter(void 0, void 0, void 0, function* () {
     let db = null;
     if ((0, db_1.isDBConnected)()) {
         try {
@@ -29,6 +28,23 @@ const createNotificationInDB = (userId, type, fromUserId, message, postId, conne
         }
         catch (error) {
             console.error('Error fetching notification fromUser in DB:', error);
+        }
+    }
+    if (db && yearKey) {
+        try {
+            const existingUser = yield db.collection('users').findOne({
+                id: userId,
+                notifications: { $elemMatch: { yearKey, type } }
+            });
+            if (existingUser && Array.isArray(existingUser.notifications)) {
+                const existingNotification = existingUser.notifications.find((n) => n.yearKey === yearKey && n.type === type);
+                if (existingNotification) {
+                    return existingNotification;
+                }
+            }
+        }
+        catch (error) {
+            console.error('Error checking existing notification in DB:', error);
         }
     }
     const fromUser = fromUserDoc ? {
@@ -55,7 +71,9 @@ const createNotificationInDB = (userId, type, fromUserId, message, postId, conne
         timestamp: Date.now(),
         isRead: false,
         postId: postId || '',
-        connectionId: connectionId || undefined
+        connectionId: connectionId || undefined,
+        meta: meta || undefined,
+        yearKey: yearKey || undefined
     };
     if (db) {
         try {

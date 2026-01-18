@@ -11,6 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.birthdayController = void 0;
 const db_1 = require("../db");
+const notificationsController_1 = require("./notificationsController");
 const geminiController_1 = require("./geminiController");
 exports.birthdayController = {
     getTodayBirthdays(req, res) {
@@ -45,6 +46,7 @@ exports.birthdayController = {
                 const today = new Date();
                 const mmToday = today.getMonth() + 1;
                 const ddToday = today.getDate();
+                const currentYear = today.getFullYear();
                 const users = yield db.collection('users').find({
                     id: { $in: idsToCheck },
                     dob: { $exists: true, $ne: '' }
@@ -83,6 +85,72 @@ exports.birthdayController = {
                         };
                         (0, geminiController_1.generateQuirkyBirthdayWish)(mockReq, mockRes);
                     });
+                    const postId = `bday-post-${person.id}-${currentYear}`;
+                    const existingPost = yield db.collection('posts').findOne({
+                        isSystemPost: true,
+                        systemType: 'birthday',
+                        ownerId: person.id,
+                        birthdayYear: currentYear
+                    });
+                    if (!existingPost) {
+                        const supportEmail = 'aurasocialradiate@gmail.com';
+                        const supportUser = yield db.collection('users').findOne({ email: supportEmail });
+                        const authorId = (supportUser === null || supportUser === void 0 ? void 0 : supportUser.id) || `support-${supportEmail}`;
+                        yield db.collection('posts').insertOne({
+                            id: postId,
+                            author: supportUser ? {
+                                id: supportUser.id,
+                                firstName: supportUser.firstName,
+                                lastName: supportUser.lastName,
+                                name: supportUser.name,
+                                handle: supportUser.handle,
+                                avatar: supportUser.avatar,
+                                avatarType: supportUser.avatarType || 'image',
+                                activeGlow: supportUser.activeGlow
+                            } : {
+                                id: authorId,
+                                firstName: 'Aura',
+                                lastName: 'Support',
+                                name: 'Aura Support',
+                                handle: '@aurasupport',
+                                avatar: '/og-image.svg',
+                                avatarType: 'image',
+                                activeGlow: 'emerald'
+                            },
+                            authorId,
+                            ownerId: person.id,
+                            content: wishText || `🎉 Happy Birthday ${person.firstName}! Your aura is radiant today.`,
+                            mediaUrl: undefined,
+                            mediaType: undefined,
+                            mediaItems: undefined,
+                            sharedFrom: undefined,
+                            energy: '🎉 Celebrating',
+                            radiance: 0,
+                            timestamp: Date.now(),
+                            reactions: {},
+                            reactionUsers: {},
+                            userReactions: [],
+                            comments: [],
+                            isBoosted: false,
+                            viewCount: 0,
+                            hashtags: [],
+                            taggedUserIds: [],
+                            visibility: 'private',
+                            isBirthdayPost: true,
+                            isSystemPost: true,
+                            systemType: 'birthday',
+                            birthdayYear: currentYear
+                        });
+                        const acquaintancesForOwner = person.acquaintances || [];
+                        if (acquaintancesForOwner.length > 0) {
+                            const yearKey = `birthday-${person.id}-${currentYear}`;
+                            yield Promise.all(acquaintancesForOwner
+                                .filter(id => id && id !== person.id)
+                                .map(id => (0, notificationsController_1.createNotificationInDB)(id, 'birthday', person.id, `It’s ${person.firstName}'s birthday today 🎂`, postId, undefined, { birthdayUserId: person.id, year: currentYear }, yearKey).catch(err => {
+                                console.error('Error creating birthday notification from system post:', err);
+                            })));
+                        }
+                    }
                     announcements.push({
                         id: `bday-${person.id}-${today.getFullYear()}`,
                         user: {

@@ -137,6 +137,25 @@ export const postsController = {
         currentUserAcquaintances = currentUser?.acquaintances || [];
       }
 
+      const visibilityConditions: any[] = [
+        { visibility: { $exists: false } },
+        { visibility: 'public' }
+      ];
+
+      if (currentUserId) {
+        visibilityConditions.push(
+          { visibility: 'private', 'author.id': currentUserId },
+          { visibility: 'acquaintances', 'author.id': currentUserId }
+        );
+
+        if (currentUserAcquaintances.length > 0) {
+          visibilityConditions.push({
+            visibility: 'acquaintances',
+            'author.id': { $in: currentUserAcquaintances }
+          });
+        }
+      }
+
       // Basic search across content, author fields, and hashtags with privacy filtering
       const pipeline = [
         {
@@ -149,7 +168,6 @@ export const postsController = {
             ]
           }
         },
-        // Lookup author details to check privacy settings
         {
           $lookup: {
             from: USERS_COLLECTION,
@@ -158,20 +176,21 @@ export const postsController = {
             as: 'authorDetails'
           }
         },
-        // Filter based on privacy settings
         {
           $match: {
             $or: [
-              // Show posts from non-private users
               { 'authorDetails.isPrivate': { $ne: true } },
-              // Show posts from private users who are acquaintances
               { 
                 'authorDetails.isPrivate': true,
                 'author.id': { $in: currentUserAcquaintances }
               },
-              // Always show own posts
               { 'author.id': currentUserId }
             ]
+          }
+        },
+        {
+          $match: {
+            $or: visibilityConditions
           }
         },
         { $sort: { timestamp: -1 } },
@@ -239,9 +258,33 @@ export const postsController = {
         currentUserAcquaintances = currentUser?.acquaintances || [];
       }
 
-      const pipeline = [
+      const visibilityConditions: any[] = [
+        { visibility: { $exists: false } },
+        { visibility: 'public' }
+      ];
+
+      if (currentUserId) {
+        visibilityConditions.push(
+          { visibility: 'private', 'author.id': currentUserId },
+          { visibility: 'acquaintances', 'author.id': currentUserId }
+        );
+
+        if (currentUserAcquaintances.length > 0) {
+          visibilityConditions.push({
+            visibility: 'acquaintances',
+            'author.id': { $in: currentUserAcquaintances }
+          });
+        }
+      }
+
+      const visibilityMatchStage = {
+        $match: {
+          $or: visibilityConditions
+        }
+      };
+
+      const pipeline: any[] = [
         { $match: query },
-        // Lookup author details to check privacy settings
         {
           $lookup: {
             from: USERS_COLLECTION,
@@ -250,26 +293,22 @@ export const postsController = {
             as: 'authorDetails'
           }
         },
-        // Filter based on privacy settings
         {
           $match: {
             $or: [
-              // Show posts from non-private users
               { 'authorDetails.isPrivate': { $ne: true } },
-              // Show posts from private users who are acquaintances
               { 
                 'authorDetails.isPrivate': true,
                 'author.id': { $in: currentUserAcquaintances }
               },
-              // Always show own posts
               { 'author.id': currentUserId }
             ]
           }
         },
+        ...( !userId || userId !== currentUserId ? [visibilityMatchStage] : [] ),
         { $sort: { timestamp: -1 } },
         { $skip: (pageNum - 1) * limitNum },
         { $limit: limitNum },
-        // Lookup comments to get count and preview
         {
           $lookup: {
             from: 'comments',
@@ -281,10 +320,7 @@ export const postsController = {
         {
           $addFields: {
             commentCount: { $size: '$fetchedComments' },
-            // Populate comments with all fetched comments so they load immediately
-            // If there are too many, we might want to slice, but for now this solves "immediate load"
             comments: '$fetchedComments',
-            // Calculate if time capsule is unlocked
             isUnlocked: {
               $cond: {
                 if: { $eq: ['$isTimeCapsule', true] },
@@ -297,7 +333,7 @@ export const postsController = {
         {
           $project: {
             fetchedComments: 0,
-            authorDetails: 0 // Remove author details from response
+            authorDetails: 0
           }
         }
       ];
@@ -305,7 +341,7 @@ export const postsController = {
       const data = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
 
       // Get total count with privacy filtering
-      const countPipeline = [
+      const countPipeline: any[] = [
         { $match: query },
         {
           $lookup: {
@@ -327,6 +363,7 @@ export const postsController = {
             ]
           }
         },
+        ...( !userId || userId !== currentUserId ? [visibilityMatchStage] : [] ),
         { $count: 'total' }
       ];
 
@@ -423,6 +460,23 @@ export const postsController = {
         
         if (!currentUserAcquaintances.includes(post.author.id)) {
           return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+        }
+      }
+
+      if (post.visibility === 'private' && currentUserId !== post.author.id) {
+        return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+      }
+
+      if (post.visibility === 'acquaintances') {
+        if (!currentUserId) {
+          return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to acquaintances' });
+        }
+        if (currentUserId !== post.author.id) {
+          const currentUser = await db.collection(USERS_COLLECTION).findOne({ id: currentUserId });
+          const currentUserAcquaintances = currentUser?.acquaintances || [];
+          if (!currentUserAcquaintances.includes(post.author.id)) {
+            return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to acquaintances' });
+          }
         }
       }
 
@@ -526,7 +580,14 @@ export const postsController = {
         timeCapsuleType,
         invitedUsers,
         timeCapsuleTitle,
-        timezone
+        timezone,
+        visibility,
+        isBirthdayPost,
+        isSystemPost,
+        systemType,
+        ownerId,
+        createdByUserId,
+        birthdayYear
       } = req.body;
       
       if (!authorId) {
@@ -562,13 +623,18 @@ export const postsController = {
       };
 
       const safeContent = typeof content === 'string' ? content : '';
+      const normalizedVisibility = visibility === 'private' || visibility === 'acquaintances' ? visibility : 'public';
       const hashtags = getHashtagsFromText(safeContent);
       const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];
       const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
       
+      const currentYear = new Date().getFullYear();
+
       const newPost = {
         id: postId,
         author: authorEmbed,
+        authorId: authorEmbed.id,
+        ownerId: ownerId || authorEmbed.id,
         content: safeContent,
         mediaUrl: mediaUrl || undefined,
         mediaType: mediaType || undefined,
@@ -577,6 +643,7 @@ export const postsController = {
         energy: energy || '🪐 Neutral',
         radiance: 0,
         timestamp: Date.now(),
+        visibility: normalizedVisibility,
         reactions: {} as Record<string, number>,
         reactionUsers: {} as Record<string, string[]>,
         userReactions: [] as string[],
@@ -594,6 +661,15 @@ export const postsController = {
           invitedUsers: invitedUsers || [],
           timeCapsuleTitle: timeCapsuleTitle || null,
           timezone: timezone || null
+        }),
+        ...(isBirthdayPost && {
+          isBirthdayPost: true,
+          birthdayYear: birthdayYear || currentYear
+        }),
+        ...(isSystemPost && {
+          isSystemPost: true,
+          systemType: systemType || null,
+          createdByUserId: createdByUserId || authorEmbed.id
         })
       };
 
@@ -633,6 +709,30 @@ export const postsController = {
               })
             )
         );
+      }
+      if (isBirthdayPost) {
+        const acquaintances: string[] = Array.isArray((author as any)?.acquaintances) ? (author as any).acquaintances : [];
+        if (acquaintances.length > 0) {
+          const yearKey = `birthday-${authorEmbed.id}-${currentYear}`;
+          await Promise.all(
+            acquaintances
+              .filter(id => id && id !== authorEmbed.id)
+              .map(id =>
+                createNotificationInDB(
+                  id,
+                  'birthday',
+                  authorEmbed.id,
+                  `It’s ${authorEmbed.firstName || 'Someone'}'s birthday today 🎂`,
+                  postId,
+                  undefined,
+                  { birthdayUserId: authorEmbed.id, year: currentYear },
+                  yearKey
+                ).catch(err => {
+                  console.error('Error creating birthday notification:', err);
+                })
+              )
+          );
+        }
       }
       res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
     } catch (error) {
@@ -989,6 +1089,69 @@ export const postsController = {
     } catch (error) {
       console.error('Error sharing post:', error);
       res.status(500).json({ success: false, error: 'Failed to share post', message: 'Internal server error' });
+    }
+  },
+  
+  // POST /api/posts/:id/share-birthday - Share a system birthday post (owner only)
+  shareBirthdayPost: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { visibility } = req.body as { visibility?: string };
+      const user = (req as any).user;
+
+      if (!user || !user.id) {
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+      }
+
+      if (visibility !== 'public' && visibility !== 'acquaintances') {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid visibility',
+          message: "Visibility must be 'public' or 'acquaintances'"
+        });
+      }
+
+      const db = getDB();
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+
+      if (!post) {
+        return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
+      }
+
+      if (!post.isSystemPost || post.systemType !== 'birthday') {
+        return res.status(400).json({
+          success: false,
+          error: 'Not a birthday system post',
+          message: 'share-birthday is only allowed for system birthday posts'
+        });
+      }
+
+      if (!post.ownerId || post.ownerId !== user.id) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden',
+          message: 'Only the birthday owner can share this post'
+        });
+      }
+
+      await db.collection(POSTS_COLLECTION).updateOne(
+        { id },
+        { $set: { visibility, sharedAt: Date.now() } }
+      );
+
+      const updated = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!updated) {
+        return res.status(500).json({ success: false, error: 'Failed to update birthday post visibility' });
+      }
+
+      res.json({
+        success: true,
+        data: updated,
+        message: 'Birthday post shared successfully'
+      });
+    } catch (error) {
+      console.error('Error sharing birthday post:', error);
+      res.status(500).json({ success: false, error: 'Failed to share birthday post', message: 'Internal server error' });
     }
   },
   
