@@ -84,7 +84,8 @@ router.post("/media/upload-url", async (req, res) => {
     const bucketName = process.env.S3_BUCKET_NAME;
 
     if (!bucketName) {
-      throw new Error("Bucket name not configured");
+      console.warn("S3 Bucket not configured, returning 503 to trigger local fallback");
+      return res.status(503).json({ success: false, error: "S3_NOT_CONFIGURED" });
     }
 
     let key = "";
