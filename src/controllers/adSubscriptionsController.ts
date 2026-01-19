@@ -48,6 +48,7 @@ async function verifyPayPalWebhookSignature(req: Request): Promise<boolean> {
   );
   return verifyResponse.data.verification_status === 'SUCCESS';
 }
+import { AD_PLANS } from '../constants/adPlans';
 
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 
@@ -111,6 +112,9 @@ export const adSubscriptionsController = {
       // For subscriptions, next billing is typically 30 days from start
       const nextBillingDate = !durationDays ? now + (30 * 24 * 60 * 60 * 1000) : undefined;
 
+      const plan = AD_PLANS[packageId as keyof typeof AD_PLANS];
+      const impressionLimit = plan ? plan.impressionLimit : 0;
+
       const newSubscription = {
         id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
         userId,
@@ -121,8 +125,10 @@ export const adSubscriptionsController = {
         endDate,
         nextBillingDate,
         paypalSubscriptionId: paypalSubscriptionId || null,
-        adsUsed: 0,
+        adsUsed: 0, // This will track active ads (checked dynamically) or legacy
+        impressionsUsed: 0,
         adLimit,
+        impressionLimit,
         createdAt: now,
         updatedAt: now
       };
@@ -303,8 +309,10 @@ export const adSubscriptionsController = {
           $or: [
             { endDate: { $exists: false } }, // Ongoing subscriptions
             { endDate: { $gt: now } } // Not expired
-          ],
-          $expr: { $lt: ['$adsUsed', '$adLimit'] } // Has available ad slots
+          ]
+          // REMOVED: $expr: { $lt: ['$adsUsed', '$adLimit'] } 
+          // We now enforce limits dynamically based on active ads count in adsController,
+          // not based on the cumulative adsUsed counter.
         })
         .sort({ createdAt: -1 })
         .toArray();
@@ -431,6 +439,7 @@ export const adSubscriptionsController = {
               { 
                 $set: { 
                   adsUsed: 0,
+                  impressionsUsed: 0,
                   updatedAt: Date.now(),
                   status: 'active'
                 } 

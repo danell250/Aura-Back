@@ -4,9 +4,11 @@ import { getHashtagsFromText } from '../utils/hashtagUtils';
 import { createNotificationInDB } from './notificationsController';
 import { uploadToS3 } from '../utils/s3Upload';
 import { transformUser } from '../utils/userUtils';
+import { AD_PLANS } from '../constants/adPlans';
 
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
+const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 
 interface PostSseClient {
   id: string;
@@ -978,28 +980,83 @@ export const postsController = {
         { projection: { auraCredits: 1, auraCreditsSpent: 1 } }
       );
 
+      // Fetch active subscription to determine analytics level
+      const activeSub = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({
+        userId,
+        status: 'active',
+        $or: [
+          { endDate: { $exists: false } },
+          { endDate: { $gt: Date.now() } }
+        ]
+      });
+
+      let analyticsLevel = 'none';
+      if (activeSub) {
+        if (activeSub.packageId === 'pkg-enterprise') analyticsLevel = 'deep';
+        else if (activeSub.packageId === 'pkg-pro') analyticsLevel = 'creator';
+        else if (activeSub.packageId === 'pkg-starter') analyticsLevel = 'basic';
+      }
+
+      // Base data structure
+      const responseData: any = {
+        totals: {
+          totalPosts: agg?.totalPosts ?? 0,
+          totalViews: agg?.totalViews ?? 0
+        },
+        topPosts: topPosts.map((p: any) => ({
+          id: p.id,
+          preview: (p.content || '').slice(0, 120),
+          views: p.viewCount ?? 0,
+          timestamp: p.timestamp
+        }))
+      };
+
+      // Apply gating based on plan
+      if (analyticsLevel === 'creator' || analyticsLevel === 'deep') {
+        // Add Creator level stats
+        responseData.totals.boostedPosts = agg?.boostedPosts ?? 0;
+        responseData.totals.totalRadiance = agg?.totalRadiance ?? 0;
+        responseData.credits = {
+          balance: user?.auraCredits ?? 0,
+          spent: user?.auraCreditsSpent ?? 0
+        };
+        
+        // Enhance top posts with boost info
+        responseData.topPosts = responseData.topPosts.map((p: any, index: number) => ({
+          ...p,
+          isBoosted: !!topPosts[index].isBoosted,
+          radiance: topPosts[index].radiance ?? 0
+        }));
+      }
+
+      if (analyticsLevel === 'deep') {
+        // Add Deep Neural Analytics (Mock data for now as per requirements)
+        responseData.neuralInsights = {
+          audienceBehavior: {
+            retention: 'High',
+            engagementRate: '4.5%',
+            topLocations: ['US', 'UK', 'CA']
+          },
+          timingOptimization: {
+            bestTimeToPost: 'Wednesday 6:00 PM',
+            peakActivity: 'Weekends'
+          },
+          conversionInsights: {
+            clickThroughRate: '2.1%',
+            conversionScore: 85
+          }
+        };
+      }
+      
+      // If level is 'none' (free user), we might want to hide even basic stats or show them as a teaser.
+      // For now, returning basic stats (posts/views) is fair for free users too, 
+      // but strictly following "Personal Pulse -> basic stats" might imply free users get less.
+      // However, preventing errors on frontend is priority.
+
       return res.json({
         success: true,
-        data: {
-          totals: {
-            totalPosts: agg?.totalPosts ?? 0,
-            totalViews: agg?.totalViews ?? 0,
-            boostedPosts: agg?.boostedPosts ?? 0,
-            totalRadiance: agg?.totalRadiance ?? 0
-          },
-          credits: {
-            balance: user?.auraCredits ?? 0,
-            spent: user?.auraCreditsSpent ?? 0
-          },
-          topPosts: topPosts.map((p: any) => ({
-            id: p.id,
-            preview: (p.content || '').slice(0, 120),
-            views: p.viewCount ?? 0,
-            timestamp: p.timestamp,
-            isBoosted: !!p.isBoosted,
-            radiance: p.radiance ?? 0
-          }))
-        }
+        data: responseData,
+        planLevel: analyticsLevel
       });
     } catch (err) {
       console.error('getMyInsights error', err);

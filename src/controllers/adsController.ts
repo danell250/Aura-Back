@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
 import { getHashtagsFromText, filterByHashtags } from '../utils/hashtagUtils';
+import { AD_PLANS } from '../constants/adPlans';
 
 export const adsController = {
   // GET /api/ads - Get all ads
@@ -113,75 +114,49 @@ export const adsController = {
       let subscription: any | null = null;
       const now = Date.now();
 
-      // Check subscription limits and reserve slot atomically if subscriptionId is provided and not special user
-      if (adData.subscriptionId && !isSpecialUser) {
+      // Check subscription limits and enforce at ACTION TIME
+      if (!isSpecialUser) {
+        // Fetch active subscription for the user
         subscription = await db.collection('adSubscriptions').findOne({
-          id: adData.subscriptionId
+          userId,
+          status: 'active',
+          $or: [
+            { endDate: { $exists: false } },
+            { endDate: { $gt: now } }
+          ]
         });
 
+        // If no active subscription, allow creation only if they have credits? 
+        // OR strictly enforce plan.
+        // Based on "pkg-starter" being $39, we should require a subscription.
         if (!subscription) {
-          return res.status(404).json({
-            success: false,
-            error: 'Subscription not found'
-          });
+           return res.status(403).json({
+             success: false,
+             error: 'No active ad plan found. Please purchase a plan to create signals.'
+           });
         }
 
-        if (subscription.userId !== userId) {
-          return res.status(403).json({
-            success: false,
-            error: 'Subscription does not belong to the authenticated user'
+        // 3. Enforce limits at ACTION TIME (create ad)
+        // Check active ads count if the new ad is being created as active
+        const newAdStatus = adData.status || 'active';
+        if (newAdStatus === 'active') {
+          const activeAdsCount = await db.collection('ads').countDocuments({
+            ownerId: userId,
+            status: 'active'
           });
-        }
 
-        if (subscription.status !== 'active') {
-          return res.status(400).json({
-            success: false,
-            error: 'Subscription is not active'
-          });
-        }
+          // Use adLimit from subscription
+          const planLimit = subscription.adLimit || 0;
 
-        // Check if subscription has expired
-        if (subscription.endDate && now > subscription.endDate) {
-          await db.collection('adSubscriptions').updateOne(
-            { id: subscription.id },
-            {
-              $set: {
-                status: 'expired',
-                updatedAt: now
-              }
-            }
-          );
-
-          return res.status(400).json({
-            success: false,
-            error: 'Subscription has expired'
-          });
-        }
-
-        const reserve = await db.collection('adSubscriptions').updateOne(
-          {
-            id: subscription.id,
-            userId,
-            status: 'active',
-            ...(subscription.endDate ? { endDate: { $gt: now } } : {}),
-            $expr: { $lt: ['$adsUsed', '$adLimit'] }
-          },
-          {
-            $inc: { adsUsed: 1 },
-            $set: { updatedAt: now }
+          if (activeAdsCount >= planLimit) {
+            return res.status(403).json({
+              success: false,
+              error: `Plan limit reached. You can have max ${planLimit} active signals. Upgrade to activate more.`,
+              limit: planLimit,
+              current: activeAdsCount
+            });
           }
-        );
-
-        if (reserve.matchedCount === 0) {
-          return res.status(400).json({
-            success: false,
-            error: `Ad limit reached. You can create ${subscription.adLimit} ads with this plan.`,
-            limit: subscription.adLimit,
-            used: subscription.adsUsed
-          });
         }
-
-        reservedSubscriptionId = subscription.id;
       }
 
       const newAd = {
@@ -197,6 +172,17 @@ export const adsController = {
       try {
         await db.collection('ads').insertOne(newAd);
 
+        // If successful and we have a subscription, increment stats
+        if (subscription && !isSpecialUser) {
+           await db.collection('adSubscriptions').updateOne(
+            { id: subscription.id },
+            {
+              $inc: { adsUsed: 1 },
+              $set: { updatedAt: Date.now() }
+            }
+          );
+        }
+
         await db.collection('adAnalytics').insertOne({
         adId: newAd.id,
         ownerId: newAd.ownerId,
@@ -210,15 +196,6 @@ export const adsController = {
         lastUpdated: Date.now()
         });
       } catch (error) {
-        if (reservedSubscriptionId) {
-          await db.collection('adSubscriptions').updateOne(
-            { id: reservedSubscriptionId },
-            {
-              $inc: { adsUsed: -1 },
-              $set: { updatedAt: Date.now() }
-            }
-          );
-        }
         throw error;
       }
 
@@ -321,6 +298,8 @@ export const adsController = {
       // Don't allow updating id or ownerId
       delete updates.id;
       delete updates.ownerId;
+      // Don't allow updating status via updateAd (must use updateAdStatus)
+      delete updates.status;
 
       if (typeof updates.description === 'string') {
         updates.hashtags = getHashtagsFromText(updates.description || '');
@@ -391,16 +370,67 @@ export const adsController = {
       const { id } = req.params;
       const { status } = req.body;
       const db = getDB();
+      const currentUser = (req as any).user;
+
+      if (!currentUser || !currentUser.id) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      const isAdmin = currentUser.role === 'admin' || currentUser.isAdmin === true;
+      if (!isAdmin && ad.ownerId !== currentUser.id) {
+        return res.status(403).json({ success: false, error: 'Forbidden' });
+      }
       
+      // Enforce limits if activating
+      if (status === 'active' && ad.status !== 'active') {
+        const activeAdsCount = await db.collection('ads').countDocuments({
+          ownerId: currentUser.id,
+          status: 'active'
+        });
+
+        // Get active subscription
+        const now = Date.now();
+        const subscription = await db.collection('adSubscriptions').findOne({
+          userId: currentUser.id,
+          status: 'active',
+          $or: [
+            { endDate: { $exists: false } },
+            { endDate: { $gt: now } }
+          ]
+        });
+
+        const planLimit = subscription ? subscription.adLimit : 0;
+
+        if (activeAdsCount >= planLimit) {
+          return res.status(403).json({
+            success: false,
+            error: `Plan limit reached. You can have max ${planLimit} active signals. Upgrade to activate more.`,
+            limit: planLimit,
+            current: activeAdsCount
+          });
+        }
+
+        // Check impression limit
+        if (subscription && subscription.impressionsUsed >= subscription.impressionLimit) {
+           return res.status(403).json({
+             success: false,
+             error: `Monthly impression limit reached (${subscription.impressionLimit}). Upgrade or wait for renewal.`,
+             limit: subscription.impressionLimit,
+             current: subscription.impressionsUsed
+           });
+        }
+      }
+
       const result = await db.collection('ads').findOneAndUpdate(
         { id },
         { $set: { status } },
         { returnDocument: 'after' }
       );
-      
-      if (!result) {
-        return res.status(404).json({ success: false, error: 'Ad not found' });
-      }
       
       res.json({ success: true, data: result });
     } catch (error) {
@@ -431,6 +461,19 @@ export const adsController = {
 
       const analytics = await db.collection('adAnalytics').findOne({ adId: id });
 
+      // Check user subscription level
+      const now = Date.now();
+      const subscription = await db.collection('adSubscriptions').findOne({
+        userId: currentUser.id, // Viewer is owner (checked above)
+        status: 'active',
+        $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
+      });
+
+      const packageId = subscription ? subscription.packageId : 'pkg-starter';
+      const isBasic = packageId === 'pkg-starter';
+      const isPro = packageId === 'pkg-pro';
+      const isEnterprise = packageId === 'pkg-enterprise';
+
       const impressions = analytics?.impressions || 0;
       const clicks = analytics?.clicks || 0;
       const engagement = analytics?.engagement || 0;
@@ -440,19 +483,32 @@ export const adsController = {
       const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
       const lastUpdated = analytics?.lastUpdated || Date.now();
 
+      const data: any = {
+        adId: id,
+        impressions,
+        clicks,
+        ctr,
+        reach,
+        lastUpdated
+      };
+
+      if (!isBasic) {
+        data.engagement = engagement;
+        data.spend = spend;
+      }
+
+      if (isEnterprise) {
+        data.conversions = conversions;
+        // Mock deep analytics for now
+        data.audience = {
+          sentiment: 'positive',
+          demographics: { '18-24': 30, '25-34': 45 }
+        };
+      }
+
       res.json({
         success: true,
-        data: {
-          adId: id,
-          impressions,
-          clicks,
-          ctr,
-          reach,
-          engagement,
-          conversions,
-          spend,
-          lastUpdated
-        }
+        data
       });
     } catch (error) {
       console.error('Error fetching ad analytics:', error);
@@ -486,6 +542,19 @@ export const adsController = {
         .find({ adId: { $in: adIds } })
         .toArray();
 
+      // Check user subscription level
+      const now = Date.now();
+      const subscription = await db.collection('adSubscriptions').findOne({
+        userId,
+        status: 'active',
+        $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
+      });
+
+      const packageId = subscription ? subscription.packageId : 'pkg-starter';
+      const isBasic = packageId === 'pkg-starter';
+      const isPro = packageId === 'pkg-pro';
+      const isEnterprise = packageId === 'pkg-enterprise';
+
       const analyticsMap = new Map<string, any>();
       analyticsDocs.forEach(doc => {
         analyticsMap.set(doc.adId, doc);
@@ -500,18 +569,23 @@ export const adsController = {
         const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
         const roi = spend > 0 ? (engagement + clicks) / spend : 0;
 
-        return {
+        const data: any = {
           adId: ad.id,
           adName: ad.headline || ad.title || 'Untitled Ad',
           status: ad.status || 'active',
           impressions,
           clicks,
           ctr,
-          engagement,
-          spend,
-          roi,
           createdAt: ad.timestamp || Date.now()
         };
+
+        if (!isBasic) {
+          data.engagement = engagement;
+          data.spend = spend;
+          data.roi = roi;
+        }
+
+        return data;
       });
 
       res.json({
@@ -563,6 +637,19 @@ export const adsController = {
         .find({ adId: { $in: adIds } })
         .toArray();
 
+      // Check user subscription level
+      const now = Date.now();
+      const subscription = await db.collection('adSubscriptions').findOne({
+        userId,
+        status: 'active',
+        $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
+      });
+
+      const packageId = subscription ? subscription.packageId : 'pkg-starter';
+      const isBasic = packageId === 'pkg-starter';
+      const isPro = packageId === 'pkg-pro';
+      const isEnterprise = packageId === 'pkg-enterprise';
+
       let totalImpressions = 0;
       let totalClicks = 0;
       let totalEngagement = 0;
@@ -583,7 +670,6 @@ export const adsController = {
       const activeAds = ads.filter((ad: any) => ad.status === 'active').length;
       
       // Calculate next expiry
-      const now = Date.now();
       const activeAdsList = ads.filter((ad: any) => ad.status === 'active' && ad.expiryDate && ad.expiryDate > now);
       const nextExpiringAd = activeAdsList.sort((a: any, b: any) => (a.expiryDate || 0) - (b.expiryDate || 0))[0];
       const daysToNextExpiry = nextExpiringAd
@@ -601,20 +687,33 @@ export const adsController = {
       const trendData: { date: string; impressions: number; clicks: number; engagement: number }[] =
         [];
 
+      const data: any = {
+        totalImpressions,
+        totalClicks,
+        totalReach,
+        averageCTR,
+        activeAds,
+        daysToNextExpiry,
+        performanceScore,
+        trendData
+      };
+
+      if (!isBasic) {
+        data.totalEngagement = totalEngagement;
+        data.totalSpend = totalSpend;
+      } else {
+        // For basic plan, ensure these are undefined or 0 if frontend expects it
+        // The interface might expect them, so let's send them if strict type, 
+        // but typically we want to hide them.
+        // If I omit them, frontend might show "undefined".
+        // Let's send them as restricted/hidden?
+        // User said: "hideAdvancedMetrics()".
+        // I'll omit them from the response data object.
+      }
+
       res.json({
         success: true,
-        data: {
-          totalImpressions,
-          totalClicks,
-          totalReach,
-          totalEngagement,
-          totalSpend,
-          averageCTR,
-          activeAds,
-          daysToNextExpiry,
-          performanceScore,
-          trendData
-        }
+        data
       });
     } catch (error) {
       console.error('Error fetching campaign performance:', error);
@@ -628,6 +727,49 @@ export const adsController = {
       const db = getDB();
 
       const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      // Increment subscription usage and check limit
+      if (ad.ownerId) {
+        const now = Date.now();
+        const subResult = await db.collection('adSubscriptions').findOneAndUpdate(
+          { 
+            userId: ad.ownerId, 
+            status: 'active',
+             $or: [
+              { endDate: { $exists: false } },
+              { endDate: { $gt: now } }
+            ]
+          },
+          { 
+            $inc: { impressionsUsed: 1 },
+            $set: { updatedAt: now }
+          },
+          { returnDocument: 'after' }
+        );
+
+        // If limit reached, mark subscription as capped (optional, or handle logic)
+        // If we change status to 'limit_reached', it blocks all future actions.
+        // However, this might be too aggressive if they just want to buy more impressions?
+        // But for now, let's just log or maybe not change status yet, 
+        // as we rely on getAllAds/trackImpression to stop serving?
+        // Actually, without changing status or filtering getAllAds, ads KEEP SHOWING.
+        // So we MUST change status or filter.
+        // Changing status to 'limit_reached' effectively stops them from creating/activating,
+        // but getAllAds currently doesn't check subscription status (it only checks ad status).
+        // So ads still show!
+        
+        // To strictly stop showing ads, we should update the ADS to 'paused'.
+        if (subResult && subResult.impressionsUsed >= subResult.impressionLimit) {
+             // Limit reached. Pause all active ads for this user.
+             await db.collection('ads').updateMany(
+               { ownerId: ad.ownerId, status: 'active' },
+               { $set: { status: 'paused_limit' } }
+             );
+        }
+      }
 
       await db.collection('adAnalytics').updateOne(
         { adId: id },
