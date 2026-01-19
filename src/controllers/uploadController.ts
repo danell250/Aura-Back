@@ -15,7 +15,8 @@ const s3Client = new S3Client({
   credentials: {
     accessKeyId: process.env.S3_ACCESS_KEY_ID!,
     secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!
-  }
+  },
+  requestChecksumCalculation: "WHEN_REQUIRED"
 });
 
 const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
@@ -141,8 +142,8 @@ export const uploadFile = async (req: Request, res: Response) => {
       Bucket: s3Bucket,
       Key: objectKey,
       Body: req.file.buffer,
-      ContentType: req.file.mimetype,
-      ACL: 'public-read'
+      ContentType: req.file.mimetype
+      // ACL removed to support buckets with 'Block Public Access' enabled
     });
 
     await s3Client.send(putCommand);

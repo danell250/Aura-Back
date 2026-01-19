@@ -10,7 +10,8 @@ const s3 = new S3Client({
   credentials: { 
     accessKeyId: process.env.S3_ACCESS_KEY_ID!, 
     secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!, 
-  }, 
+  },
+  requestChecksumCalculation: "WHEN_REQUIRED",
 }); 
 
 router.get("/debug/s3", (req, res) => { 
@@ -110,10 +111,11 @@ router.post("/media/upload-url", async (req, res) => {
       Bucket: bucketName, 
       Key: key, 
       ContentType: finalContentType, 
-      // NO ACL
+      // ❌ DO NOT set ChecksumAlgorithm 
+      // ❌ DO NOT set ACL 
     }); 
 
-    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 60 }); 
+    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 }); 
     
     const publicBaseUrl = process.env.S3_PUBLIC_BASE_URL || `https://${bucketName}.s3.${process.env.S3_REGION}.amazonaws.com`;
 

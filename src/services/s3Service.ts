@@ -6,7 +6,8 @@ const s3 = new S3Client({
   credentials: {
     accessKeyId: process.env.S3_ACCESS_KEY_ID!,
     secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!
-  }
+  },
+  requestChecksumCalculation: "WHEN_REQUIRED"
 });
 
 export async function getUploadUrl(params: {
@@ -23,9 +24,11 @@ export async function getUploadUrl(params: {
     Bucket,
     Key: params.key,
     ContentType: params.contentType,
+    // ❌ DO NOT set ChecksumAlgorithm 
+    // ❌ DO NOT set ACL 
   });
 
-  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 60 }); // 60s
+  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 }); // 300s
   const region = process.env.S3_REGION;
   const publicUrl = `https://${Bucket}.s3.${region}.amazonaws.com/${params.key}`;
 
