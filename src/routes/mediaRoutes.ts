@@ -52,7 +52,7 @@ router.post("/media/upload-url", async (req, res) => {
     // --- STRICT VALIDATION START ---
     const ALLOWED_FOLDERS: Record<string, string[]> = {
       avatars: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
-      covers: ['image/jpeg', 'image/png', 'image/webp'],
+      covers: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'],
       posts: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'],
       documents: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
       ads: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'],
