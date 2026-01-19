@@ -56,14 +56,16 @@ export const createNotificationInDB = async (
     name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
     handle: fromUserDoc.handle,
     avatar: fromUserDoc.avatar,
-    avatarKey: fromUserDoc.avatarKey
+    avatarKey: fromUserDoc.avatarKey,
+    avatarType: fromUserDoc.avatarType || 'image'
   } : {
     id: fromUserId,
     firstName: 'User',
     lastName: '',
     name: 'User',
     handle: '@user',
-    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`
+    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`,
+    avatarType: 'image'
   };
 
   const newNotification = {
@@ -140,7 +142,12 @@ export const notificationsController = {
       // Pagination
       const startIndex = (Number(page) - 1) * Number(limit);
       const endIndex = startIndex + Number(limit);
-      const paginatedNotifications = notifications.slice(startIndex, endIndex);
+      const paginatedNotifications = notifications.slice(startIndex, endIndex).map((notification: any) => {
+        if (notification.fromUser) {
+          notification.fromUser = transformUser(notification.fromUser);
+        }
+        return notification;
+      });
       
       res.json({
         success: true,
@@ -188,14 +195,16 @@ export const notificationsController = {
         name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
         handle: fromUserDoc.handle,
         avatar: fromUserDoc.avatar,
-        avatarKey: fromUserDoc.avatarKey
+        avatarKey: fromUserDoc.avatarKey,
+        avatarType: fromUserDoc.avatarType || 'image'
       } : {
         id: fromUserId,
         firstName: 'User',
         lastName: '',
         name: 'User',
         handle: '@user',
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`,
+        avatarType: 'image'
       };
 
       const newNotification = {
