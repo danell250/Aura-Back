@@ -9,6 +9,9 @@ export interface IMessage {
   isRead: boolean;
   messageType: 'text' | 'image' | 'file';
   mediaUrl?: string;
+  mediaKey?: string;
+  mediaMimeType?: string;
+  mediaSize?: number;
   replyTo?: string;
   isEdited: boolean;
   editedAt?: Date;

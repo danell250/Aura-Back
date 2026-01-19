@@ -46,22 +46,63 @@ router.post("/media/upload-url", async (req, res) => {
       HAS_SECRET: !!process.env.S3_SECRET_ACCESS_KEY, 
     });
 
-    const { fileName, fileType, contentType, folder = "avatars", userId } = req.body; 
+    const { fileName, fileType, contentType, folder = "avatars", userId, entityId } = req.body; 
     const finalContentType = fileType || contentType;
+
+    // --- STRICT VALIDATION START ---
+    const ALLOWED_FOLDERS: Record<string, string[]> = {
+      avatars: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+      covers: ['image/jpeg', 'image/png', 'image/webp'],
+      posts: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'],
+      documents: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      ads: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'],
+      chat: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+    };
 
     if (!fileName || !finalContentType || !userId) { 
       return res.status(400).json({ success: false, error: "Missing fields" }); 
-    } 
+    }
+
+    if (!ALLOWED_FOLDERS[folder]) {
+      return res.status(400).json({ 
+        success: false, 
+        error: `Invalid folder '${folder}'. Allowed: ${Object.keys(ALLOWED_FOLDERS).join(', ')}` 
+      });
+    }
+
+    if (!ALLOWED_FOLDERS[folder].includes(finalContentType)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: `Invalid content type '${finalContentType}' for folder '${folder}'. Allowed: ${ALLOWED_FOLDERS[folder].join(', ')}` 
+      });
+    }
+    // --- STRICT VALIDATION END ---
 
     const ext = fileName.includes(".") ? fileName.split(".").pop() : "bin"; 
     const safeExt = String(ext).toLowerCase().replace(/[^a-z0-9]/g, ""); 
     const id = crypto.randomBytes(12).toString("hex"); 
-
-    const key = `${folder}/${userId}/${id}.${safeExt}`; 
     const bucketName = process.env.S3_BUCKET_NAME;
 
     if (!bucketName) {
       throw new Error("Bucket name not configured");
+    }
+
+    let key = "";
+
+    // Special case for user profile media (avatars/covers)
+    if (folder === "avatars" || folder === "covers") {
+      // avatars/{userId}-{uuid}.png
+      key = `${folder}/${userId}-${id}.${safeExt}`;
+    } 
+    // Special case for entity-specific media (posts/ads/documents)
+    else if (entityId) {
+      // posts/{postId}/{uuid}.jpg
+      key = `${folder}/${entityId}/${id}.${safeExt}`;
+    }
+    // Default fallback
+    else {
+      // posts/{userId}/{uuid}.jpg (if no entityId provided)
+      key = `${folder}/${userId}/${id}.${safeExt}`;
     }
 
     const command = new PutObjectCommand({ 

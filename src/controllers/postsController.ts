@@ -580,6 +580,9 @@ export const postsController = {
         content, 
         mediaUrl, 
         mediaType,
+        mediaKey,
+        mediaMimeType,
+        mediaSize,
         mediaItems,
         energy, 
         authorId,
@@ -596,7 +599,8 @@ export const postsController = {
         systemType,
         ownerId,
         createdByUserId,
-        birthdayYear
+        birthdayYear,
+        id // Allow frontend to provide ID (e.g. for S3 key consistency)
       } = req.body;
       
       if (!authorId) {
@@ -678,7 +682,8 @@ export const postsController = {
       const normalizedVisibility = visibility === 'private' || visibility === 'acquaintances' ? visibility : 'public';
       const hashtags = getHashtagsFromText(safeContent);
       const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];
-      const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
+      // Use provided ID if available, otherwise generate one
+      const postId = id || (isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`);
       
       const currentYear = new Date().getFullYear();
 
@@ -690,6 +695,9 @@ export const postsController = {
         content: safeContent,
         mediaUrl: finalMediaUrl || undefined,
         mediaType: finalMediaType || undefined,
+        mediaKey: mediaKey || undefined,
+        mediaMimeType: mediaMimeType || undefined,
+        mediaSize: mediaSize || undefined,
         mediaItems: finalMediaItems || undefined,
         sharedFrom: (req.body as any).sharedFrom || undefined,
         energy: energy || '🪐 Neutral',

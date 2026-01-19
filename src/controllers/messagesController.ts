@@ -160,7 +160,17 @@ export const messagesController = {
   // POST /api/messages - Send a new message
   sendMessage: async (req: Request, res: Response) => {
     try {
-      const { senderId, receiverId, text, messageType = 'text', mediaUrl, replyTo } = req.body;
+      const { 
+        senderId, 
+        receiverId, 
+        text, 
+        messageType = 'text', 
+        mediaUrl, 
+        mediaKey,
+        mediaMimeType,
+        mediaSize,
+        replyTo 
+      } = req.body;
       
       if (!senderId || !receiverId || !text) {
         return res.status(400).json({
@@ -187,6 +197,9 @@ export const messagesController = {
         isRead: false,
         messageType,
         mediaUrl,
+        mediaKey,
+        mediaMimeType,
+        mediaSize,
         replyTo,
         isEdited: false
       };
