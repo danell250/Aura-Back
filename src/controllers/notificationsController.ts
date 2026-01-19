@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { getDB, isDBConnected } from '../db';
+import { transformUser } from '../utils/userUtils';
 
 export const createNotificationInDB = async (
   userId: string,
@@ -54,7 +55,8 @@ export const createNotificationInDB = async (
     lastName: fromUserDoc.lastName || '',
     name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
     handle: fromUserDoc.handle,
-    avatar: fromUserDoc.avatar
+    avatar: fromUserDoc.avatar,
+    avatarKey: fromUserDoc.avatarKey
   } : {
     id: fromUserId,
     firstName: 'User',
@@ -185,7 +187,8 @@ export const notificationsController = {
         lastName: fromUserDoc.lastName || '',
         name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
         handle: fromUserDoc.handle,
-        avatar: fromUserDoc.avatar
+        avatar: fromUserDoc.avatar,
+        avatarKey: fromUserDoc.avatarKey
       } : {
         id: fromUserId,
         firstName: 'User',
@@ -214,6 +217,11 @@ export const notificationsController = {
           $push: { notifications: { $each: [newNotification], $position: 0 } }
         } as any
       );
+
+      // Transform fromUser for response
+      if (newNotification.fromUser) {
+        newNotification.fromUser = transformUser(newNotification.fromUser);
+      }
 
       res.status(201).json({
         success: true,

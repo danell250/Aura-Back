@@ -1,5 +1,6 @@
 import { getDB } from '../db';
 import { User } from '../types';
+import { transformUser } from '../utils/userUtils';
 
 interface TrustBreakdown {
   profileCompleteness: number;

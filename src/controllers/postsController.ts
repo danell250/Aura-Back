@@ -3,6 +3,7 @@ import { getDB, isDBConnected } from '../db';
 import { getHashtagsFromText } from '../utils/hashtagUtils';
 import { createNotificationInDB } from './notificationsController';
 import { uploadToS3 } from '../utils/s3Upload';
+import { transformUser } from '../utils/userUtils';
 
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
@@ -372,8 +373,12 @@ export const postsController = {
       const total = countResult[0]?.total || 0;
 
       // Post-process to add userReactions for the current user
-      if (currentUserId) {
-        data.forEach((post: any) => {
+      const transformedData = data.map((post: any) => {
+        if (post.author) {
+          post.author = transformUser(post.author);
+        }
+        
+        if (currentUserId) {
           if (post.reactionUsers) {
             post.userReactions = Object.keys(post.reactionUsers).filter(emoji => 
               Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId)
@@ -383,12 +388,13 @@ export const postsController = {
           }
           // Optional: Remove reactionUsers from response to save bandwidth/privacy
           // delete post.reactionUsers; 
-        });
-      }
+        }
+        return post;
+      });
 
       res.json({
         success: true,
-        data,
+        data: transformedData,
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -819,6 +825,11 @@ export const postsController = {
       if (!updatedDoc) {
         return res.status(500).json({ success: false, error: 'Failed to update post' });
       }
+
+      if (updatedDoc.author) {
+        updatedDoc.author = transformUser(updatedDoc.author);
+      }
+
       res.json({ success: true, data: updatedDoc, message: 'Post updated successfully' });
     } catch (error) {
       console.error('Error updating post:', error);

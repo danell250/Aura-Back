@@ -11,7 +11,11 @@ const s3Bucket = process.env.S3_BUCKET_NAME || '';
 const s3PublicBaseUrl = process.env.S3_PUBLIC_BASE_URL || '';
 
 const s3Client = new S3Client({
-  region: s3Region
+  region: process.env.S3_REGION,
+  credentials: {
+    accessKeyId: process.env.S3_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!
+  }
 });
 
 const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');

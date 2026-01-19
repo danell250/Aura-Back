@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
 import { User } from '../types';
+import { transformUsers } from '../utils/userUtils';
 
 export const privacyController = {
   // GET /api/privacy/settings/:userId - Get user's privacy settings
@@ -224,11 +225,12 @@ export const privacyController = {
       }
 
       const searchableUsers = await db.collection('users').find(searchQuery).toArray();
+      const transformedUsers = transformUsers(searchableUsers);
 
       res.json({
         success: true,
-        data: searchableUsers,
-        count: searchableUsers.length,
+        data: transformedUsers,
+        count: transformedUsers.length,
         query: q
       });
     } catch (error) {

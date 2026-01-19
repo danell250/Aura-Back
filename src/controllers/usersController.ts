@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import axios from 'axios';
 import { getDB } from '../db';
 import { uploadToS3 } from '../utils/s3Upload';
+import { transformUser, transformUsers } from '../utils/userUtils';
 import { calculateUserTrust, recalculateAllTrustScores, getSerendipityMatchesForUser } from '../services/trustService';
 import { logSecurityEvent } from '../utils/securityLogger';
 
@@ -94,7 +95,7 @@ export const usersController = {
       
       res.json({
         success: true,
-        data: users,
+        data: transformUsers(users),
         count: users.length
       });
     } catch (error) {
@@ -195,7 +196,7 @@ export const usersController = {
       
       res.json({
         success: true,
-        data: user
+        data: transformUser(user)
       });
     } catch (error) {
       console.error('Error fetching user:', error);
@@ -274,7 +275,7 @@ export const usersController = {
 
       res.status(201).json({
         success: true,
-        data: newUser,
+        data: transformUser(newUser),
         message: 'User created successfully'
       });
     } catch (error) {
@@ -337,6 +338,22 @@ export const usersController = {
         delete updateData.handle;
       }
 
+      // Handle avatarKey/coverKey updates.
+      // We save ONLY the key to MongoDB as per requirements.
+      // The avatar/coverImage URLs are constructed on read via transformUser.
+      
+      if (mutableUpdates.avatarKey) {
+        updateData.avatarKey = mutableUpdates.avatarKey;
+        // Ensure we don't save the URL if it was passed in updates or previously existed
+        delete updateData.avatar;
+      }
+      
+      if (mutableUpdates.coverKey) {
+        updateData.coverKey = mutableUpdates.coverKey;
+        // Ensure we don't save the URL if it was passed in updates or previously existed
+        delete updateData.coverImage;
+      }
+
       updateData.updatedAt = new Date().toISOString();
 
       const result = await db.collection('users').updateOne(
@@ -357,7 +374,7 @@ export const usersController = {
 
       res.json({
         success: true,
-        data: updatedUser,
+        data: transformUser(updatedUser),
         message: 'User updated successfully'
       });
     } catch (error) {

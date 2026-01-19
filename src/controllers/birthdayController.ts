@@ -3,6 +3,7 @@ import { getDB } from '../db';
 import { User } from '../types';
 import { createNotificationInDB } from './notificationsController';
 import { generateQuirkyBirthdayWish } from './geminiController';
+import { transformUser } from '../utils/userUtils';
 
 export const birthdayController = {
   async getTodayBirthdays(req: Request, res: Response) {
@@ -169,16 +170,18 @@ export const birthdayController = {
           }
         }
 
+        const transformedPerson = transformUser(person);
+        
         announcements.push({
           id: `bday-${person.id}-${today.getFullYear()}`,
           user: {
-            id: person.id,
-            firstName: person.firstName,
-            lastName: person.lastName,
-            name: person.name,
-            handle: person.handle,
-            avatar: person.avatar,
-            avatarType: person.avatarType
+            id: transformedPerson.id,
+            firstName: transformedPerson.firstName,
+            lastName: transformedPerson.lastName,
+            name: transformedPerson.name,
+            handle: transformedPerson.handle,
+            avatar: transformedPerson.avatar,
+            avatarType: transformedPerson.avatarType
           },
           wish: wishText,
           reactions: {},

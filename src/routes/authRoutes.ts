@@ -12,6 +12,7 @@ import {
   verifyRefreshToken
 } from '../utils/jwtUtils';
 import { logSecurityEvent } from '../utils/securityLogger';
+import { transformUser } from '../utils/userUtils';
 import { User } from '../types';
 
 const router = Router();
@@ -340,7 +341,7 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
     res.json({
       success: true,
       accessToken: newAccessToken,
-      user: user,
+      user: transformUser(user),
       message: 'Token refreshed successfully'
     });
 
@@ -490,7 +491,7 @@ router.get('/user', requireAuth, (req: Request, res: Response) => {
   }
   res.json({
     success: true,
-    user
+    user: transformUser(user)
   });
 });
 
@@ -542,7 +543,7 @@ router.get('/user-info', attachUser, (req: Request, res: Response) => {
   if ((req as any).user) {
     res.json({
       success: true,
-      user: (req as any).user,
+      user: transformUser((req as any).user),
       authenticated: true
     });
   } else {
@@ -560,7 +561,7 @@ router.get('/status', attachUser, (req: Request, res: Response) => {
   res.json({
     success: true,
     authenticated: isAuthenticated,
-    user: isAuthenticated ? (req as any).user : null
+    user: isAuthenticated ? transformUser((req as any).user) : null
   });
 });
 
@@ -681,7 +682,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
 
       res.json({
         success: true,
-        user: user,
+        user: transformUser(user),
         token: accessToken,
         message: 'Login successful'
       });

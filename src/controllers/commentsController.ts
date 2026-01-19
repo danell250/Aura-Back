@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
 import { createNotificationInDB } from './notificationsController';
+import { transformUser } from '../utils/userUtils';
 
 const COMMENTS_COLLECTION = 'comments';
 const USERS_COLLECTION = 'users';
@@ -88,6 +89,7 @@ export const commentsController = {
         name: author.name,
         handle: author.handle,
         avatar: author.avatar,
+        avatarKey: author.avatarKey,
         avatarType: author.avatarType || 'image'
       } : {
         id: authorId,
@@ -206,6 +208,10 @@ export const commentsController = {
         }
       } catch (e) {
         console.error('Error creating comment notification:', e);
+      }
+
+      if (newComment.author) {
+        newComment.author = transformUser(newComment.author);
       }
 
       res.status(201).json({ success: true, data: newComment, message: 'Comment created successfully' });

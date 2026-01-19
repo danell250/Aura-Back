@@ -1,25 +1,49 @@
 import express from "express"; 
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3"; 
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3"; 
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"; 
 import crypto from "crypto"; 
 
 const router = express.Router(); 
 
 const s3 = new S3Client({ 
-  region: process.env.AWS_REGION, 
+  region: process.env.S3_REGION, 
   credentials: { 
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!, 
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!, 
+    accessKeyId: process.env.S3_ACCESS_KEY_ID!, 
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!, 
   }, 
 }); 
+
+router.get("/debug/s3", (req, res) => { 
+  res.json({ 
+    region: process.env.S3_REGION, 
+    bucket: process.env.S3_BUCKET_NAME, 
+    hasKey: !!process.env.S3_ACCESS_KEY_ID, 
+    hasSecret: !!process.env.S3_SECRET_ACCESS_KEY, 
+  }); 
+});
+
+router.get("/media/view-url", async (req, res) => { 
+  const { key } = req.query; 
+
+  if (!key) return res.status(400).json({ error: "Missing key" }); 
+
+  const command = new GetObjectCommand({ 
+    Bucket: process.env.S3_BUCKET_NAME!, 
+    Key: key as string, 
+  }); 
+
+  const url = await getSignedUrl(s3, command, { expiresIn: 600 }); 
+
+  res.json({ url }); 
+});
 
 router.post("/media/upload-url", async (req, res) => { 
   try { 
     console.log("ENV CHECK:", { 
-      AWS_REGION: process.env.AWS_REGION, 
-      AWS_S3_BUCKET: process.env.AWS_S3_BUCKET, 
-      HAS_KEY: !!process.env.AWS_ACCESS_KEY_ID, 
-      HAS_SECRET: !!process.env.AWS_SECRET_ACCESS_KEY, 
+      S3_REGION: process.env.S3_REGION, 
+      S3_BUCKET_NAME: process.env.S3_BUCKET_NAME, 
+      HAS_KEY: !!process.env.S3_ACCESS_KEY_ID, 
+      HAS_SECRET: !!process.env.S3_SECRET_ACCESS_KEY, 
     });
 
     const { fileName, fileType, contentType, folder = "avatars", userId } = req.body; 
@@ -34,7 +58,7 @@ router.post("/media/upload-url", async (req, res) => {
     const id = crypto.randomBytes(12).toString("hex"); 
 
     const key = `${folder}/${userId}/${id}.${safeExt}`; 
-    const bucketName = process.env.AWS_S3_BUCKET || process.env.S3_BUCKET_NAME;
+    const bucketName = process.env.S3_BUCKET_NAME;
 
     if (!bucketName) {
       throw new Error("Bucket name not configured");
@@ -44,13 +68,12 @@ router.post("/media/upload-url", async (req, res) => {
       Bucket: bucketName, 
       Key: key, 
       ContentType: finalContentType, 
-      // Do NOT set ACL when "Bucket owner enforced" (ACLs disabled) 
-      // ACL: "public-read"  <-- REMOVE THIS if you have it! 
+      // NO ACL
     }); 
 
     const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 60 }); 
     
-    const publicBaseUrl = process.env.AWS_S3_PUBLIC_BASE_URL || `https://${bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com`;
+    const publicBaseUrl = process.env.S3_PUBLIC_BASE_URL || `https://${bucketName}.s3.${process.env.S3_REGION}.amazonaws.com`;
 
     return res.json({ 
       success: true, 
