@@ -26,7 +26,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.usersController = void 0;
 const axios_1 = __importDefault(require("axios"));
 const db_1 = require("../db");
-const cloudinary_1 = require("../utils/cloudinary");
+const s3Upload_1 = require("../utils/s3Upload");
 const trustService_1 = require("../services/trustService");
 const securityLogger_1 = require("../utils/securityLogger");
 const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
@@ -378,11 +378,17 @@ exports.usersController = {
             const updates = {};
             const files = req.files;
             if (files === null || files === void 0 ? void 0 : files.profile) {
-                updates.avatar = yield (0, cloudinary_1.uploadImage)(files.profile[0].buffer, `aura/users/${userId}/profile`);
+                const profile = files.profile[0];
+                const ext = profile.originalname.split('.').pop();
+                const path = `${userId}/profile.${ext}`;
+                updates.avatar = yield (0, s3Upload_1.uploadToS3)('avatars', path, profile.buffer, profile.mimetype);
                 updates.avatarType = 'image';
             }
             if (files === null || files === void 0 ? void 0 : files.cover) {
-                updates.coverImage = yield (0, cloudinary_1.uploadImage)(files.cover[0].buffer, `aura/users/${userId}/cover`);
+                const cover = files.cover[0];
+                const ext = cover.originalname.split('.').pop();
+                const path = `${userId}/cover.${ext}`;
+                updates.coverImage = yield (0, s3Upload_1.uploadToS3)('covers', path, cover.buffer, cover.mimetype);
                 updates.coverType = 'image';
             }
             if (Object.keys(updates).length === 0) {

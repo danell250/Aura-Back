@@ -2,6 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { postsController } from '../controllers/postsController';
 import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
+import { upload } from '../middleware/uploadMiddleware';
 import { logSecurityEvent } from '../utils/securityLogger';
 
 const router = Router();
@@ -51,7 +52,7 @@ router.get('/hashtags/trending', postsController.getTrendingHashtags);
 // GET /api/posts/:id - Get post by ID
 router.get('/:id', optionalAuth, postsController.getPostById);
 
-router.post('/', postsWriteRateLimiter, requireAuth, postsController.createPost);
+router.post('/', postsWriteRateLimiter, requireAuth, upload.array('media', 10), postsController.createPost);
 router.put('/:id', postsWriteRateLimiter, requireAuth, postsController.updatePost);
 router.delete('/:id', postsWriteRateLimiter, requireAuth, postsController.deletePost);
 router.post('/:id/react', postsWriteRateLimiter, requireAuth, postsController.reactToPost);

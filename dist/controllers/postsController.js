@@ -13,6 +13,7 @@ exports.postsController = void 0;
 const db_1 = require("../db");
 const hashtagUtils_1 = require("../utils/hashtagUtils");
 const notificationsController_1 = require("./notificationsController");
+const s3Upload_1 = require("../utils/s3Upload");
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const postSseClients = [];
@@ -521,8 +522,38 @@ exports.postsController = {
             if (!authorId) {
                 return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
             }
+            // Handle media uploads
+            const files = req.files;
+            const uploadedMediaItems = [];
+            if (files && files.length > 0) {
+                for (const file of files) {
+                    const sanitize = (name) => name.replace(/[^a-zA-Z0-9.-]/g, '_');
+                    const path = `${authorId}/${Date.now()}-${sanitize(file.originalname)}`;
+                    const url = yield (0, s3Upload_1.uploadToS3)('media', path, file.buffer, file.mimetype);
+                    const type = file.mimetype.startsWith('video/') ? 'video' : 'image';
+                    uploadedMediaItems.push({ url, type });
+                }
+            }
+            // Merge uploaded items with existing items
+            let parsedMediaItems = mediaItems;
+            if (typeof mediaItems === 'string') {
+                try {
+                    parsedMediaItems = JSON.parse(mediaItems);
+                }
+                catch (e) {
+                    parsedMediaItems = [];
+                }
+            }
+            const finalMediaItems = [...(parsedMediaItems || []), ...uploadedMediaItems];
+            // Determine primary mediaUrl/Type if not set
+            let finalMediaUrl = mediaUrl;
+            let finalMediaType = mediaType;
+            if (uploadedMediaItems.length > 0 && !finalMediaUrl) {
+                finalMediaUrl = uploadedMediaItems[0].url;
+                finalMediaType = uploadedMediaItems[0].type;
+            }
             const hasText = typeof content === 'string' && content.trim().length > 0;
-            const hasMedia = !!mediaUrl || (Array.isArray(mediaItems) && mediaItems.length > 0);
+            const hasMedia = !!finalMediaUrl || (Array.isArray(finalMediaItems) && finalMediaItems.length > 0);
             if (!hasText && !hasMedia) {
                 return res.status(400).json({ success: false, error: 'Missing content or media', message: 'A post must include text or at least one media item' });
             }
@@ -554,7 +585,7 @@ exports.postsController = {
             const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
             const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
             const currentYear = new Date().getFullYear();
-            const newPost = Object.assign(Object.assign(Object.assign({ id: postId, author: authorEmbed, authorId: authorEmbed.id, ownerId: ownerId || authorEmbed.id, content: safeContent, mediaUrl: mediaUrl || undefined, mediaType: mediaType || undefined, mediaItems: mediaItems || undefined, sharedFrom: req.body.sharedFrom || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), visibility: normalizedVisibility, reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
+            const newPost = Object.assign(Object.assign(Object.assign({ id: postId, author: authorEmbed, authorId: authorEmbed.id, ownerId: ownerId || authorEmbed.id, content: safeContent, mediaUrl: finalMediaUrl || undefined, mediaType: finalMediaType || undefined, mediaItems: finalMediaItems || undefined, sharedFrom: req.body.sharedFrom || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), visibility: normalizedVisibility, reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
                 isTimeCapsule: true,
                 unlockDate: unlockDate || null,
                 isUnlocked: unlockDate ? Date.now() >= unlockDate : true,

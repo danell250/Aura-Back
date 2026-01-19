@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { getDB, isDBConnected } from '../db';
 import { getHashtagsFromText } from '../utils/hashtagUtils';
 import { createNotificationInDB } from './notificationsController';
+import { uploadToS3 } from '../utils/s3Upload';
 
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
@@ -593,8 +594,51 @@ export const postsController = {
       if (!authorId) {
         return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
       }
+
+      // Handle media uploads
+      const files = req.files as Express.Multer.File[];
+      const uploadedMediaItems: { url: string; type: 'image' | 'video' }[] = [];
+
+      if (files && files.length > 0) {
+        for (const file of files) {
+          const sanitize = (name: string) => name.replace(/[^a-zA-Z0-9.-]/g, '_');
+            const path = `${authorId}/${Date.now()}-${sanitize(file.originalname)}`;
+            
+            const url = await uploadToS3(
+              'media',
+              path,
+              file.buffer,
+              file.mimetype
+            );
+        
+            const type = file.mimetype.startsWith('video/') ? 'video' : 'image';
+          uploadedMediaItems.push({ url, type });
+        }
+      }
+
+      // Merge uploaded items with existing items
+      let parsedMediaItems = mediaItems;
+      if (typeof mediaItems === 'string') {
+        try {
+          parsedMediaItems = JSON.parse(mediaItems);
+        } catch (e) {
+          parsedMediaItems = [];
+        }
+      }
+
+      const finalMediaItems = [...(parsedMediaItems || []), ...uploadedMediaItems];
+      
+      // Determine primary mediaUrl/Type if not set
+      let finalMediaUrl = mediaUrl;
+      let finalMediaType = mediaType;
+      
+      if (uploadedMediaItems.length > 0 && !finalMediaUrl) {
+        finalMediaUrl = uploadedMediaItems[0].url;
+        finalMediaType = uploadedMediaItems[0].type;
+      }
+
       const hasText = typeof content === 'string' && content.trim().length > 0;
-      const hasMedia = !!mediaUrl || (Array.isArray(mediaItems) && mediaItems.length > 0);
+      const hasMedia = !!finalMediaUrl || (Array.isArray(finalMediaItems) && finalMediaItems.length > 0);
       if (!hasText && !hasMedia) {
         return res.status(400).json({ success: false, error: 'Missing content or media', message: 'A post must include text or at least one media item' });
       }
@@ -636,9 +680,9 @@ export const postsController = {
         authorId: authorEmbed.id,
         ownerId: ownerId || authorEmbed.id,
         content: safeContent,
-        mediaUrl: mediaUrl || undefined,
-        mediaType: mediaType || undefined,
-        mediaItems: mediaItems || undefined,
+        mediaUrl: finalMediaUrl || undefined,
+        mediaType: finalMediaType || undefined,
+        mediaItems: finalMediaItems || undefined,
         sharedFrom: (req.body as any).sharedFrom || undefined,
         energy: energy || '🪐 Neutral',
         radiance: 0,

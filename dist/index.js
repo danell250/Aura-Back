@@ -67,6 +67,7 @@ const adSubscriptionsRoutes_1 = __importDefault(require("./routes/adSubscription
 const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const privacyRoutes_1 = __importDefault(require("./routes/privacyRoutes"));
 const shareRoutes_1 = __importDefault(require("./routes/shareRoutes"));
+const mediaRoutes_1 = __importDefault(require("./routes/mediaRoutes"));
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -363,6 +364,7 @@ app.use('/api/notifications', notificationsRoutes_1.default);
 app.use('/api/messages', messagesRoutes_1.default);
 app.use('/api/subscriptions', subscriptionsRoutes_1.default);
 app.use('/api/ad-subscriptions', adSubscriptionsRoutes_1.default);
+app.use('/api', mediaRoutes_1.default);
 app.get('/payment-success', (req, res) => {
     const pkg = typeof req.query.pkg === 'string' ? req.query.pkg : undefined;
     const pkgParam = pkg ? `&pkg=${encodeURIComponent(pkg)}` : '';

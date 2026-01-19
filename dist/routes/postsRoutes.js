@@ -7,6 +7,7 @@ const express_1 = require("express");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const postsController_1 = require("../controllers/postsController");
 const authMiddleware_1 = require("../middleware/authMiddleware");
+const uploadMiddleware_1 = require("../middleware/uploadMiddleware");
 const securityLogger_1 = require("../utils/securityLogger");
 const router = (0, express_1.Router)();
 const postsWriteRateLimiter = (0, express_rate_limit_1.default)({
@@ -45,7 +46,7 @@ router.get('/stream', authMiddleware_1.optionalAuth, postsController_1.postsCont
 router.get('/hashtags/trending', postsController_1.postsController.getTrendingHashtags);
 // GET /api/posts/:id - Get post by ID
 router.get('/:id', authMiddleware_1.optionalAuth, postsController_1.postsController.getPostById);
-router.post('/', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.createPost);
+router.post('/', postsWriteRateLimiter, authMiddleware_1.requireAuth, uploadMiddleware_1.upload.array('media', 10), postsController_1.postsController.createPost);
 router.put('/:id', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.updatePost);
 router.delete('/:id', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.deletePost);
 router.post('/:id/react', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.reactToPost);

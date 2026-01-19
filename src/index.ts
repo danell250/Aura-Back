@@ -20,6 +20,7 @@ import adSubscriptionsRoutes from './routes/adSubscriptionsRoutes';
 import authRoutes from './routes/authRoutes';
 import privacyRoutes from './routes/privacyRoutes';
 import shareRoutes from './routes/shareRoutes';
+import mediaRoutes from './routes/mediaRoutes';
 import { attachUser } from './middleware/authMiddleware';
 import path from 'path';
 import fs from 'fs';
@@ -348,6 +349,7 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
 app.use('/api/ad-subscriptions', adSubscriptionsRoutes);
+app.use('/api', mediaRoutes);
 
 app.get('/payment-success', (req, res) => {
   const pkg = typeof req.query.pkg === 'string' ? req.query.pkg : undefined;

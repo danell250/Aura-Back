@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import axios from 'axios';
 import { getDB } from '../db';
-import { uploadImage } from '../utils/cloudinary';
+import { uploadToS3 } from '../utils/s3Upload';
 import { calculateUserTrust, recalculateAllTrustScores, getSerendipityMatchesForUser } from '../services/trustService';
 import { logSecurityEvent } from '../utils/securityLogger';
 
@@ -414,17 +414,27 @@ export const usersController = {
       const files = req.files as { [fieldname: string]: Express.Multer.File[] };
 
       if (files?.profile) {
-        updates.avatar = await uploadImage(
-          files.profile[0].buffer,
-          `aura/users/${userId}/profile`
+        const profile = files.profile[0];
+        const ext = profile.originalname.split('.').pop();
+        const path = `${userId}/profile.${ext}`;
+        updates.avatar = await uploadToS3(
+          'avatars',
+          path,
+          profile.buffer,
+          profile.mimetype
         );
         updates.avatarType = 'image';
       }
 
       if (files?.cover) {
-        updates.coverImage = await uploadImage(
-          files.cover[0].buffer,
-          `aura/users/${userId}/cover`
+        const cover = files.cover[0];
+        const ext = cover.originalname.split('.').pop();
+        const path = `${userId}/cover.${ext}`;
+        updates.coverImage = await uploadToS3(
+          'covers',
+          path,
+          cover.buffer,
+          cover.mimetype
         );
         updates.coverType = 'image';
       }
