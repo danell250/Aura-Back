@@ -117,7 +117,7 @@ export const birthdayController = {
               lastName: 'Support',
               name: 'Aura Support',
               handle: '@aurasupport',
-              avatar: '/og-image.svg',
+              avatar: '/og-image.jpg',
               avatarType: 'image',
               activeGlow: 'emerald'
             },
