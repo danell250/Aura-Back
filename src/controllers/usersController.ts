@@ -434,6 +434,7 @@ export const usersController = {
         const profile = files.profile[0];
         const ext = profile.originalname.split('.').pop();
         const path = `${userId}/profile.${ext}`;
+        const fullKey = `avatars/${path}`;
         updates.avatar = await uploadToS3(
           'avatars',
           path,
@@ -441,12 +442,14 @@ export const usersController = {
           profile.mimetype
         );
         updates.avatarType = 'image';
+        updates.avatarKey = fullKey;
       }
 
       if (files?.cover) {
         const cover = files.cover[0];
         const ext = cover.originalname.split('.').pop();
         const path = `${userId}/cover.${ext}`;
+        const fullKey = `covers/${path}`;
         updates.coverImage = await uploadToS3(
           'covers',
           path,
@@ -454,6 +457,7 @@ export const usersController = {
           cover.mimetype
         );
         updates.coverType = 'image';
+        updates.coverKey = fullKey;
       }
 
       if (Object.keys(updates).length === 0) {
@@ -465,6 +469,55 @@ export const usersController = {
         { id: userId },
         { $set: { ...updates, updatedAt: new Date().toISOString() } }
       );
+
+      // Propagate avatar changes to related collections (Posts, Comments, Notifications)
+      if (updates.avatar) {
+        try {
+          // 1. Update Posts
+          await db.collection('posts').updateMany(
+            { "author.id": userId },
+            { 
+              $set: { 
+                "author.avatar": updates.avatar,
+                "author.avatarType": updates.avatarType,
+                "author.avatarKey": updates.avatarKey
+              } 
+            }
+          );
+
+          // 2. Update Comments
+          await db.collection('comments').updateMany(
+            { "author.id": userId },
+            { 
+              $set: { 
+                "author.avatar": updates.avatar,
+                "author.avatarType": updates.avatarType,
+                "author.avatarKey": updates.avatarKey
+              } 
+            }
+          );
+
+          // 3. Update Notifications (in all users who have notifications from this user)
+          await db.collection('users').updateMany(
+            { "notifications.fromUser.id": userId },
+            { 
+              $set: { 
+                "notifications.$[elem].fromUser.avatar": updates.avatar,
+                "notifications.$[elem].fromUser.avatarType": updates.avatarType,
+                "notifications.$[elem].fromUser.avatarKey": updates.avatarKey
+              } 
+            },
+            {
+              arrayFilters: [{ "elem.fromUser.id": userId }]
+            }
+          );
+          
+          console.log(`Propagated avatar update for user ${userId} to posts, comments, and notifications.`);
+        } catch (propError) {
+          console.error('Error propagating avatar updates:', propError);
+          // Don't fail the request, just log the error
+        }
+      }
 
       const updatedUser = await db.collection('users').findOne({ id: userId });
 

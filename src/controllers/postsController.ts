@@ -665,6 +665,7 @@ export const postsController = {
         name: author.name,
         handle: author.handle,
         avatar: author.avatar,
+        avatarKey: author.avatarKey,
         avatarType: author.avatarType || 'image',
         activeGlow: author.activeGlow
       } : {

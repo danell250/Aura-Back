@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { getMessagesCollection, IMessage } from '../models/Message';
 import { ObjectId } from 'mongodb';
 import { getDB, isDBConnected } from '../db';
+import { transformUser } from '../utils/userUtils';
 
 export const messagesController = {
   // GET /api/messages/conversations - Get all conversations for a user
@@ -71,6 +72,20 @@ export const messagesController = {
           }
         },
         {
+          $lookup: {
+            from: 'users',
+            localField: '_id',
+            foreignField: 'id',
+            as: 'otherUser'
+          }
+        },
+        {
+          $unwind: {
+            path: '$otherUser',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
           $sort: { 'lastMessage.timestamp': -1 }
         }
       ]).toArray();
@@ -78,10 +93,14 @@ export const messagesController = {
       const user = await db.collection('users').findOne({ id: userId });
       const archivedChats: string[] = (user?.archivedChats as string[]) || [];
 
-      const conversationsWithArchive = conversations.map(conv => ({
-        ...conv,
-        isArchived: archivedChats.includes(conv._id as string),
-      }));
+      const conversationsWithArchive = conversations.map(conv => {
+        const otherUser = conv.otherUser ? transformUser(conv.otherUser) : null;
+        return {
+          ...conv,
+          otherUser,
+          isArchived: archivedChats.includes(conv._id as string),
+        };
+      });
 
       res.json({
         success: true,
