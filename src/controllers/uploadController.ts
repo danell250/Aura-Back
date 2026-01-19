@@ -19,7 +19,7 @@ const s3Client = new S3Client({
   requestChecksumCalculation: "WHEN_REQUIRED"
 });
 
-const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
+const uploadsDir = path.join(process.cwd(), 'uploads');
 
 const hasCloudinaryConfig =
   !!process.env.CLOUDINARY_NAME &&
@@ -103,6 +103,12 @@ export const uploadFile = async (req: Request, res: Response) => {
   const objectKey = `uploads/${filename}`;
 
   if (!s3Bucket) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error("S3_BUCKET_NAME is not configured");
+      return res.status(500).json({ error: 'S3_BUCKET_NAME not configured' });
+    }
+    
+    // Local fallback for dev only
     try {
       if (!fs.existsSync(uploadsDir)) {
         fs.mkdirSync(uploadsDir, { recursive: true });
@@ -173,38 +179,6 @@ export const uploadFile = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Failed to upload file to storage bucket:', error);
-
-    try {
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-      }
-
-      const filePath = path.join(uploadsDir, filename);
-      fs.writeFileSync(filePath, req.file.buffer);
-
-      const urlFromBase = `/uploads/${filename}`;
-
-      const db = getDB();
-      await db.collection('mediaFiles').insertOne({
-        storageProvider: 'local',
-        path: filePath,
-        filename: objectKey,
-        originalName: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size,
-        url: urlFromBase,
-        scanStatus: 'not_enabled',
-        uploadedAt: new Date().toISOString()
-      });
-
-      return res.json({
-        url: urlFromBase,
-        filename: objectKey,
-        mimetype: req.file.mimetype
-      });
-    } catch (localError) {
-      console.error('Failed to store file locally after storage bucket failure:', localError);
-      return res.status(500).json({ error: 'Failed to upload file' });
-    }
+    return res.status(500).json({ error: 'Failed to upload file to S3', details: (error as any).message });
   }
 };
