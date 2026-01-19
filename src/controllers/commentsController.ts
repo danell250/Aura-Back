@@ -28,6 +28,12 @@ export const commentsController = {
         .toArray();
 
       // Post-process to add userReactions for the current user
+      data.forEach((comment: any) => {
+        if (comment.author) {
+          comment.author = transformUser(comment.author);
+        }
+      });
+
       if (currentUserId) {
         data.forEach((comment: any) => {
           if (comment.reactionUsers) {
@@ -328,6 +334,11 @@ export const commentsController = {
         return res.status(500).json({ success: false, error: 'Failed to update reaction' });
       }
       const updatedComment = updatedCommentDoc as any;
+      
+      if (updatedComment.author) {
+        updatedComment.author = transformUser(updatedComment.author);
+      }
+
       if (updatedComment.reactionUsers) {
         updatedComment.userReactions = Object.keys(updatedComment.reactionUsers).filter(emoji => 
           Array.isArray(updatedComment.reactionUsers[emoji]) && updatedComment.reactionUsers[emoji].includes(userId)

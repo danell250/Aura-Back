@@ -207,8 +207,15 @@ export const postsController = {
       ];
 
       const posts = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
+      
+      const transformedPosts = posts.map((post: any) => {
+        if (post.author) {
+          post.author = transformUser(post.author);
+        }
+        return post;
+      });
 
-      res.json({ success: true, data: posts });
+      res.json({ success: true, data: transformedPosts });
     } catch (error) {
       console.error('Error searching posts:', error);
       res.status(500).json({ success: false, error: 'Failed to search posts', message: 'Internal server error' });
@@ -502,6 +509,10 @@ export const postsController = {
       delete post.authorDetails;
 
       // Post-process to add userReactions for the current user
+      if (post.author) {
+        post.author = transformUser(post.author);
+      }
+
       if (currentUserId) {
         if (post.reactionUsers) {
           post.userReactions = Object.keys(post.reactionUsers).filter(emoji => 
