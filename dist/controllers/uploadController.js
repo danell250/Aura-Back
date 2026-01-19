@@ -18,6 +18,7 @@ const db_1 = require("../db");
 const uuid_1 = require("uuid");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const cloudinary_1 = require("cloudinary");
 const s3Region = process.env.S3_REGION || 'us-east-1';
 const s3Bucket = process.env.S3_BUCKET_NAME || '';
 const s3PublicBaseUrl = process.env.S3_PUBLIC_BASE_URL || '';
@@ -25,6 +26,27 @@ const s3Client = new client_s3_1.S3Client({
     region: s3Region
 });
 const uploadsDir = path_1.default.resolve(__dirname, '..', '..', 'uploads');
+const hasCloudinaryConfig = !!process.env.CLOUDINARY_NAME &&
+    !!process.env.CLOUDINARY_KEY &&
+    !!process.env.CLOUDINARY_SECRET;
+if (hasCloudinaryConfig) {
+    cloudinary_1.v2.config({
+        cloud_name: process.env.CLOUDINARY_NAME,
+        api_key: process.env.CLOUDINARY_KEY,
+        api_secret: process.env.CLOUDINARY_SECRET
+    });
+}
+const uploadImageToCloudinary = (buffer, folder) => __awaiter(void 0, void 0, void 0, function* () {
+    return new Promise((resolve, reject) => {
+        const stream = cloudinary_1.v2.uploader.upload_stream({ folder }, (error, result) => {
+            if (error || !result) {
+                return reject(error || new Error('Cloudinary upload failed'));
+            }
+            resolve(result.secure_url);
+        });
+        stream.end(buffer);
+    });
+});
 const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     if (!req.file) {
         res.status(400).json({ error: 'No file uploaded' });
@@ -37,6 +59,33 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
         req.file.mimetype === 'application/pdf';
     if (!isAllowedType) {
         return res.status(400).json({ error: 'Invalid file type' });
+    }
+    const isImage = req.file.mimetype.startsWith('image/');
+    if (hasCloudinaryConfig && isImage) {
+        try {
+            const folder = process.env.CLOUDINARY_FOLDER || 'aura-uploads';
+            const secureUrl = yield uploadImageToCloudinary(req.file.buffer, folder);
+            const db = (0, db_1.getDB)();
+            yield db.collection('mediaFiles').insertOne({
+                storageProvider: 'cloudinary',
+                folder,
+                publicUrl: secureUrl,
+                originalName: req.file.originalname,
+                mimetype: req.file.mimetype,
+                size: req.file.size,
+                url: secureUrl,
+                scanStatus: 'not_enabled',
+                uploadedAt: new Date().toISOString()
+            });
+            return res.json({
+                url: secureUrl,
+                filename: secureUrl,
+                mimetype: req.file.mimetype
+            });
+        }
+        catch (error) {
+            console.error('Failed to upload image to Cloudinary, falling back to bucket/local:', error);
+        }
     }
     const fileExtension = req.file.originalname.includes('.')
         ? req.file.originalname.substring(req.file.originalname.lastIndexOf('.'))

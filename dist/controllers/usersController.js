@@ -26,6 +26,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.usersController = void 0;
 const axios_1 = __importDefault(require("axios"));
 const db_1 = require("../db");
+const cloudinary_1 = require("../utils/cloudinary");
 const trustService_1 = require("../services/trustService");
 const securityLogger_1 = require("../utils/securityLogger");
 const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
@@ -365,6 +366,36 @@ exports.usersController = {
                 error: 'Failed to delete user',
                 message: 'Internal server error'
             });
+        }
+    }),
+    uploadProfileImages: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const user = req.user;
+            if (!user || !user.id) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
+            const userId = user.id;
+            const updates = {};
+            const files = req.files;
+            if (files === null || files === void 0 ? void 0 : files.profile) {
+                updates.avatar = yield (0, cloudinary_1.uploadImage)(files.profile[0].buffer, `aura/users/${userId}/profile`);
+                updates.avatarType = 'image';
+            }
+            if (files === null || files === void 0 ? void 0 : files.cover) {
+                updates.coverImage = yield (0, cloudinary_1.uploadImage)(files.cover[0].buffer, `aura/users/${userId}/cover`);
+                updates.coverType = 'image';
+            }
+            if (Object.keys(updates).length === 0) {
+                return res.json({ success: true, message: 'No images to upload' });
+            }
+            const db = (0, db_1.getDB)();
+            yield db.collection('users').updateOne({ id: userId }, { $set: Object.assign(Object.assign({}, updates), { updatedAt: new Date().toISOString() }) });
+            const updatedUser = yield db.collection('users').findOne({ id: userId });
+            res.json({ success: true, user: updatedUser });
+        }
+        catch (e) {
+            console.error('Upload failed:', e);
+            res.status(500).json({ success: false, error: 'Upload failed' });
         }
     }),
     // POST /api/users/:id/remove-acquaintance - Remove an acquaintance

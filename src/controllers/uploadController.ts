@@ -4,6 +4,7 @@ import { getDB } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
+import { v2 as cloudinary } from 'cloudinary';
 
 const s3Region = process.env.S3_REGION || 'us-east-1';
 const s3Bucket = process.env.S3_BUCKET_NAME || '';
@@ -14,6 +15,34 @@ const s3Client = new S3Client({
 });
 
 const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
+
+const hasCloudinaryConfig =
+  !!process.env.CLOUDINARY_NAME &&
+  !!process.env.CLOUDINARY_KEY &&
+  !!process.env.CLOUDINARY_SECRET;
+
+if (hasCloudinaryConfig) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_NAME,
+    api_key: process.env.CLOUDINARY_KEY,
+    api_secret: process.env.CLOUDINARY_SECRET
+  });
+}
+
+const uploadImageToCloudinary = async (buffer: Buffer, folder: string): Promise<string> => {
+  return new Promise<string>((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder },
+      (error, result) => {
+        if (error || !result) {
+          return reject(error || new Error('Cloudinary upload failed'));
+        }
+        resolve(result.secure_url);
+      }
+    );
+    stream.end(buffer);
+  });
+};
 
 export const uploadFile = async (req: Request, res: Response) => {
   if (!req.file) {
@@ -30,6 +59,36 @@ export const uploadFile = async (req: Request, res: Response) => {
 
   if (!isAllowedType) {
     return res.status(400).json({ error: 'Invalid file type' });
+  }
+
+  const isImage = req.file.mimetype.startsWith('image/');
+
+  if (hasCloudinaryConfig && isImage) {
+    try {
+      const folder = process.env.CLOUDINARY_FOLDER || 'aura-uploads';
+      const secureUrl = await uploadImageToCloudinary(req.file.buffer, folder);
+
+      const db = getDB();
+      await db.collection('mediaFiles').insertOne({
+        storageProvider: 'cloudinary',
+        folder,
+        publicUrl: secureUrl,
+        originalName: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        url: secureUrl,
+        scanStatus: 'not_enabled',
+        uploadedAt: new Date().toISOString()
+      });
+
+      return res.json({
+        url: secureUrl,
+        filename: secureUrl,
+        mimetype: req.file.mimetype
+      });
+    } catch (error) {
+      console.error('Failed to upload image to Cloudinary, falling back to bucket/local:', error);
+    }
   }
 
   const fileExtension = req.file.originalname.includes('.')

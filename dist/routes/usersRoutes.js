@@ -2,12 +2,19 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const usersController_1 = require("../controllers/usersController");
+const authMiddleware_1 = require("../middleware/authMiddleware");
+const uploadMiddleware_1 = require("../middleware/uploadMiddleware");
 const router = (0, express_1.Router)();
 console.log('Users routes loaded successfully');
 // GET /api/users - Get all users (public)
 router.get('/', usersController_1.usersController.getAllUsers);
 // GET /api/users/search - Search users (public)
 router.get('/search', usersController_1.usersController.searchUsers);
+// POST /api/users/me/images - Upload profile/cover images
+router.post('/me/images', authMiddleware_1.requireAuth, uploadMiddleware_1.upload.fields([
+    { name: 'profile', maxCount: 1 },
+    { name: 'cover', maxCount: 1 }
+]), usersController_1.usersController.uploadProfileImages);
 // POST /api/users - Create new user (public for registration)
 router.post('/', usersController_1.usersController.createUser);
 // Test route to verify routing works

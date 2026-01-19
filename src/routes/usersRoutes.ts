@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { usersController } from '../controllers/usersController';
+import { requireAuth } from '../middleware/authMiddleware';
+import { upload } from '../middleware/uploadMiddleware';
 
 const router = Router();
 
@@ -10,6 +12,17 @@ router.get('/', usersController.getAllUsers);
 
 // GET /api/users/search - Search users (public)
 router.get('/search', usersController.searchUsers);
+
+// POST /api/users/me/images - Upload profile/cover images
+router.post(
+  '/me/images',
+  requireAuth,
+  upload.fields([
+    { name: 'profile', maxCount: 1 },
+    { name: 'cover', maxCount: 1 }
+  ]),
+  usersController.uploadProfileImages
+);
 
 // POST /api/users - Create new user (public for registration)
 router.post('/', usersController.createUser);

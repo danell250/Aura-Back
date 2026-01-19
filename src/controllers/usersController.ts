@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import axios from 'axios';
 import { getDB } from '../db';
+import { uploadImage } from '../utils/cloudinary';
 import { calculateUserTrust, recalculateAllTrustScores, getSerendipityMatchesForUser } from '../services/trustService';
 import { logSecurityEvent } from '../utils/securityLogger';
 
@@ -400,6 +401,52 @@ export const usersController = {
   },
 
  
+
+  uploadProfileImages: async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      if (!user || !user.id) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const userId = user.id;
+      const updates: any = {};
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+
+      if (files?.profile) {
+        updates.avatar = await uploadImage(
+          files.profile[0].buffer,
+          `aura/users/${userId}/profile`
+        );
+        updates.avatarType = 'image';
+      }
+
+      if (files?.cover) {
+        updates.coverImage = await uploadImage(
+          files.cover[0].buffer,
+          `aura/users/${userId}/cover`
+        );
+        updates.coverType = 'image';
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.json({ success: true, message: 'No images to upload' });
+      }
+
+      const db = getDB();
+      await db.collection('users').updateOne(
+        { id: userId },
+        { $set: { ...updates, updatedAt: new Date().toISOString() } }
+      );
+
+      const updatedUser = await db.collection('users').findOne({ id: userId });
+
+      res.json({ success: true, user: updatedUser });
+    } catch (e) {
+      console.error('Upload failed:', e);
+      res.status(500).json({ success: false, error: 'Upload failed' });
+    }
+  },
 
   // POST /api/users/:id/remove-acquaintance - Remove an acquaintance
   removeAcquaintance: async (req: Request, res: Response) => {
