@@ -1021,32 +1021,27 @@ export const postsController = {
       const responseData: any = {
         totals: {
           totalPosts: agg?.totalPosts ?? 0,
-          totalViews: agg?.totalViews ?? 0
+          totalViews: agg?.totalViews ?? 0,
+          boostedPosts: agg?.boostedPosts ?? 0,
+          totalRadiance: agg?.totalRadiance ?? 0
+        },
+        credits: {
+          balance: user?.auraCredits ?? 0,
+          spent: user?.auraCreditsSpent ?? 0
         },
         topPosts: topPosts.map((p: any) => ({
           id: p.id,
           preview: (p.content || '').slice(0, 120),
           views: p.viewCount ?? 0,
-          timestamp: p.timestamp
+          timestamp: p.timestamp,
+          isBoosted: !!p.isBoosted,
+          radiance: p.radiance ?? 0
         }))
       };
 
       // Apply gating based on plan
       if (analyticsLevel === 'creator' || analyticsLevel === 'deep') {
-        // Add Creator level stats
-        responseData.totals.boostedPosts = agg?.boostedPosts ?? 0;
-        responseData.totals.totalRadiance = agg?.totalRadiance ?? 0;
-        responseData.credits = {
-          balance: user?.auraCredits ?? 0,
-          spent: user?.auraCreditsSpent ?? 0
-        };
-        
-        // Enhance top posts with boost info
-        responseData.topPosts = responseData.topPosts.map((p: any, index: number) => ({
-          ...p,
-          isBoosted: !!topPosts[index].isBoosted,
-          radiance: topPosts[index].radiance ?? 0
-        }));
+        // Additional Creator level stats can be added here in the future
       }
 
       if (analyticsLevel === 'deep') {
