@@ -5,6 +5,7 @@ import { createNotificationInDB } from './notificationsController';
 import { uploadToS3 } from '../utils/s3Upload';
 import { transformUser } from '../utils/userUtils';
 import { AD_PLANS } from '../constants/adPlans';
+import { MediaItem, MediaItemMetrics } from '../types';
 
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
