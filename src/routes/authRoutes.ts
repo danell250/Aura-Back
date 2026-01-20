@@ -861,7 +861,6 @@ router.post('/register', async (req: Request, res: Response) => {
       name: `${firstName.trim()} ${lastName.trim()}`,
       email: normalizedEmail,
       phone: phone?.trim() || '',
-      dob: dob || '',
       handle: finalHandle,
       bio: 'New to Aura',
       industry: 'Other',

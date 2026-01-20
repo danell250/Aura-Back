@@ -251,7 +251,6 @@ export const usersController = {
         avatarType: userData.avatarType || 'image',
         email: userData.email,
         bio: userData.bio || '',
-        dob: userData.dob || '',
         phone: userData.phone || '',
         country: userData.country || '',
         industry: userData.industry || '',

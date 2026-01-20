@@ -19,13 +19,6 @@ const fallbackResponses = {
     "Beautifully said! 💫",
     "This resonates! 🎵"
   ],
-  birthdays: [
-    "{name}, your frequency is undeniable! Stay weird! 🌀🎸🎂",
-    "Universal sync complete: {name} is officially one orbit older! 🚀✨🎂",
-    "{name}, another rotation around the sun completed! Your aura shines bright! 🌟🎉🎂",
-    "Neural network confirms: {name} has leveled up! Congrats! 🎮🏆🎂",
-    "{name}, your energy levels are at maximum! Keep shining! ⚡💫🎂"
-  ],
   analysis: [
     "Your aura radiates creativity and authenticity. Digital Frequency: Creative, Authentic, Inspiring.",
     "You resonate with wisdom and compassion. Digital Frequency: Wise, Compassionate, Thoughtful.",
@@ -90,25 +83,6 @@ export const suggestReply = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Reply Error:", error);
     res.status(500).json({ error: "Beautifully said." });
-  }
-};
-
-export const generateQuirkyBirthdayWish = async (req: Request, res: Response) => {
-  const { name, bio = "" } = req.body;
-
-  try {
-    // Check if Gemini API is available
-    if (process.env.GEMINI_API_KEY) {
-      // If Gemini API key exists, you could optionally use it here
-      // For now, we'll use fallback responses
-    }
-    
-    // Use fallback response with name placeholder
-    const fallbackResponse = getRandomResponse('birthdays', { name });
-    res.json({ text: fallbackResponse });
-  } catch (error) {
-    console.error("Birthday Error:", error);
-    res.status(500).json({ error: `Universal sync complete: ${name} is officially one orbit older. Energy levels at maximum! 🚀✨🎂` });
   }
 };
 

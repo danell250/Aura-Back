@@ -11,8 +11,6 @@ export interface User {
   coverImage?: string; 
   coverType?: 'image' | 'video';
   bio?: string;
-  dob?: string;
-  zodiacSign?: string;
   email?: string;
   phone?: string;
   country?: string;
@@ -89,8 +87,7 @@ export interface Notification {
     | 'share'
     | 'like'
     | 'message'
-    | 'time_capsule_unlocked'
-    | 'birthday';
+    | 'time_capsule_unlocked';
   fromUser: User;
   message: string;
   timestamp: number;

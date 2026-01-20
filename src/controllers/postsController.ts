@@ -605,14 +605,12 @@ export const postsController = {
         timeCapsuleTitle,
         timezone,
         visibility,
-        isBirthdayPost,
         isSystemPost,
         systemType,
         ownerId,
-        createdByUserId,
-        birthdayYear,
-        id // Allow frontend to provide ID (e.g. for S3 key consistency)
-      } = req.body;
+          createdByUserId,
+          id // Allow frontend to provide ID (e.g. for S3 key consistency)
+        } = req.body;
       
       if (!authorId) {
         return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
@@ -734,10 +732,6 @@ export const postsController = {
           timeCapsuleTitle: timeCapsuleTitle || null,
           timezone: timezone || null
         }),
-        ...(isBirthdayPost && {
-          isBirthdayPost: true,
-          birthdayYear: birthdayYear || currentYear
-        }),
         ...(isSystemPost && {
           isSystemPost: true,
           systemType: systemType || null,
@@ -781,30 +775,6 @@ export const postsController = {
               })
             )
         );
-      }
-      if (isBirthdayPost) {
-        const acquaintances: string[] = Array.isArray((author as any)?.acquaintances) ? (author as any).acquaintances : [];
-        if (acquaintances.length > 0) {
-          const yearKey = `birthday-${authorEmbed.id}-${currentYear}`;
-          await Promise.all(
-            acquaintances
-              .filter(id => id && id !== authorEmbed.id)
-              .map(id =>
-                createNotificationInDB(
-                  id,
-                  'birthday',
-                  authorEmbed.id,
-                  `It’s ${authorEmbed.firstName || 'Someone'}'s birthday today 🎂`,
-                  postId,
-                  undefined,
-                  { birthdayUserId: authorEmbed.id, year: currentYear },
-                  yearKey
-                ).catch(err => {
-                  console.error('Error creating birthday notification:', err);
-                })
-              )
-          );
-        }
       }
       res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
     } catch (error) {
@@ -1221,69 +1191,6 @@ export const postsController = {
     } catch (error) {
       console.error('Error sharing post:', error);
       res.status(500).json({ success: false, error: 'Failed to share post', message: 'Internal server error' });
-    }
-  },
-  
-  // POST /api/posts/:id/share-birthday - Share a system birthday post (owner only)
-  shareBirthdayPost: async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      const { visibility } = req.body as { visibility?: string };
-      const user = (req as any).user;
-
-      if (!user || !user.id) {
-        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
-      }
-
-      if (visibility !== 'public' && visibility !== 'acquaintances') {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid visibility',
-          message: "Visibility must be 'public' or 'acquaintances'"
-        });
-      }
-
-      const db = getDB();
-      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
-
-      if (!post) {
-        return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
-      }
-
-      if (!post.isSystemPost || post.systemType !== 'birthday') {
-        return res.status(400).json({
-          success: false,
-          error: 'Not a birthday system post',
-          message: 'share-birthday is only allowed for system birthday posts'
-        });
-      }
-
-      if (!post.ownerId || post.ownerId !== user.id) {
-        return res.status(403).json({
-          success: false,
-          error: 'Forbidden',
-          message: 'Only the birthday owner can share this post'
-        });
-      }
-
-      await db.collection(POSTS_COLLECTION).updateOne(
-        { id },
-        { $set: { visibility, sharedAt: Date.now() } }
-      );
-
-      const updated = await db.collection(POSTS_COLLECTION).findOne({ id });
-      if (!updated) {
-        return res.status(500).json({ success: false, error: 'Failed to update birthday post visibility' });
-      }
-
-      res.json({
-        success: true,
-        data: updated,
-        message: 'Birthday post shared successfully'
-      });
-    } catch (error) {
-      console.error('Error sharing birthday post:', error);
-      res.status(500).json({ success: false, error: 'Failed to share birthday post', message: 'Internal server error' });
     }
   },
   
