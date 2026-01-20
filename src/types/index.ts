@@ -111,3 +111,22 @@ export interface Message {
   isEdited?: boolean;
   editedAt?: number;
 }
+
+export interface MediaItemMetrics {
+  views: number;
+  clicks: number;
+  saves: number;
+  dwellMs: number;
+}
+
+export interface MediaItem {
+  id: string;
+  url: string;
+  type: 'image' | 'video';
+  key?: string;
+  mimeType?: string;
+  size?: number;
+  caption?: string;
+  order: number;
+  metrics: MediaItemMetrics;
+}

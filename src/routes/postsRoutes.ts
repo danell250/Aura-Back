@@ -49,6 +49,9 @@ router.get('/stream', optionalAuth, postsController.streamEvents);
 // GET /api/posts/hashtags/trending - Get trending hashtags
 router.get('/hashtags/trending', postsController.getTrendingHashtags);
 
+// GET /api/posts/:id/analytics - Get post analytics
+router.get('/:id/analytics', requireAuth, postsController.getPostAnalytics);
+
 // GET /api/posts/:id - Get post by ID
 router.get('/:id', optionalAuth, postsController.getPostById);
 
@@ -60,5 +63,6 @@ router.post('/:id/boost', postsWriteRateLimiter, requireAuth, postsController.bo
 router.post('/:id/share', postsWriteRateLimiter, requireAuth, postsController.sharePost);
 router.post('/:id/report', postsWriteRateLimiter, requireAuth, postsController.reportPost);
 router.post('/:id/view', optionalAuth, postsController.incrementPostViews);
+router.post('/:id/media/:mediaId/metrics', optionalAuth, postsController.updateMediaMetrics);
 
 export default router;

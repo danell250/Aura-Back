@@ -618,7 +618,7 @@ export const postsController = {
 
       // Handle media uploads
       const files = req.files as Express.Multer.File[];
-      const uploadedMediaItems: { url: string; type: 'image' | 'video' }[] = [];
+      const uploadedMediaItems: Partial<MediaItem>[] = [];
 
       if (files && files.length > 0) {
         for (const file of files) {
@@ -633,29 +633,58 @@ export const postsController = {
             );
         
             const type = file.mimetype.startsWith('video/') ? 'video' : 'image';
-          uploadedMediaItems.push({ url, type });
+          uploadedMediaItems.push({ 
+            url, 
+            type,
+            key: path,
+            mimeType: file.mimetype,
+            size: file.size,
+            caption: '', // Default caption
+            id: `media-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` // Generate ID immediately
+          });
         }
       }
 
       // Merge uploaded items with existing items
-      let parsedMediaItems = mediaItems;
+      let parsedMediaItems: Partial<MediaItem>[] = [];
       if (typeof mediaItems === 'string') {
         try {
           parsedMediaItems = JSON.parse(mediaItems);
         } catch (e) {
           parsedMediaItems = [];
         }
+      } else if (Array.isArray(mediaItems)) {
+        parsedMediaItems = mediaItems;
       }
 
-      const finalMediaItems = [...(parsedMediaItems || []), ...uploadedMediaItems];
+      const mergedItems = [...(parsedMediaItems || []), ...uploadedMediaItems];
+      
+      // Enhance media items with metrics and order
+      const finalMediaItems: MediaItem[] = mergedItems.map((item, index) => ({
+        // Strong rule: use mediaKey as id if available, otherwise create one
+        id: item.key || item.id || `mi-${index}-${Date.now()}`,
+        url: item.url!,
+        type: item.type as 'image' | 'video',
+        key: item.key,
+        mimeType: item.mimeType,
+        size: item.size,
+        caption: item.caption || '',
+        order: index,
+        metrics: item.metrics || {
+          views: 0,
+          clicks: 0,
+          saves: 0,
+          dwellMs: 0
+        }
+      }));
       
       // Determine primary mediaUrl/Type if not set
       let finalMediaUrl = mediaUrl;
       let finalMediaType = mediaType;
       
-      if (uploadedMediaItems.length > 0 && !finalMediaUrl) {
-        finalMediaUrl = uploadedMediaItems[0].url;
-        finalMediaType = uploadedMediaItems[0].type;
+      if (finalMediaItems.length > 0 && !finalMediaUrl) {
+        finalMediaUrl = finalMediaItems[0].url;
+        finalMediaType = finalMediaItems[0].type;
       }
 
       const hasText = typeof content === 'string' && content.trim().length > 0;
@@ -1275,6 +1304,140 @@ export const postsController = {
     } catch (error) {
       console.error('Error fetching trending hashtags:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch trending hashtags', message: 'Internal server error' });
+    }
+  },
+
+  // POST /api/posts/:id/media/:mediaId/metrics - Update media item metrics
+  updateMediaMetrics: async (req: Request, res: Response) => {
+    try {
+      const { id, mediaId } = req.params;
+      const { metric, value } = req.body; // metric: 'views' | 'clicks' | 'saves' | 'dwellMs'
+      
+      if (!['views', 'clicks', 'saves', 'dwellMs'].includes(metric)) {
+        return res.status(400).json({ success: false, error: 'Invalid metric' });
+      }
+
+      const db = getDB();
+      const updateField = `mediaItems.$[elem].metrics.${metric}`;
+      // For dwellMs, we increment by the value provided. For others, we increment by 1.
+      const incrementValue = metric === 'dwellMs' ? (Number(value) || 0) : 1;
+      
+      // Prepare update object
+      const updateDoc: any = {
+        $inc: {
+          [updateField]: incrementValue
+        }
+      };
+
+      // Also track post totals
+      if (metric === 'views') {
+        updateDoc.$inc['metrics.totalViews'] = incrementValue;
+        updateDoc.$inc['viewCount'] = incrementValue; // Keep legacy field in sync
+      } else if (metric === 'clicks') {
+        updateDoc.$inc['metrics.totalClicks'] = incrementValue;
+      } else if (metric === 'saves') {
+        updateDoc.$inc['metrics.totalSaves'] = incrementValue;
+      } else if (metric === 'dwellMs') {
+        updateDoc.$inc['metrics.totalDwellMs'] = incrementValue;
+      }
+
+      const result = await db.collection(POSTS_COLLECTION).updateOne(
+        { id },
+        updateDoc,
+        { arrayFilters: [{ "elem.id": mediaId }] }
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json({ success: false, error: 'Post or media item not found' });
+      }
+
+      res.json({ success: true, message: 'Metrics updated' });
+    } catch (error) {
+      console.error('Error updating media metrics:', error);
+      res.status(500).json({ success: false, error: 'Failed to update metrics' });
+    }
+  },
+
+  // GET /api/posts/:id/analytics - Get detailed analytics for a post
+  getPostAnalytics: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+      
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!post) {
+        return res.status(404).json({ success: false, error: 'Post not found' });
+      }
+
+      // Calculate totals from media items if not present on post
+      const mediaItems = post.mediaItems || [];
+      let totalViews = post.metrics?.totalViews || post.viewCount || 0;
+      let totalClicks = post.metrics?.totalClicks || 0;
+      let totalSaves = post.metrics?.totalSaves || 0;
+      
+      // If metrics are missing on post level (legacy), aggregate from items
+      if (!post.metrics && mediaItems.length > 0) {
+        totalViews = 0; // Reset to recalculate from items if metrics obj missing
+        totalClicks = 0;
+        totalSaves = 0;
+        mediaItems.forEach((item: any) => {
+           if (item.metrics) {
+             totalViews += item.metrics.views || 0;
+             totalClicks += item.metrics.clicks || 0;
+             totalSaves += item.metrics.saves || 0;
+           }
+        });
+        // Fallback to viewCount if items have no data yet
+        if (totalViews === 0 && post.viewCount) totalViews = post.viewCount;
+      }
+
+      const items = mediaItems.map((item: any) => {
+        const views = item.metrics?.views || 0;
+        const clicks = item.metrics?.clicks || 0;
+        const saves = item.metrics?.saves || 0;
+        const ctr = views > 0 ? (clicks / views) * 100 : 0;
+        
+        return {
+          id: item.id,
+          order: item.order,
+          caption: item.caption,
+          type: item.type,
+          url: item.url,
+          views,
+          clicks,
+          saves,
+          dwellMs: item.metrics?.dwellMs || 0,
+          ctr: parseFloat(ctr.toFixed(1))
+        };
+      });
+
+      // Find best item based on Engagement Score (Clicks * 10 + Views)
+      let bestItemId = null;
+      if (items.length > 0) {
+        const sorted = [...items].sort((a, b) => {
+             const scoreA = (a.clicks * 10) + a.views;
+             const scoreB = (b.clicks * 10) + b.views;
+             return scoreB - scoreA;
+        });
+        bestItemId = sorted[0].id;
+      }
+
+      res.json({
+        success: true,
+        data: {
+          postId: id,
+          totals: {
+            views: totalViews,
+            clicks: totalClicks,
+            saves: totalSaves
+          },
+          items,
+          bestItemId
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching post analytics:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch analytics' });
     }
   }
 };
