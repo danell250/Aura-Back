@@ -7,6 +7,7 @@ const router = Router();
 
 console.log('Ads routes loaded successfully');
 
+// Plans routes first
 // GET /api/ads/plans - Get all ad plans
 router.get('/plans/all', (req, res) => {
   res.json({
@@ -33,18 +34,25 @@ router.get('/plans/:planId', (req, res) => {
   });
 });
 
+// Analytics routes (specific paths before :id)
 router.get('/analytics/campaign/:userId', requireAuth, adsController.getCampaignPerformance);
 router.get('/analytics/user/:userId', requireAuth, adsController.getUserAdPerformance);
-router.get('/:id/analytics', requireAuth, adsController.getAdAnalytics);
+
+// Tracking routes
 router.post('/:id/impression', adsController.trackImpression);
 router.post('/:id/click', adsController.trackClick);
 router.post('/:id/engagement', adsController.trackEngagement);
+router.post('/:id/react', requireAuth, adsController.reactToAd);
+
+// Analytics for specific ad
+router.get('/:id/analytics', requireAuth, adsController.getAdAnalytics);
+
+// General CRUD
 router.get('/', optionalAuth, adsController.getAllAds);
 router.get('/:id', optionalAuth, adsController.getAdById);
 router.post('/', requireAuth, adsController.createAd);
 router.put('/:id', requireAuth, adsController.updateAd);
-router.delete('/:id', requireAuth, adsController.deleteAd);
-router.post('/:id/react', requireAuth, adsController.reactToAd);
 router.put('/:id/status', requireAuth, adsController.updateAdStatus);
+router.delete('/:id', requireAuth, adsController.deleteAd);
 
 export default router;
