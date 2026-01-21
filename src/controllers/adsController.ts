@@ -549,9 +549,6 @@ export const adsController = {
       });
 
       const packageId = subscription ? subscription.packageId : 'pkg-starter';
-      // const isBasic = packageId === 'pkg-starter';
-      // const isPro = packageId === 'pkg-pro';
-      // const isEnterprise = packageId === 'pkg-enterprise';
 
       const analyticsMap = new Map<string, any>();
       analyticsDocs.forEach(doc => {
@@ -731,10 +728,9 @@ export const adsController = {
           b.impressions += doc.impressions || 0;
           b.clicks += doc.clicks || 0;
           
-          if (!isBasic) {
-            b.engagement += doc.engagement || 0;
-            b.spend += doc.spend || 0;
-          }
+          // Include all metrics regardless of plan
+          b.engagement += doc.engagement || 0;
+          b.spend += doc.spend || 0;
         }
 
         return Array.from(buckets.values());
@@ -832,6 +828,29 @@ export const adsController = {
     } catch (error) {
       console.error('Error tracking engagement:', error);
       res.status(500).json({ success: false, error: 'Failed to track engagement' });
+    }
+  },
+
+  trackConversion: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+      
+      // A conversion is a high-value action. We might want to track metadata (e.g. value, type)
+      // For now, we just increment the counter.
+      await db.collection('adAnalytics').updateOne(
+        { adId: id },
+        { 
+          $inc: { conversions: 1 }, 
+          $set: { lastUpdated: Date.now() } 
+        }, 
+        { upsert: true }
+      );
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error tracking conversion:', error);
+      res.status(500).json({ success: false, error: 'Failed to track conversion' });
     }
   }
 };

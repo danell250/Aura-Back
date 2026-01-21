@@ -42,6 +42,7 @@ router.get('/analytics/user/:userId', requireAuth, adsController.getUserAdPerfor
 router.post('/:id/impression', adsController.trackImpression);
 router.post('/:id/click', adsController.trackClick);
 router.post('/:id/engagement', adsController.trackEngagement);
+router.post('/:id/conversion', adsController.trackConversion);
 router.post('/:id/react', requireAuth, adsController.reactToAd);
 
 // Analytics for specific ad
