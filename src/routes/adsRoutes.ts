@@ -39,10 +39,10 @@ router.get('/analytics/campaign/:userId', requireAuth, adsController.getCampaign
 router.get('/analytics/user/:userId', requireAuth, adsController.getUserAdPerformance);
 
 // Tracking routes
-router.post('/:id/impression', adsController.trackImpression);
-router.post('/:id/click', adsController.trackClick);
-router.post('/:id/engagement', adsController.trackEngagement);
-router.post('/:id/conversion', adsController.trackConversion);
+router.post('/:id/impression', optionalAuth, adsController.trackImpression);
+router.post('/:id/click', optionalAuth, adsController.trackClick);
+router.post('/:id/engagement', optionalAuth, adsController.trackEngagement);
+router.post('/:id/conversion', optionalAuth, adsController.trackConversion);
 router.post('/:id/react', requireAuth, adsController.reactToAd);
 
 // Analytics for specific ad

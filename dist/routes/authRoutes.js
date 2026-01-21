@@ -20,6 +20,7 @@ const db_1 = require("../db");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const jwtUtils_1 = require("../utils/jwtUtils");
 const securityLogger_1 = require("../utils/securityLogger");
+const userUtils_1 = require("../utils/userUtils");
 const router = (0, express_1.Router)();
 const normalizeUserHandle = (rawHandle) => {
     const base = (rawHandle || '').trim().toLowerCase();
@@ -277,7 +278,7 @@ router.post('/refresh-token', (req, res) => __awaiter(void 0, void 0, void 0, fu
         res.json({
             success: true,
             accessToken: newAccessToken,
-            user: user,
+            user: (0, userUtils_1.transformUser)(user),
             message: 'Token refreshed successfully'
         });
     }
@@ -387,7 +388,7 @@ router.get('/user', authMiddleware_1.requireAuth, (req, res) => {
     }
     res.json({
         success: true,
-        user
+        user: (0, userUtils_1.transformUser)(user)
     });
 });
 // ============ LOGOUT ============
@@ -431,7 +432,7 @@ router.get('/user-info', authMiddleware_1.attachUser, (req, res) => {
     if (req.user) {
         res.json({
             success: true,
-            user: req.user,
+            user: (0, userUtils_1.transformUser)(req.user),
             authenticated: true
         });
     }
@@ -449,7 +450,7 @@ router.get('/status', authMiddleware_1.attachUser, (req, res) => {
     res.json({
         success: true,
         authenticated: isAuthenticated,
-        user: isAuthenticated ? req.user : null
+        user: isAuthenticated ? (0, userUtils_1.transformUser)(req.user) : null
     });
 });
 // ============ LOGIN ============
@@ -550,7 +551,7 @@ router.post('/login', loginRateLimiter, (req, res) => __awaiter(void 0, void 0, 
             });
             res.json({
                 success: true,
-                user: user,
+                user: (0, userUtils_1.transformUser)(user),
                 token: accessToken,
                 message: 'Login successful'
             });
@@ -704,7 +705,6 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             name: `${firstName.trim()} ${lastName.trim()}`,
             email: normalizedEmail,
             phone: (phone === null || phone === void 0 ? void 0 : phone.trim()) || '',
-            dob: dob || '',
             handle: finalHandle,
             bio: 'New to Aura',
             industry: 'Other',

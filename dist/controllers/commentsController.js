@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.commentsController = void 0;
 const db_1 = require("../db");
 const notificationsController_1 = require("./notificationsController");
+const userUtils_1 = require("../utils/userUtils");
 const COMMENTS_COLLECTION = 'comments';
 const USERS_COLLECTION = 'users';
 exports.commentsController = {
@@ -34,6 +35,11 @@ exports.commentsController = {
                 .limit(limitNum)
                 .toArray();
             // Post-process to add userReactions for the current user
+            data.forEach((comment) => {
+                if (comment.author) {
+                    comment.author = (0, userUtils_1.transformUser)(comment.author);
+                }
+            });
             if (currentUserId) {
                 data.forEach((comment) => {
                     if (comment.reactionUsers) {
@@ -93,6 +99,7 @@ exports.commentsController = {
                 name: author.name,
                 handle: author.handle,
                 avatar: author.avatar,
+                avatarKey: author.avatarKey,
                 avatarType: author.avatarType || 'image'
             } : {
                 id: authorId,
@@ -188,6 +195,9 @@ exports.commentsController = {
             }
             catch (e) {
                 console.error('Error creating comment notification:', e);
+            }
+            if (newComment.author) {
+                newComment.author = (0, userUtils_1.transformUser)(newComment.author);
             }
             res.status(201).json({ success: true, data: newComment, message: 'Comment created successfully' });
         }
@@ -288,6 +298,9 @@ exports.commentsController = {
                 return res.status(500).json({ success: false, error: 'Failed to update reaction' });
             }
             const updatedComment = updatedCommentDoc;
+            if (updatedComment.author) {
+                updatedComment.author = (0, userUtils_1.transformUser)(updatedComment.author);
+            }
             if (updatedComment.reactionUsers) {
                 updatedComment.userReactions = Object.keys(updatedComment.reactionUsers).filter(emoji => Array.isArray(updatedComment.reactionUsers[emoji]) && updatedComment.reactionUsers[emoji].includes(userId));
             }

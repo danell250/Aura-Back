@@ -13,25 +13,116 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
+const client_s3_1 = require("@aws-sdk/client-s3");
+const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
 const crypto_1 = __importDefault(require("crypto"));
-const s3Service_1 = require("../services/s3Service");
 const router = express_1.default.Router();
+const s3 = new client_s3_1.S3Client({
+    region: process.env.S3_REGION,
+    credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY_ID,
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+    },
+    requestChecksumCalculation: "WHEN_REQUIRED",
+});
+router.get("/debug/s3", (req, res) => {
+    res.json({
+        region: process.env.S3_REGION,
+        bucket: process.env.S3_BUCKET_NAME,
+        hasKey: !!process.env.S3_ACCESS_KEY_ID,
+        hasSecret: !!process.env.S3_SECRET_ACCESS_KEY,
+    });
+});
+router.get("/media/view-url", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { key } = req.query;
+    if (!key)
+        return res.status(400).json({ error: "Missing key" });
+    const command = new client_s3_1.GetObjectCommand({
+        Bucket: process.env.S3_BUCKET_NAME,
+        Key: key,
+    });
+    const url = yield (0, s3_request_presigner_1.getSignedUrl)(s3, command, { expiresIn: 600 });
+    res.json({ url });
+}));
 router.post("/media/upload-url", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { userId, fileName, contentType, folder = "posts" } = req.body;
-        if (!userId || !fileName || !contentType) {
+        console.log("ENV CHECK:", {
+            S3_REGION: process.env.S3_REGION,
+            S3_BUCKET_NAME: process.env.S3_BUCKET_NAME,
+            HAS_KEY: !!process.env.S3_ACCESS_KEY_ID,
+            HAS_SECRET: !!process.env.S3_SECRET_ACCESS_KEY,
+        });
+        const { fileName, fileType, contentType, folder = "avatars", userId, entityId } = req.body;
+        const finalContentType = fileType || contentType;
+        // --- STRICT VALIDATION START ---
+        const ALLOWED_FOLDERS = {
+            avatars: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+            covers: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'],
+            posts: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'],
+            documents: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+            ads: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'],
+            chat: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+        };
+        if (!fileName || !finalContentType || !userId) {
             return res.status(400).json({ success: false, error: "Missing fields" });
         }
-        const ext = fileName.split(".").pop() || "bin";
+        if (!ALLOWED_FOLDERS[folder]) {
+            return res.status(400).json({
+                success: false,
+                error: `Invalid folder '${folder}'. Allowed: ${Object.keys(ALLOWED_FOLDERS).join(', ')}`
+            });
+        }
+        if (!ALLOWED_FOLDERS[folder].includes(finalContentType)) {
+            return res.status(400).json({
+                success: false,
+                error: `Invalid content type '${finalContentType}' for folder '${folder}'. Allowed: ${ALLOWED_FOLDERS[folder].join(', ')}`
+            });
+        }
+        // --- STRICT VALIDATION END ---
+        const ext = fileName.includes(".") ? fileName.split(".").pop() : "bin";
+        const safeExt = String(ext).toLowerCase().replace(/[^a-z0-9]/g, "");
         const id = crypto_1.default.randomBytes(12).toString("hex");
-        // Key structure: posts/<userId>/<id>.<ext> 
-        const key = `${folder}/${userId}/${id}.${ext}`;
-        const result = yield (0, s3Service_1.getUploadUrl)({ key, contentType });
-        res.json(Object.assign(Object.assign({ success: true }, result), { key }));
+        const bucketName = process.env.S3_BUCKET_NAME;
+        if (!bucketName) {
+            console.warn("S3 Bucket not configured, returning 503 to trigger local fallback");
+            return res.status(503).json({ success: false, error: "S3_NOT_CONFIGURED" });
+        }
+        let key = "";
+        // Special case for user profile media (avatars/covers)
+        if (folder === "avatars" || folder === "covers") {
+            // avatars/{userId}-{uuid}.png
+            key = `${folder}/${userId}-${id}.${safeExt}`;
+        }
+        // Special case for entity-specific media (posts/ads/documents)
+        else if (entityId) {
+            // posts/{postId}/{uuid}.jpg
+            key = `${folder}/${entityId}/${id}.${safeExt}`;
+        }
+        // Default fallback
+        else {
+            // posts/{userId}/{uuid}.jpg (if no entityId provided)
+            key = `${folder}/${userId}/${id}.${safeExt}`;
+        }
+        const command = new client_s3_1.PutObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: finalContentType,
+            // ❌ DO NOT set ChecksumAlgorithm 
+            // ❌ DO NOT set ACL 
+        });
+        const uploadUrl = yield (0, s3_request_presigner_1.getSignedUrl)(s3, command, { expiresIn: 300 });
+        const publicBaseUrl = process.env.S3_PUBLIC_BASE_URL || `https://${bucketName}.s3.${process.env.S3_REGION}.amazonaws.com`;
+        return res.json({
+            success: true,
+            uploadUrl,
+            key,
+            // This URL will exist but won't be viewable unless object is public 
+            objectUrl: `${publicBaseUrl}/${key}`,
+        });
     }
     catch (e) {
-        console.error("upload-url error", e);
-        res.status(500).json({ success: false, error: "Failed to create upload URL" });
+        console.error("upload-url error:", e === null || e === void 0 ? void 0 : e.message, e);
+        return res.status(500).json({ success: false, error: (e === null || e === void 0 ? void 0 : e.message) || "Server error" });
     }
 }));
 exports.default = router;

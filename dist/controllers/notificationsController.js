@@ -11,6 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.notificationsController = exports.createNotificationInDB = void 0;
 const db_1 = require("../db");
+const userUtils_1 = require("../utils/userUtils");
 const createNotificationInDB = (userId, type, fromUserId, message, postId, connectionId, meta, yearKey) => __awaiter(void 0, void 0, void 0, function* () {
     let db = null;
     if ((0, db_1.isDBConnected)()) {
@@ -53,14 +54,17 @@ const createNotificationInDB = (userId, type, fromUserId, message, postId, conne
         lastName: fromUserDoc.lastName || '',
         name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
         handle: fromUserDoc.handle,
-        avatar: fromUserDoc.avatar
+        avatar: fromUserDoc.avatar,
+        avatarKey: fromUserDoc.avatarKey,
+        avatarType: fromUserDoc.avatarType || 'image'
     } : {
         id: fromUserId,
         firstName: 'User',
         lastName: '',
         name: 'User',
         handle: '@user',
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`,
+        avatarType: 'image'
     };
     const newNotification = {
         id: `notif-${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -125,7 +129,12 @@ exports.notificationsController = {
             // Pagination
             const startIndex = (Number(page) - 1) * Number(limit);
             const endIndex = startIndex + Number(limit);
-            const paginatedNotifications = notifications.slice(startIndex, endIndex);
+            const paginatedNotifications = notifications.slice(startIndex, endIndex).map((notification) => {
+                if (notification.fromUser) {
+                    notification.fromUser = (0, userUtils_1.transformUser)(notification.fromUser);
+                }
+                return notification;
+            });
             res.json({
                 success: true,
                 data: paginatedNotifications,
@@ -168,14 +177,17 @@ exports.notificationsController = {
                 lastName: fromUserDoc.lastName || '',
                 name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
                 handle: fromUserDoc.handle,
-                avatar: fromUserDoc.avatar
+                avatar: fromUserDoc.avatar,
+                avatarKey: fromUserDoc.avatarKey,
+                avatarType: fromUserDoc.avatarType || 'image'
             } : {
                 id: fromUserId,
                 firstName: 'User',
                 lastName: '',
                 name: 'User',
                 handle: '@user',
-                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`
+                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`,
+                avatarType: 'image'
             };
             const newNotification = {
                 id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -192,6 +204,10 @@ exports.notificationsController = {
             yield db.collection('users').updateOne({ id: userId }, {
                 $push: { notifications: { $each: [newNotification], $position: 0 } }
             });
+            // Transform fromUser for response
+            if (newNotification.fromUser) {
+                newNotification.fromUser = (0, userUtils_1.transformUser)(newNotification.fromUser);
+            }
             res.status(201).json({
                 success: true,
                 data: newNotification,

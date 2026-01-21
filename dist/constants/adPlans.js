@@ -10,6 +10,7 @@ exports.AD_PLANS = {
         price: '$39 • 14 Days',
         numericPrice: 39,
         adLimit: 1,
+        impressionLimit: 5000,
         idealFor: 'First-time users, quick launches, testing ideas',
         features: [
             '1 Active Signal',
@@ -30,6 +31,7 @@ exports.AD_PLANS = {
         price: '$199 / month',
         numericPrice: 199,
         adLimit: 5,
+        impressionLimit: 50000,
         idealFor: 'Creators, influencers, side hustles',
         features: [
             '5 Active Signals at once',
@@ -52,6 +54,7 @@ exports.AD_PLANS = {
         price: '$699 / month',
         numericPrice: 699,
         adLimit: 20,
+        impressionLimit: 250000,
         idealFor: 'Brands, agencies, power users',
         features: [
             '20 Active Signals simultaneously',

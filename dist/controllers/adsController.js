@@ -12,6 +12,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.adsController = void 0;
 const db_1 = require("../db");
 const hashtagUtils_1 = require("../utils/hashtagUtils");
+const adPlans_1 = require("../constants/adPlans");
+const adSubscriptionsController_1 = require("./adSubscriptionsController");
 exports.adsController = {
     // GET /api/ads - Get all ads
     getAllAds: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -105,59 +107,53 @@ exports.adsController = {
             let reservedSubscriptionId = null;
             let subscription = null;
             const now = Date.now();
-            // Check subscription limits and reserve slot atomically if subscriptionId is provided and not special user
-            if (adData.subscriptionId && !isSpecialUser) {
+            // Check subscription limits and enforce at ACTION TIME
+            if (!isSpecialUser) {
+                // Fetch active subscription for the user
                 subscription = yield db.collection('adSubscriptions').findOne({
-                    id: adData.subscriptionId
+                    userId,
+                    status: 'active',
+                    $or: [
+                        { endDate: { $exists: false } },
+                        { endDate: { $gt: now } }
+                    ]
                 });
+                // If no active subscription, allow creation only if they have credits? 
+                // OR strictly enforce plan.
+                // Based on "pkg-starter" being $39, we should require a subscription.
                 if (!subscription) {
-                    return res.status(404).json({
-                        success: false,
-                        error: 'Subscription not found'
-                    });
-                }
-                if (subscription.userId !== userId) {
                     return res.status(403).json({
                         success: false,
-                        error: 'Subscription does not belong to the authenticated user'
+                        error: 'No active ad plan found. Please purchase a plan to create signals.'
                     });
                 }
-                if (subscription.status !== 'active') {
-                    return res.status(400).json({
+                // --- NEW LOGIC START ---
+                // Ensure subscription period is up to date (resets adsUsed if new month)
+                subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
+                // Hard monthly limit
+                if (subscription.adsUsed >= subscription.adLimit) {
+                    const resetDate = subscription.periodEnd
+                        ? new Date(subscription.periodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                        : 'next billing cycle';
+                    return res.status(409).json({
                         success: false,
-                        error: 'Subscription is not active'
+                        code: 'AD_LIMIT_REACHED',
+                        error: 'AD_LIMIT_REACHED',
+                        message: `You’ve used all ${subscription.adLimit} ads for this month.`,
+                        adLimit: subscription.adLimit,
+                        adsUsed: subscription.adsUsed,
+                        periodEnd: subscription.periodEnd
                     });
                 }
-                // Check if subscription has expired
-                if (subscription.endDate && now > subscription.endDate) {
-                    yield db.collection('adSubscriptions').updateOne({ id: subscription.id }, {
-                        $set: {
-                            status: 'expired',
-                            updatedAt: now
-                        }
-                    });
-                    return res.status(400).json({
-                        success: false,
-                        error: 'Subscription has expired'
-                    });
-                }
-                const reserve = yield db.collection('adSubscriptions').updateOne(Object.assign(Object.assign({ id: subscription.id, userId, status: 'active' }, (subscription.endDate ? { endDate: { $gt: now } } : {})), { $expr: { $lt: ['$adsUsed', '$adLimit'] } }), {
-                    $inc: { adsUsed: 1 },
-                    $set: { updatedAt: now }
-                });
-                if (reserve.matchedCount === 0) {
-                    return res.status(400).json({
-                        success: false,
-                        error: `Ad limit reached. You can create ${subscription.adLimit} ads with this plan.`,
-                        limit: subscription.adLimit,
-                        used: subscription.adsUsed
-                    });
-                }
-                reservedSubscriptionId = subscription.id;
+                // --- NEW LOGIC END ---
             }
             const newAd = Object.assign(Object.assign({}, adData), { ownerId: userId, id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, timestamp: Date.now(), reactions: {}, reactionUsers: {}, hashtags: (0, hashtagUtils_1.getHashtagsFromText)(adData.description || '') });
             try {
                 yield db.collection('ads').insertOne(newAd);
+                // Increment usage (atomic)
+                if (!isSpecialUser && subscription) {
+                    yield db.collection('adSubscriptions').updateOne({ id: subscription.id }, { $inc: { adsUsed: 1 }, $set: { updatedAt: Date.now() } });
+                }
                 yield db.collection('adAnalytics').insertOne({
                     adId: newAd.id,
                     ownerId: newAd.ownerId,
@@ -172,12 +168,9 @@ exports.adsController = {
                 });
             }
             catch (error) {
-                if (reservedSubscriptionId) {
-                    yield db.collection('adSubscriptions').updateOne({ id: reservedSubscriptionId }, {
-                        $inc: { adsUsed: -1 },
-                        $set: { updatedAt: Date.now() }
-                    });
-                }
+                console.error('Error during ad creation transaction:', error);
+                // If ad was created but subsequent steps failed, we might want to clean up
+                // But for now, we just throw to ensure the client gets an error
                 throw error;
             }
             res.status(201).json({
@@ -268,6 +261,8 @@ exports.adsController = {
             // Don't allow updating id or ownerId
             delete updates.id;
             delete updates.ownerId;
+            // Don't allow updating status via updateAd (must use updateAdStatus)
+            delete updates.status;
             if (typeof updates.description === 'string') {
                 updates.hashtags = (0, hashtagUtils_1.getHashtagsFromText)(updates.description || '');
             }
@@ -324,10 +319,47 @@ exports.adsController = {
             const { id } = req.params;
             const { status } = req.body;
             const db = (0, db_1.getDB)();
-            const result = yield db.collection('ads').findOneAndUpdate({ id }, { $set: { status } }, { returnDocument: 'after' });
-            if (!result) {
+            const currentUser = req.user;
+            if (!currentUser || !currentUser.id) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
+            const ad = yield db.collection('ads').findOne({ id });
+            if (!ad) {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
             }
+            const isAdmin = currentUser.role === 'admin' || currentUser.isAdmin === true;
+            if (!isAdmin && ad.ownerId !== currentUser.id) {
+                return res.status(403).json({ success: false, error: 'Forbidden' });
+            }
+            // Enforce limits if activating
+            if (status === 'active' && ad.status !== 'active') {
+                // Get active subscription
+                const now = Date.now();
+                let subscription = yield db.collection('adSubscriptions').findOne({
+                    userId: currentUser.id,
+                    status: 'active',
+                    $or: [
+                        { endDate: { $exists: false } },
+                        { endDate: { $gt: now } }
+                    ]
+                });
+                if (subscription) {
+                    // Ensure period is current before checking limits
+                    subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
+                }
+                // Note: Ad limit is enforced at creation time (Monthly Quota).
+                // We do NOT check simultaneous active ads here.
+                // Check impression limit
+                if (subscription && subscription.impressionsUsed >= subscription.impressionLimit) {
+                    return res.status(403).json({
+                        success: false,
+                        error: `Monthly impression limit reached (${subscription.impressionLimit}). Upgrade or wait for renewal.`,
+                        limit: subscription.impressionLimit,
+                        current: subscription.impressionsUsed
+                    });
+                }
+            }
+            const result = yield db.collection('ads').findOneAndUpdate({ id }, { $set: { status } }, { returnDocument: 'after' });
             res.json({ success: true, data: result });
         }
         catch (error) {
@@ -336,6 +368,7 @@ exports.adsController = {
         }
     }),
     getAdAnalytics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f, _g;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
@@ -353,27 +386,50 @@ exports.adsController = {
                 });
             }
             const analytics = yield db.collection('adAnalytics').findOne({ adId: id });
-            const impressions = (analytics === null || analytics === void 0 ? void 0 : analytics.impressions) || 0;
-            const clicks = (analytics === null || analytics === void 0 ? void 0 : analytics.clicks) || 0;
-            const engagement = (analytics === null || analytics === void 0 ? void 0 : analytics.engagement) || 0;
-            const conversions = (analytics === null || analytics === void 0 ? void 0 : analytics.conversions) || 0;
-            const spend = (analytics === null || analytics === void 0 ? void 0 : analytics.spend) || 0;
-            const reach = (analytics === null || analytics === void 0 ? void 0 : analytics.reach) || impressions;
+            // Check user subscription level
+            const now = Date.now();
+            const subscription = yield db.collection('adSubscriptions').findOne({
+                userId: currentUser.id, // Viewer is owner (checked above)
+                status: 'active',
+                $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
+            });
+            const packageId = subscription ? subscription.packageId : 'pkg-starter';
+            const isBasic = packageId === 'pkg-starter';
+            const isPro = packageId === 'pkg-pro';
+            const isEnterprise = packageId === 'pkg-enterprise';
+            const impressions = (_a = analytics === null || analytics === void 0 ? void 0 : analytics.impressions) !== null && _a !== void 0 ? _a : 0;
+            const clicks = (_b = analytics === null || analytics === void 0 ? void 0 : analytics.clicks) !== null && _b !== void 0 ? _b : 0;
+            const engagement = (_c = analytics === null || analytics === void 0 ? void 0 : analytics.engagement) !== null && _c !== void 0 ? _c : 0;
+            const conversions = (_d = analytics === null || analytics === void 0 ? void 0 : analytics.conversions) !== null && _d !== void 0 ? _d : 0;
+            const spend = (_e = analytics === null || analytics === void 0 ? void 0 : analytics.spend) !== null && _e !== void 0 ? _e : 0;
+            const reach = (_f = analytics === null || analytics === void 0 ? void 0 : analytics.reach) !== null && _f !== void 0 ? _f : impressions;
             const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-            const lastUpdated = (analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) || Date.now();
+            const lastUpdated = (_g = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _g !== void 0 ? _g : Date.now();
+            const data = {
+                adId: id,
+                impressions,
+                clicks,
+                ctr,
+                reach,
+                engagement,
+                conversions,
+                spend,
+                lastUpdated
+            };
+            if (!isBasic) {
+                // data.engagement = engagement; // Always include for consistency
+                // data.spend = spend; // Always include for consistency
+            }
+            if (isEnterprise) {
+                // Mock deep analytics for now
+                data.audience = {
+                    sentiment: 'positive',
+                    demographics: { '18-24': 30, '25-34': 45 }
+                };
+            }
             res.json({
                 success: true,
-                data: {
-                    adId: id,
-                    impressions,
-                    clicks,
-                    ctr,
-                    reach,
-                    engagement,
-                    conversions,
-                    spend,
-                    lastUpdated
-                }
+                data
             });
         }
         catch (error) {
@@ -403,34 +459,48 @@ exports.adsController = {
                 .collection('adAnalytics')
                 .find({ adId: { $in: adIds } })
                 .toArray();
+            // Check user subscription level
+            const now = Date.now();
+            const subscription = yield db.collection('adSubscriptions').findOne({
+                userId,
+                status: 'active',
+                $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
+            });
+            const packageId = subscription ? subscription.packageId : 'pkg-starter';
             const analyticsMap = new Map();
             analyticsDocs.forEach(doc => {
                 analyticsMap.set(doc.adId, doc);
             });
-            const metrics = ads.map((ad) => {
-                const analytics = analyticsMap.get(ad.id) || {};
-                const impressions = analytics.impressions || 0;
-                const clicks = analytics.clicks || 0;
-                const engagement = analytics.engagement || 0;
-                const spend = analytics.spend || 0;
+            const data = ads.map((ad) => {
+                var _a, _b, _c, _d, _e, _f, _g;
+                const analytics = analyticsMap.get(ad.id);
+                const impressions = (_a = analytics === null || analytics === void 0 ? void 0 : analytics.impressions) !== null && _a !== void 0 ? _a : 0;
+                const clicks = (_b = analytics === null || analytics === void 0 ? void 0 : analytics.clicks) !== null && _b !== void 0 ? _b : 0;
+                const engagement = (_c = analytics === null || analytics === void 0 ? void 0 : analytics.engagement) !== null && _c !== void 0 ? _c : 0;
+                const conversions = (_d = analytics === null || analytics === void 0 ? void 0 : analytics.conversions) !== null && _d !== void 0 ? _d : 0;
+                const spend = (_e = analytics === null || analytics === void 0 ? void 0 : analytics.spend) !== null && _e !== void 0 ? _e : 0;
+                const reach = (_f = analytics === null || analytics === void 0 ? void 0 : analytics.reach) !== null && _f !== void 0 ? _f : impressions;
                 const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-                const roi = spend > 0 ? (engagement + clicks) / spend : 0;
+                const lastUpdated = (_g = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _g !== void 0 ? _g : ad.timestamp;
                 return {
                     adId: ad.id,
-                    adName: ad.headline || ad.title || 'Untitled Ad',
-                    status: ad.status || 'active',
+                    adName: ad.headline,
+                    status: ad.status,
                     impressions,
                     clicks,
                     ctr,
                     engagement,
                     spend,
-                    roi,
-                    createdAt: ad.timestamp || Date.now()
+                    reach,
+                    conversions,
+                    lastUpdated,
+                    roi: spend > 0 ? (engagement + clicks) / spend : 0,
+                    createdAt: ad.timestamp
                 };
             });
             res.json({
                 success: true,
-                data: metrics
+                data
             });
         }
         catch (error) {
@@ -468,50 +538,117 @@ exports.adsController = {
                     }
                 });
             }
+            // Check user subscription level
+            const now = Date.now();
+            const subscription = yield db.collection('adSubscriptions').findOne({
+                userId,
+                status: 'active',
+                $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
+            });
+            const packageId = subscription ? subscription.packageId : 'pkg-starter';
+            const isBasic = packageId === 'pkg-starter';
+            // const isPro = packageId === 'pkg-pro';
+            // const isEnterprise = packageId === 'pkg-enterprise';
+            let totalImpressions = 0;
+            let totalClicks = 0;
+            let totalEngagement = 0;
+            let totalSpend = 0;
+            let totalConversions = 0;
+            let activeAds = 0;
+            let totalReach = 0;
             const adIds = ads.map((ad) => ad.id);
             const analyticsDocs = yield db
                 .collection('adAnalytics')
                 .find({ adId: { $in: adIds } })
                 .toArray();
-            let totalImpressions = 0;
-            let totalClicks = 0;
-            let totalEngagement = 0;
-            let totalSpend = 0;
+            const analyticsMap = new Map();
             analyticsDocs.forEach(doc => {
-                totalImpressions += doc.impressions || 0;
-                totalClicks += doc.clicks || 0;
-                totalEngagement += doc.engagement || 0;
-                totalSpend += doc.spend || 0;
+                analyticsMap.set(doc.adId, doc);
             });
-            const totalReach = totalImpressions;
-            const averageCTR = analyticsDocs.length > 0 && totalImpressions > 0
-                ? (totalClicks / totalImpressions) * 100
-                : 0;
-            const activeAds = ads.filter((ad) => ad.status === 'active').length;
-            // Calculate next expiry
-            const now = Date.now();
-            const activeAdsList = ads.filter((ad) => ad.status === 'active' && ad.expiryDate && ad.expiryDate > now);
-            const nextExpiringAd = activeAdsList.sort((a, b) => (a.expiryDate || 0) - (b.expiryDate || 0))[0];
-            const daysToNextExpiry = nextExpiringAd
-                ? Math.ceil((nextExpiringAd.expiryDate - now) / (1000 * 60 * 60 * 24))
+            ads.forEach((ad) => {
+                var _a, _b, _c, _d, _e, _f, _g;
+                if (ad.status === 'active')
+                    activeAds++;
+                const analytics = analyticsMap.get(ad.id);
+                if (analytics) {
+                    totalImpressions += ((_a = analytics.impressions) !== null && _a !== void 0 ? _a : 0);
+                    totalClicks += ((_b = analytics.clicks) !== null && _b !== void 0 ? _b : 0);
+                    // Include all metrics regardless of plan for now to ensure data visibility
+                    // We can enforce strict plan limits later if needed
+                    totalEngagement += ((_c = analytics.engagement) !== null && _c !== void 0 ? _c : 0);
+                    totalSpend += ((_d = analytics.spend) !== null && _d !== void 0 ? _d : 0);
+                    totalConversions += ((_e = analytics.conversions) !== null && _e !== void 0 ? _e : 0);
+                    totalReach += ((_g = (_f = analytics.reach) !== null && _f !== void 0 ? _f : analytics.impressions) !== null && _g !== void 0 ? _g : 0);
+                }
+            });
+            const averageCTR = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+            // Calculate a performance score (0-100)
+            // Weighted: 30% CTR, 30% Engagement Rate, 40% active/fresh factor
+            const ctrScore = Math.min(100, (averageCTR / 2) * 100); // 2% CTR = 100 score
+            let performanceScore = 0;
+            if (isBasic) {
+                // For basic plan, weight: 50% CTR, 50% active/fresh
+                performanceScore = Math.round((ctrScore * 0.5) + (Math.min(100, activeAds * 20) * 0.5));
+            }
+            else {
+                const engRate = totalImpressions > 0 ? totalEngagement / totalImpressions : 0;
+                const engScore = Math.min(100, (engRate / 0.05) * 100); // 5% engagement = 100 score
+                performanceScore = Math.round((ctrScore * 0.3) + (engScore * 0.3) + (Math.min(100, activeAds * 20) * 0.4));
+            }
+            const daysToNextExpiry = (subscription === null || subscription === void 0 ? void 0 : subscription.endDate)
+                ? Math.ceil((subscription.endDate - now) / (1000 * 60 * 60 * 24))
                 : null;
-            const performanceScore = Math.min(100, Math.round((totalClicks * 2 + totalEngagement + totalImpressions * 0.01) /
-                (activeAds || 1)));
-            const trendData = [];
+            const build7DayTrend = (analyticsDocs) => {
+                const days = 7;
+                const start = new Date();
+                start.setHours(0, 0, 0, 0);
+                start.setDate(start.getDate() - (days - 1));
+                const buckets = new Map();
+                for (let i = 0; i < days; i++) {
+                    const d = new Date(start);
+                    d.setDate(start.getDate() + i);
+                    const key = d.toISOString().slice(0, 10);
+                    buckets.set(key, {
+                        date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                        impressions: 0,
+                        clicks: 0,
+                        engagement: 0,
+                        spend: 0
+                    });
+                }
+                for (const doc of analyticsDocs) {
+                    const ts = doc.lastUpdated || Date.now();
+                    const d = new Date(ts);
+                    d.setHours(0, 0, 0, 0);
+                    const key = d.toISOString().slice(0, 10);
+                    const b = buckets.get(key);
+                    if (!b)
+                        continue;
+                    b.impressions += doc.impressions || 0;
+                    b.clicks += doc.clicks || 0;
+                    // Include all metrics regardless of plan
+                    b.engagement += doc.engagement || 0;
+                    b.spend += doc.spend || 0;
+                }
+                return Array.from(buckets.values());
+            };
+            const trendData = build7DayTrend(analyticsDocs);
+            const data = {
+                totalImpressions,
+                totalClicks,
+                totalReach,
+                totalEngagement,
+                totalSpend,
+                totalConversions,
+                averageCTR,
+                activeAds,
+                daysToNextExpiry,
+                performanceScore,
+                trendData
+            };
             res.json({
                 success: true,
-                data: {
-                    totalImpressions,
-                    totalClicks,
-                    totalReach,
-                    totalEngagement,
-                    totalSpend,
-                    averageCTR,
-                    activeAds,
-                    daysToNextExpiry,
-                    performanceScore,
-                    trendData
-                }
+                data
             });
         }
         catch (error) {
@@ -523,197 +660,94 @@ exports.adsController = {
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
+            // 1. Get Ad to find owner
             const ad = yield db.collection('ads').findOne({ id });
+            if (!ad) {
+                // If ad missing, we can't attribute cost, but we should still track impression?
+                // No, if ad is gone, we shouldn't be serving it.
+                return res.status(404).json({ success: false, error: 'Ad not found' });
+            }
+            // 2. Determine Cost Per Impression (CPI)
+            let cpi = 0;
+            // Look up active subscription for the ad owner
+            const now = Date.now();
+            const subscription = yield db.collection('adSubscriptions').findOne({
+                userId: ad.ownerId,
+                status: 'active',
+                $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
+            });
+            if (subscription && subscription.packageId) {
+                const plan = adPlans_1.AD_PLANS[subscription.packageId];
+                if (plan && plan.impressionLimit > 0) {
+                    cpi = plan.numericPrice / plan.impressionLimit;
+                }
+            }
             yield db.collection('adAnalytics').updateOne({ adId: id }, {
-                $setOnInsert: {
-                    adId: id,
-                    ownerId: (ad === null || ad === void 0 ? void 0 : ad.ownerId) || null,
-                    spend: 0,
-                    conversions: 0,
-                    clicks: 0,
-                    engagement: 0
-                },
                 $inc: {
                     impressions: 1,
-                    reach: 1
+                    reach: 1,
+                    spend: cpi
                 },
-                $set: {
-                    lastUpdated: Date.now()
-                }
+                $set: { lastUpdated: Date.now() }
             }, { upsert: true });
-            try {
-                const ownerId = ad === null || ad === void 0 ? void 0 : ad.ownerId;
-                if (ownerId) {
-                    const appInstance = req.app;
-                    const io = (appInstance === null || appInstance === void 0 ? void 0 : appInstance.get) && appInstance.get('io');
-                    if (io && typeof io.to === 'function') {
-                        const analyticsDoc = yield db.collection('adAnalytics').findOne({ adId: id });
-                        const impressions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.impressions) || 0;
-                        const clicks = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.clicks) || 0;
-                        const engagement = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.engagement) || 0;
-                        const conversions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.conversions) || 0;
-                        const spend = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.spend) || 0;
-                        const reach = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.reach) || impressions;
-                        const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-                        const lastUpdated = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.lastUpdated) || Date.now();
-                        io.to(`user:${ownerId}`).emit('analytics_update', {
-                            userId: ownerId,
-                            stats: {
-                                adMetrics: {
-                                    adId: id,
-                                    impressions,
-                                    clicks,
-                                    ctr,
-                                    reach,
-                                    engagement,
-                                    conversions,
-                                    spend,
-                                    lastUpdated
-                                }
-                            }
-                        });
-                        io.to(`user:${ownerId}`).emit('ad_impression', { adId: id, ownerId });
-                    }
-                }
-            }
-            catch (error) {
-                console.error('Error emitting ad analytics update after impression:', error);
-            }
             res.json({ success: true });
         }
         catch (error) {
-            console.error('Error tracking ad impression:', error);
-            res.status(500).json({ success: false, error: 'Failed to track ad impression' });
+            console.error('Error tracking impression:', error);
+            res.status(500).json({ success: false, error: 'Failed to track impression' });
         }
     }),
     trackClick: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
-            const ad = yield db.collection('ads').findOne({ id });
-            const updateResult = yield db.collection('adAnalytics').updateOne({ adId: id }, {
-                $setOnInsert: {
-                    adId: id,
-                    ownerId: (ad === null || ad === void 0 ? void 0 : ad.ownerId) || null,
-                    spend: 0,
-                    conversions: 0,
-                    impressions: 0,
-                    reach: 0,
-                    engagement: 0
-                },
-                $inc: {
-                    clicks: 1
-                },
+            const analytics = yield db.collection('adAnalytics').findOne({ adId: id });
+            const impressions = (analytics === null || analytics === void 0 ? void 0 : analytics.impressions) || 1; // Prevent div/0
+            const currentClicks = (analytics === null || analytics === void 0 ? void 0 : analytics.clicks) || 0;
+            yield db.collection('adAnalytics').updateOne({ adId: id }, {
+                $inc: { clicks: 1 },
                 $set: {
-                    lastUpdated: Date.now()
+                    lastUpdated: Date.now(),
+                    ctr: ((currentClicks + 1) / impressions) * 100
                 }
             }, { upsert: true });
-            try {
-                const ownerId = (ad === null || ad === void 0 ? void 0 : ad.ownerId) || updateResult.ownerId;
-                if (ownerId) {
-                    const appInstance = req.app;
-                    const io = (appInstance === null || appInstance === void 0 ? void 0 : appInstance.get) && appInstance.get('io');
-                    if (io && typeof io.to === 'function') {
-                        const analyticsDoc = yield db.collection('adAnalytics').findOne({ adId: id });
-                        const impressions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.impressions) || 0;
-                        const clicks = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.clicks) || 0;
-                        const engagement = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.engagement) || 0;
-                        const conversions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.conversions) || 0;
-                        const spend = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.spend) || 0;
-                        const reach = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.reach) || impressions;
-                        const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-                        const lastUpdated = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.lastUpdated) || Date.now();
-                        io.to(`user:${ownerId}`).emit('analytics_update', {
-                            userId: ownerId,
-                            stats: {
-                                adMetrics: {
-                                    adId: id,
-                                    impressions,
-                                    clicks,
-                                    ctr,
-                                    reach,
-                                    engagement,
-                                    conversions,
-                                    spend,
-                                    lastUpdated
-                                }
-                            }
-                        });
-                    }
-                }
-            }
-            catch (error) {
-                console.error('Error emitting ad analytics update after click:', error);
-            }
             res.json({ success: true });
         }
         catch (error) {
-            console.error('Error tracking ad click:', error);
-            res.status(500).json({ success: false, error: 'Failed to track ad click' });
+            console.error('Error tracking click:', error);
+            res.status(500).json({ success: false, error: 'Failed to track click' });
         }
     }),
     trackEngagement: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
-            const ad = yield db.collection('ads').findOne({ id });
             yield db.collection('adAnalytics').updateOne({ adId: id }, {
-                $setOnInsert: {
-                    adId: id,
-                    ownerId: (ad === null || ad === void 0 ? void 0 : ad.ownerId) || null,
-                    spend: 0,
-                    conversions: 0
-                },
-                $inc: {
-                    engagement: 1
-                },
-                $set: {
-                    lastUpdated: Date.now()
-                }
+                $inc: { engagement: 1 },
+                $set: { lastUpdated: Date.now() }
             }, { upsert: true });
-            try {
-                const ownerId = ad === null || ad === void 0 ? void 0 : ad.ownerId;
-                if (ownerId) {
-                    const appInstance = req.app;
-                    const io = (appInstance === null || appInstance === void 0 ? void 0 : appInstance.get) && appInstance.get('io');
-                    if (io && typeof io.to === 'function') {
-                        const analyticsDoc = yield db.collection('adAnalytics').findOne({ adId: id });
-                        const impressions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.impressions) || 0;
-                        const clicks = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.clicks) || 0;
-                        const engagement = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.engagement) || 0;
-                        const conversions = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.conversions) || 0;
-                        const spend = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.spend) || 0;
-                        const reach = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.reach) || impressions;
-                        const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-                        const lastUpdated = (analyticsDoc === null || analyticsDoc === void 0 ? void 0 : analyticsDoc.lastUpdated) || Date.now();
-                        io.to(`user:${ownerId}`).emit('analytics_update', {
-                            userId: ownerId,
-                            stats: {
-                                adMetrics: {
-                                    adId: id,
-                                    impressions,
-                                    clicks,
-                                    ctr,
-                                    reach,
-                                    engagement,
-                                    conversions,
-                                    spend,
-                                    lastUpdated
-                                }
-                            }
-                        });
-                        io.to(`user:${ownerId}`).emit('ad_engagement', { adId: id, ownerId });
-                    }
-                }
-            }
-            catch (error) {
-                console.error('Error emitting ad analytics update after engagement:', error);
-            }
             res.json({ success: true });
         }
         catch (error) {
-            console.error('Error tracking ad engagement:', error);
-            res.status(500).json({ success: false, error: 'Failed to track ad engagement' });
+            console.error('Error tracking engagement:', error);
+            res.status(500).json({ success: false, error: 'Failed to track engagement' });
+        }
+    }),
+    trackConversion: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            // A conversion is a high-value action. We might want to track metadata (e.g. value, type)
+            // For now, we just increment the counter.
+            yield db.collection('adAnalytics').updateOne({ adId: id }, {
+                $inc: { conversions: 1 },
+                $set: { lastUpdated: Date.now() }
+            }, { upsert: true });
+            res.json({ success: true });
+        }
+        catch (error) {
+            console.error('Error tracking conversion:', error);
+            res.status(500).json({ success: false, error: 'Failed to track conversion' });
         }
     })
 };

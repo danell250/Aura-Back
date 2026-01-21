@@ -54,7 +54,6 @@ const passport_google_oauth20_1 = require("passport-google-oauth20");
 const passport_github2_1 = require("passport-github2");
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const geminiRoutes_1 = __importDefault(require("./routes/geminiRoutes"));
-const birthdayRoutes_1 = __importDefault(require("./routes/birthdayRoutes"));
 const uploadRoutes_1 = __importDefault(require("./routes/uploadRoutes"));
 const postsRoutes_1 = __importDefault(require("./routes/postsRoutes"));
 const usersRoutes_1 = __importDefault(require("./routes/usersRoutes"));
@@ -150,7 +149,7 @@ passport_1.default.deserializeUser((id, done) => __awaiter(void 0, void 0, void 
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
 // Ensure uploads directory exists
-const uploadsDir = path_1.default.join(__dirname, '../uploads');
+const uploadsDir = path_1.default.join(process.cwd(), 'uploads');
 if (!fs_1.default.existsSync(uploadsDir)) {
     fs_1.default.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -285,7 +284,6 @@ app.use('/api/users', (req, res, next) => {
     console.log(`Users route hit: ${req.method} ${req.path}`);
     next();
 }, usersRoutes_1.default);
-app.use('/api/birthdays', birthdayRoutes_1.default);
 // Logout route (legacy - moved to /auth)
 app.get('/api/auth/logout', (req, res) => {
     req.logout((err) => {

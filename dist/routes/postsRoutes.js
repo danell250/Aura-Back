@@ -44,6 +44,8 @@ router.get('/', authMiddleware_1.optionalAuth, postsController_1.postsController
 router.get('/stream', authMiddleware_1.optionalAuth, postsController_1.postsController.streamEvents);
 // GET /api/posts/hashtags/trending - Get trending hashtags
 router.get('/hashtags/trending', postsController_1.postsController.getTrendingHashtags);
+// GET /api/posts/:id/analytics - Get post analytics
+router.get('/:id/analytics', authMiddleware_1.requireAuth, postsController_1.postsController.getPostAnalytics);
 // GET /api/posts/:id - Get post by ID
 router.get('/:id', authMiddleware_1.optionalAuth, postsController_1.postsController.getPostById);
 router.post('/', postsWriteRateLimiter, authMiddleware_1.requireAuth, uploadMiddleware_1.upload.array('media', 10), postsController_1.postsController.createPost);
@@ -52,7 +54,7 @@ router.delete('/:id', postsWriteRateLimiter, authMiddleware_1.requireAuth, posts
 router.post('/:id/react', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.reactToPost);
 router.post('/:id/boost', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.boostPost);
 router.post('/:id/share', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.sharePost);
-router.post('/:id/share-birthday', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.shareBirthdayPost);
 router.post('/:id/report', postsWriteRateLimiter, authMiddleware_1.requireAuth, postsController_1.postsController.reportPost);
 router.post('/:id/view', authMiddleware_1.optionalAuth, postsController_1.postsController.incrementPostViews);
+router.post('/:id/media/:mediaId/metrics', authMiddleware_1.optionalAuth, postsController_1.postsController.updateMediaMetrics);
 exports.default = router;

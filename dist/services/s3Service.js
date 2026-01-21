@@ -13,18 +13,28 @@ exports.getUploadUrl = getUploadUrl;
 const client_s3_1 = require("@aws-sdk/client-s3");
 const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
 const s3 = new client_s3_1.S3Client({
-    region: process.env.AWS_REGION || process.env.S3_REGION
+    region: process.env.S3_REGION,
+    credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY_ID,
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY
+    },
+    requestChecksumCalculation: "WHEN_REQUIRED"
 });
 function getUploadUrl(params) {
     return __awaiter(this, void 0, void 0, function* () {
-        const Bucket = process.env.AWS_S3_BUCKET || process.env.S3_BUCKET_NAME;
+        const Bucket = process.env.S3_BUCKET_NAME;
+        if (!Bucket) {
+            throw new Error("S3_BUCKET_NAME environment variable is not set");
+        }
         const command = new client_s3_1.PutObjectCommand({
             Bucket,
             Key: params.key,
             ContentType: params.contentType,
+            // ❌ DO NOT set ChecksumAlgorithm 
+            // ❌ DO NOT set ACL 
         });
-        const uploadUrl = yield (0, s3_request_presigner_1.getSignedUrl)(s3, command, { expiresIn: 60 }); // 60s
-        const region = process.env.AWS_REGION || process.env.S3_REGION;
+        const uploadUrl = yield (0, s3_request_presigner_1.getSignedUrl)(s3, command, { expiresIn: 300 }); // 300s
+        const region = process.env.S3_REGION;
         const publicUrl = `https://${Bucket}.s3.${region}.amazonaws.com/${params.key}`;
         return { uploadUrl, publicUrl };
     });

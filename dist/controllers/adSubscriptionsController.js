@@ -13,6 +13,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.adSubscriptionsController = void 0;
+exports.getCurrentBillingWindow = getCurrentBillingWindow;
+exports.ensureCurrentPeriod = ensureCurrentPeriod;
 const db_1 = require("../db");
 const axios_1 = __importDefault(require("axios"));
 const securityLogger_1 = require("../utils/securityLogger");
@@ -53,6 +55,42 @@ function verifyPayPalWebhookSignature(req) {
             }
         });
         return verifyResponse.data.verification_status === 'SUCCESS';
+    });
+}
+const adPlans_1 = require("../constants/adPlans");
+function getCurrentBillingWindow(subscriptionStart) {
+    const start = new Date(subscriptionStart);
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + 1);
+    return { start, end };
+}
+const BILLING_MS = 30 * 24 * 60 * 60 * 1000;
+function ensureCurrentPeriod(db, sub) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d;
+        const now = Date.now();
+        let periodStart = (_b = (_a = sub.periodStart) !== null && _a !== void 0 ? _a : sub.startDate) !== null && _b !== void 0 ? _b : now;
+        let periodEnd = (_d = (_c = sub.periodEnd) !== null && _c !== void 0 ? _c : sub.nextBillingDate) !== null && _d !== void 0 ? _d : (periodStart + BILLING_MS);
+        // catch up if multiple months passed
+        while (now >= periodEnd) {
+            periodStart = periodEnd;
+            periodEnd = periodEnd + BILLING_MS;
+        }
+        // if period moved, reset adsUsed and impressionsUsed
+        const changed = periodStart !== sub.periodStart || periodEnd !== sub.periodEnd;
+        if (changed) {
+            yield db.collection('adSubscriptions').updateOne({ id: sub.id }, {
+                $set: {
+                    periodStart,
+                    periodEnd,
+                    adsUsed: 0,
+                    impressionsUsed: 0,
+                    updatedAt: now
+                }
+            });
+            return Object.assign(Object.assign({}, sub), { periodStart, periodEnd, adsUsed: 0, impressionsUsed: 0 });
+        }
+        return sub;
     });
 }
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
@@ -100,6 +138,11 @@ exports.adSubscriptionsController = {
             const endDate = durationDays ? now + (durationDays * 24 * 60 * 60 * 1000) : undefined;
             // For subscriptions, next billing is typically 30 days from start
             const nextBillingDate = !durationDays ? now + (30 * 24 * 60 * 60 * 1000) : undefined;
+            const plan = adPlans_1.AD_PLANS[packageId];
+            const impressionLimit = plan ? plan.impressionLimit : 0;
+            const BILLING_MS = 30 * 24 * 60 * 60 * 1000;
+            const periodStart = now;
+            const periodEnd = nextBillingDate || (now + BILLING_MS);
             const newSubscription = {
                 id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
                 userId,
@@ -110,8 +153,12 @@ exports.adSubscriptionsController = {
                 endDate,
                 nextBillingDate,
                 paypalSubscriptionId: paypalSubscriptionId || null,
+                periodStart,
+                periodEnd,
                 adsUsed: 0,
+                impressionsUsed: 0,
                 adLimit,
+                impressionLimit,
                 createdAt: now,
                 updatedAt: now
             };
@@ -257,7 +304,7 @@ exports.adSubscriptionsController = {
             const { userId } = req.params;
             const db = (0, db_1.getDB)();
             const now = Date.now();
-            // Find active subscriptions that haven't expired and have available ad slots
+            // Find active subscriptions that haven't expired
             const activeSubscriptions = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION)
                 .find({
                 userId,
@@ -265,11 +312,15 @@ exports.adSubscriptionsController = {
                 $or: [
                     { endDate: { $exists: false } }, // Ongoing subscriptions
                     { endDate: { $gt: now } } // Not expired
-                ],
-                $expr: { $lt: ['$adsUsed', '$adLimit'] } // Has available ad slots
+                ]
             })
                 .sort({ createdAt: -1 })
                 .toArray();
+            // Update subscription periods and return
+            const updated = [];
+            for (const sub of activeSubscriptions) {
+                updated.push(yield ensureCurrentPeriod(db, sub));
+            }
             // Auto-expire any subscriptions that have passed their end date
             yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany({
                 userId,
@@ -280,7 +331,7 @@ exports.adSubscriptionsController = {
             });
             res.json({
                 success: true,
-                data: activeSubscriptions
+                data: updated
             });
         }
         catch (error) {
@@ -373,6 +424,7 @@ exports.adSubscriptionsController = {
                         yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne({ _id: subscription._id }, {
                             $set: {
                                 adsUsed: 0,
+                                impressionsUsed: 0,
                                 updatedAt: Date.now(),
                                 status: 'active'
                             }

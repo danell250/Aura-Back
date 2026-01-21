@@ -11,6 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.privacyController = void 0;
 const db_1 = require("../db");
+const userUtils_1 = require("../utils/userUtils");
 exports.privacyController = {
     // GET /api/privacy/settings/:userId - Get user's privacy settings
     getPrivacySettings: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -210,10 +211,11 @@ exports.privacyController = {
                 delete searchQuery.$or; // Remove the original $or since we're using $and now
             }
             const searchableUsers = yield db.collection('users').find(searchQuery).toArray();
+            const transformedUsers = (0, userUtils_1.transformUsers)(searchableUsers);
             res.json({
                 success: true,
-                data: searchableUsers,
-                count: searchableUsers.length,
+                data: transformedUsers,
+                count: transformedUsers.length,
                 query: q
             });
         }

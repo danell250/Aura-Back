@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateContent = exports.analyzeDataAura = exports.generateQuirkyBirthdayWish = exports.suggestReply = exports.generatePostInspiration = void 0;
+exports.generateContent = exports.analyzeDataAura = exports.suggestReply = exports.generatePostInspiration = void 0;
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 // Fallback responses for when Gemini API is not available
@@ -30,13 +30,6 @@ const fallbackResponses = {
         "Amazing vibes! 🌟",
         "Beautifully said! 💫",
         "This resonates! 🎵"
-    ],
-    birthdays: [
-        "{name}, your frequency is undeniable! Stay weird! 🌀🎸🎂",
-        "Universal sync complete: {name} is officially one orbit older! 🚀✨🎂",
-        "{name}, another rotation around the sun completed! Your aura shines bright! 🌟🎉🎂",
-        "Neural network confirms: {name} has leveled up! Congrats! 🎮🏆🎂",
-        "{name}, your energy levels are at maximum! Keep shining! ⚡💫🎂"
     ],
     analysis: [
         "Your aura radiates creativity and authenticity. Digital Frequency: Creative, Authentic, Inspiring.",
@@ -99,24 +92,6 @@ const suggestReply = (req, res) => __awaiter(void 0, void 0, void 0, function* (
     }
 });
 exports.suggestReply = suggestReply;
-const generateQuirkyBirthdayWish = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { name, bio = "" } = req.body;
-    try {
-        // Check if Gemini API is available
-        if (process.env.GEMINI_API_KEY) {
-            // If Gemini API key exists, you could optionally use it here
-            // For now, we'll use fallback responses
-        }
-        // Use fallback response with name placeholder
-        const fallbackResponse = getRandomResponse('birthdays', { name });
-        res.json({ text: fallbackResponse });
-    }
-    catch (error) {
-        console.error("Birthday Error:", error);
-        res.status(500).json({ error: `Universal sync complete: ${name} is officially one orbit older. Energy levels at maximum! 🚀✨🎂` });
-    }
-});
-exports.generateQuirkyBirthdayWish = generateQuirkyBirthdayWish;
 const analyzeDataAura = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { userData, posts } = req.body;
     try {

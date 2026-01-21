@@ -23,9 +23,14 @@ const s3Region = process.env.S3_REGION || 'us-east-1';
 const s3Bucket = process.env.S3_BUCKET_NAME || '';
 const s3PublicBaseUrl = process.env.S3_PUBLIC_BASE_URL || '';
 const s3Client = new client_s3_1.S3Client({
-    region: s3Region
+    region: process.env.S3_REGION,
+    credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY_ID,
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY
+    },
+    requestChecksumCalculation: "WHEN_REQUIRED"
 });
-const uploadsDir = path_1.default.resolve(__dirname, '..', '..', 'uploads');
+const uploadsDir = path_1.default.join(process.cwd(), 'uploads');
 const hasCloudinaryConfig = !!process.env.CLOUDINARY_NAME &&
     !!process.env.CLOUDINARY_KEY &&
     !!process.env.CLOUDINARY_SECRET;
@@ -93,6 +98,11 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
     const filename = `${(0, uuid_1.v4)()}${fileExtension}`;
     const objectKey = `uploads/${filename}`;
     if (!s3Bucket) {
+        if (process.env.NODE_ENV === 'production') {
+            console.error("S3_BUCKET_NAME is not configured");
+            return res.status(500).json({ error: 'S3_BUCKET_NAME not configured' });
+        }
+        // Local fallback for dev only
         try {
             if (!fs_1.default.existsSync(uploadsDir)) {
                 fs_1.default.mkdirSync(uploadsDir, { recursive: true });
@@ -128,8 +138,8 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
             Bucket: s3Bucket,
             Key: objectKey,
             Body: req.file.buffer,
-            ContentType: req.file.mimetype,
-            ACL: 'public-read'
+            ContentType: req.file.mimetype
+            // ACL removed to support buckets with 'Block Public Access' enabled
         });
         yield s3Client.send(putCommand);
         const urlFromBase = s3PublicBaseUrl
@@ -156,35 +166,7 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
     }
     catch (error) {
         console.error('Failed to upload file to storage bucket:', error);
-        try {
-            if (!fs_1.default.existsSync(uploadsDir)) {
-                fs_1.default.mkdirSync(uploadsDir, { recursive: true });
-            }
-            const filePath = path_1.default.join(uploadsDir, filename);
-            fs_1.default.writeFileSync(filePath, req.file.buffer);
-            const urlFromBase = `/uploads/${filename}`;
-            const db = (0, db_1.getDB)();
-            yield db.collection('mediaFiles').insertOne({
-                storageProvider: 'local',
-                path: filePath,
-                filename: objectKey,
-                originalName: req.file.originalname,
-                mimetype: req.file.mimetype,
-                size: req.file.size,
-                url: urlFromBase,
-                scanStatus: 'not_enabled',
-                uploadedAt: new Date().toISOString()
-            });
-            return res.json({
-                url: urlFromBase,
-                filename: objectKey,
-                mimetype: req.file.mimetype
-            });
-        }
-        catch (localError) {
-            console.error('Failed to store file locally after storage bucket failure:', localError);
-            return res.status(500).json({ error: 'Failed to upload file' });
-        }
+        return res.status(500).json({ error: 'Failed to upload file to S3', details: error.message });
     }
 });
 exports.uploadFile = uploadFile;

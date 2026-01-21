@@ -14,9 +14,14 @@ const client_s3_1 = require("@aws-sdk/client-s3");
 const s3Region = process.env.S3_REGION || 'us-east-1';
 const s3Bucket = process.env.S3_BUCKET_NAME || '';
 const s3PublicBaseUrl = process.env.S3_PUBLIC_BASE_URL || '';
-// Credentials are automatically loaded from AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY env vars
+// Credentials are automatically loaded from S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY env vars
 const s3Client = new client_s3_1.S3Client({
-    region: s3Region
+    region: process.env.S3_REGION,
+    credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY_ID,
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY
+    },
+    requestChecksumCalculation: "WHEN_REQUIRED"
 });
 function uploadToS3(folder, filename, fileBuffer, contentType) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -27,7 +32,7 @@ function uploadToS3(folder, filename, fileBuffer, contentType) {
             Key: key,
             Body: fileBuffer,
             ContentType: contentType,
-            // ACL: 'public-read' // Uncomment if your bucket requires ACLs for public access
+            // NO ACL
         });
         yield s3Client.send(command);
         if (s3PublicBaseUrl) {

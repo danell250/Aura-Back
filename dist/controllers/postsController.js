@@ -14,8 +14,10 @@ const db_1 = require("../db");
 const hashtagUtils_1 = require("../utils/hashtagUtils");
 const notificationsController_1 = require("./notificationsController");
 const s3Upload_1 = require("../utils/s3Upload");
+const userUtils_1 = require("../utils/userUtils");
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
+const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 const postSseClients = [];
 const broadcastPostViewUpdate = (payload) => {
     if (!postSseClients.length)
@@ -194,7 +196,13 @@ exports.postsController = {
                 }
             ];
             const posts = yield db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
-            res.json({ success: true, data: posts });
+            const transformedPosts = posts.map((post) => {
+                if (post.author) {
+                    post.author = (0, userUtils_1.transformUser)(post.author);
+                }
+                return post;
+            });
+            res.json({ success: true, data: transformedPosts });
         }
         catch (error) {
             console.error('Error searching posts:', error);
@@ -346,8 +354,11 @@ exports.postsController = {
             const countResult = yield db.collection(POSTS_COLLECTION).aggregate(countPipeline).toArray();
             const total = ((_b = countResult[0]) === null || _b === void 0 ? void 0 : _b.total) || 0;
             // Post-process to add userReactions for the current user
-            if (currentUserId) {
-                data.forEach((post) => {
+            const transformedData = data.map((post) => {
+                if (post.author) {
+                    post.author = (0, userUtils_1.transformUser)(post.author);
+                }
+                if (currentUserId) {
                     if (post.reactionUsers) {
                         post.userReactions = Object.keys(post.reactionUsers).filter(emoji => Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId));
                     }
@@ -356,11 +367,12 @@ exports.postsController = {
                     }
                     // Optional: Remove reactionUsers from response to save bandwidth/privacy
                     // delete post.reactionUsers; 
-                });
-            }
+                }
+                return post;
+            });
             res.json({
                 success: true,
-                data,
+                data: transformedData,
                 pagination: {
                     page: pageNum,
                     limit: limitNum,
@@ -457,6 +469,9 @@ exports.postsController = {
             }
             delete post.authorDetails;
             // Post-process to add userReactions for the current user
+            if (post.author) {
+                post.author = (0, userUtils_1.transformUser)(post.author);
+            }
             if (currentUserId) {
                 if (post.reactionUsers) {
                     post.userReactions = Object.keys(post.reactionUsers).filter(emoji => Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId));
@@ -518,7 +533,8 @@ exports.postsController = {
     // POST /api/posts - Create new post
     createPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { content, mediaUrl, mediaType, mediaItems, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle, timezone, visibility, isBirthdayPost, isSystemPost, systemType, ownerId, createdByUserId, birthdayYear } = req.body;
+            const { content, mediaUrl, mediaType, mediaKey, mediaMimeType, mediaSize, mediaItems, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle, timezone, visibility, isSystemPost, systemType, ownerId, createdByUserId, id // Allow frontend to provide ID (e.g. for S3 key consistency)
+             } = req.body;
             if (!authorId) {
                 return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
             }
@@ -531,11 +547,19 @@ exports.postsController = {
                     const path = `${authorId}/${Date.now()}-${sanitize(file.originalname)}`;
                     const url = yield (0, s3Upload_1.uploadToS3)('media', path, file.buffer, file.mimetype);
                     const type = file.mimetype.startsWith('video/') ? 'video' : 'image';
-                    uploadedMediaItems.push({ url, type });
+                    uploadedMediaItems.push({
+                        url,
+                        type,
+                        key: path,
+                        mimeType: file.mimetype,
+                        size: file.size,
+                        caption: '', // Default caption
+                        id: `media-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` // Generate ID immediately
+                    });
                 }
             }
             // Merge uploaded items with existing items
-            let parsedMediaItems = mediaItems;
+            let parsedMediaItems = [];
             if (typeof mediaItems === 'string') {
                 try {
                     parsedMediaItems = JSON.parse(mediaItems);
@@ -544,13 +568,34 @@ exports.postsController = {
                     parsedMediaItems = [];
                 }
             }
-            const finalMediaItems = [...(parsedMediaItems || []), ...uploadedMediaItems];
+            else if (Array.isArray(mediaItems)) {
+                parsedMediaItems = mediaItems;
+            }
+            const mergedItems = [...(parsedMediaItems || []), ...uploadedMediaItems];
+            // Enhance media items with metrics and order
+            const finalMediaItems = mergedItems.map((item, index) => ({
+                // Strong rule: use mediaKey as id if available, otherwise create one
+                id: item.key || item.id || `mi-${index}-${Date.now()}`,
+                url: item.url,
+                type: item.type,
+                key: item.key,
+                mimeType: item.mimeType,
+                size: item.size,
+                caption: item.caption || '',
+                order: index,
+                metrics: item.metrics || {
+                    views: 0,
+                    clicks: 0,
+                    saves: 0,
+                    dwellMs: 0
+                }
+            }));
             // Determine primary mediaUrl/Type if not set
             let finalMediaUrl = mediaUrl;
             let finalMediaType = mediaType;
-            if (uploadedMediaItems.length > 0 && !finalMediaUrl) {
-                finalMediaUrl = uploadedMediaItems[0].url;
-                finalMediaType = uploadedMediaItems[0].type;
+            if (finalMediaItems.length > 0 && !finalMediaUrl) {
+                finalMediaUrl = finalMediaItems[0].url;
+                finalMediaType = finalMediaItems[0].type;
             }
             const hasText = typeof content === 'string' && content.trim().length > 0;
             const hasMedia = !!finalMediaUrl || (Array.isArray(finalMediaItems) && finalMediaItems.length > 0);
@@ -567,6 +612,7 @@ exports.postsController = {
                 name: author.name,
                 handle: author.handle,
                 avatar: author.avatar,
+                avatarKey: author.avatarKey,
                 avatarType: author.avatarType || 'image',
                 activeGlow: author.activeGlow
             } : {
@@ -583,9 +629,10 @@ exports.postsController = {
             const normalizedVisibility = visibility === 'private' || visibility === 'acquaintances' ? visibility : 'public';
             const hashtags = (0, hashtagUtils_1.getHashtagsFromText)(safeContent);
             const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
-            const postId = isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`;
+            // Use provided ID if available, otherwise generate one
+            const postId = id || (isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`);
             const currentYear = new Date().getFullYear();
-            const newPost = Object.assign(Object.assign(Object.assign({ id: postId, author: authorEmbed, authorId: authorEmbed.id, ownerId: ownerId || authorEmbed.id, content: safeContent, mediaUrl: finalMediaUrl || undefined, mediaType: finalMediaType || undefined, mediaItems: finalMediaItems || undefined, sharedFrom: req.body.sharedFrom || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), visibility: normalizedVisibility, reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
+            const newPost = Object.assign(Object.assign({ id: postId, author: authorEmbed, authorId: authorEmbed.id, ownerId: ownerId || authorEmbed.id, content: safeContent, mediaUrl: finalMediaUrl || undefined, mediaType: finalMediaType || undefined, mediaKey: mediaKey || undefined, mediaMimeType: mediaMimeType || undefined, mediaSize: mediaSize || undefined, mediaItems: finalMediaItems || undefined, sharedFrom: req.body.sharedFrom || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), visibility: normalizedVisibility, reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
                 isTimeCapsule: true,
                 unlockDate: unlockDate || null,
                 isUnlocked: unlockDate ? Date.now() >= unlockDate : true,
@@ -593,9 +640,6 @@ exports.postsController = {
                 invitedUsers: invitedUsers || [],
                 timeCapsuleTitle: timeCapsuleTitle || null,
                 timezone: timezone || null
-            })), (isBirthdayPost && {
-                isBirthdayPost: true,
-                birthdayYear: birthdayYear || currentYear
             })), (isSystemPost && {
                 isSystemPost: true,
                 systemType: systemType || null,
@@ -615,17 +659,6 @@ exports.postsController = {
                     .map((userId) => (0, notificationsController_1.createNotificationInDB)(userId, 'time_capsule_invite', authorEmbed.id, `invited you to a Time Capsule${timeCapsuleTitle ? `: "${timeCapsuleTitle}"` : ''}`, postId).catch(err => {
                     console.error('Error creating time capsule invite notification:', err);
                 })));
-            }
-            if (isBirthdayPost) {
-                const acquaintances = Array.isArray(author === null || author === void 0 ? void 0 : author.acquaintances) ? author.acquaintances : [];
-                if (acquaintances.length > 0) {
-                    const yearKey = `birthday-${authorEmbed.id}-${currentYear}`;
-                    yield Promise.all(acquaintances
-                        .filter(id => id && id !== authorEmbed.id)
-                        .map(id => (0, notificationsController_1.createNotificationInDB)(id, 'birthday', authorEmbed.id, `It’s ${authorEmbed.firstName || 'Someone'}'s birthday today 🎂`, postId, undefined, { birthdayUserId: authorEmbed.id, year: currentYear }, yearKey).catch(err => {
-                        console.error('Error creating birthday notification:', err);
-                    })));
-                }
             }
             res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
         }
@@ -660,6 +693,9 @@ exports.postsController = {
             const updatedDoc = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!updatedDoc) {
                 return res.status(500).json({ success: false, error: 'Failed to update post' });
+            }
+            if (updatedDoc.author) {
+                updatedDoc.author = (0, userUtils_1.transformUser)(updatedDoc.author);
             }
             res.json({ success: true, data: updatedDoc, message: 'Post updated successfully' });
         }
@@ -780,31 +816,78 @@ exports.postsController = {
                 .limit(5)
                 .toArray();
             const user = yield db.collection(USERS_COLLECTION).findOne({ id: userId }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
+            // Fetch active subscription to determine analytics level
+            const activeSub = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({
+                userId,
+                status: 'active',
+                $or: [
+                    { endDate: { $exists: false } },
+                    { endDate: { $gt: Date.now() } }
+                ]
+            });
+            let analyticsLevel = 'none';
+            if (activeSub) {
+                if (activeSub.packageId === 'pkg-enterprise')
+                    analyticsLevel = 'deep';
+                else if (activeSub.packageId === 'pkg-pro')
+                    analyticsLevel = 'creator';
+                else if (activeSub.packageId === 'pkg-starter')
+                    analyticsLevel = 'basic';
+            }
+            // Base data structure
+            const responseData = {
+                totals: {
+                    totalPosts: (_b = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _b !== void 0 ? _b : 0,
+                    totalViews: (_c = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _c !== void 0 ? _c : 0,
+                    boostedPosts: (_d = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _d !== void 0 ? _d : 0,
+                    totalRadiance: (_e = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _e !== void 0 ? _e : 0
+                },
+                credits: {
+                    balance: (_f = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _f !== void 0 ? _f : 0,
+                    spent: (_g = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _g !== void 0 ? _g : 0
+                },
+                topPosts: topPosts.map((p) => {
+                    var _a, _b;
+                    return ({
+                        id: p.id,
+                        preview: (p.content || '').slice(0, 120),
+                        views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
+                        timestamp: p.timestamp,
+                        isBoosted: !!p.isBoosted,
+                        radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
+                    });
+                })
+            };
+            // Apply gating based on plan
+            if (analyticsLevel === 'creator' || analyticsLevel === 'deep') {
+                // Additional Creator level stats can be added here in the future
+            }
+            if (analyticsLevel === 'deep') {
+                // Add Deep Neural Analytics (Mock data for now as per requirements)
+                responseData.neuralInsights = {
+                    audienceBehavior: {
+                        retention: 'High',
+                        engagementRate: '4.5%',
+                        topLocations: ['US', 'UK', 'CA']
+                    },
+                    timingOptimization: {
+                        bestTimeToPost: 'Wednesday 6:00 PM',
+                        peakActivity: 'Weekends'
+                    },
+                    conversionInsights: {
+                        clickThroughRate: '2.1%',
+                        conversionScore: 85
+                    }
+                };
+            }
+            // If level is 'none' (free user), we might want to hide even basic stats or show them as a teaser.
+            // For now, returning basic stats (posts/views) is fair for free users too, 
+            // but strictly following "Personal Pulse -> basic stats" might imply free users get less.
+            // However, preventing errors on frontend is priority.
             return res.json({
                 success: true,
-                data: {
-                    totals: {
-                        totalPosts: (_b = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _b !== void 0 ? _b : 0,
-                        totalViews: (_c = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _c !== void 0 ? _c : 0,
-                        boostedPosts: (_d = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _d !== void 0 ? _d : 0,
-                        totalRadiance: (_e = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _e !== void 0 ? _e : 0
-                    },
-                    credits: {
-                        balance: (_f = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _f !== void 0 ? _f : 0,
-                        spent: (_g = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _g !== void 0 ? _g : 0
-                    },
-                    topPosts: topPosts.map((p) => {
-                        var _a, _b;
-                        return ({
-                            id: p.id,
-                            preview: (p.content || '').slice(0, 120),
-                            views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
-                            timestamp: p.timestamp,
-                            isBoosted: !!p.isBoosted,
-                            radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
-                        });
-                    })
-                }
+                data: responseData,
+                planLevel: analyticsLevel
             });
         }
         catch (err) {
@@ -915,57 +998,6 @@ exports.postsController = {
             res.status(500).json({ success: false, error: 'Failed to share post', message: 'Internal server error' });
         }
     }),
-    // POST /api/posts/:id/share-birthday - Share a system birthday post (owner only)
-    shareBirthdayPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            const { id } = req.params;
-            const { visibility } = req.body;
-            const user = req.user;
-            if (!user || !user.id) {
-                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
-            }
-            if (visibility !== 'public' && visibility !== 'acquaintances') {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid visibility',
-                    message: "Visibility must be 'public' or 'acquaintances'"
-                });
-            }
-            const db = (0, db_1.getDB)();
-            const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
-            if (!post) {
-                return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
-            }
-            if (!post.isSystemPost || post.systemType !== 'birthday') {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Not a birthday system post',
-                    message: 'share-birthday is only allowed for system birthday posts'
-                });
-            }
-            if (!post.ownerId || post.ownerId !== user.id) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'Forbidden',
-                    message: 'Only the birthday owner can share this post'
-                });
-            }
-            yield db.collection(POSTS_COLLECTION).updateOne({ id }, { $set: { visibility, sharedAt: Date.now() } });
-            const updated = yield db.collection(POSTS_COLLECTION).findOne({ id });
-            if (!updated) {
-                return res.status(500).json({ success: false, error: 'Failed to update birthday post visibility' });
-            }
-            res.json({
-                success: true,
-                data: updated,
-                message: 'Birthday post shared successfully'
-            });
-        }
-        catch (error) {
-            console.error('Error sharing birthday post:', error);
-            res.status(500).json({ success: false, error: 'Failed to share birthday post', message: 'Internal server error' });
-        }
-    }),
     // POST /api/posts/:id/report - Report a post
     reportPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a, _b, _c, _d, _e;
@@ -1040,6 +1072,128 @@ exports.postsController = {
         catch (error) {
             console.error('Error fetching trending hashtags:', error);
             res.status(500).json({ success: false, error: 'Failed to fetch trending hashtags', message: 'Internal server error' });
+        }
+    }),
+    // POST /api/posts/:id/media/:mediaId/metrics - Update media item metrics
+    updateMediaMetrics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id, mediaId } = req.params;
+            const { metric, value } = req.body; // metric: 'views' | 'clicks' | 'saves' | 'dwellMs'
+            if (!['views', 'clicks', 'saves', 'dwellMs'].includes(metric)) {
+                return res.status(400).json({ success: false, error: 'Invalid metric' });
+            }
+            const db = (0, db_1.getDB)();
+            const updateField = `mediaItems.$[elem].metrics.${metric}`;
+            // For dwellMs, we increment by the value provided. For others, we increment by 1.
+            const incrementValue = metric === 'dwellMs' ? (Number(value) || 0) : 1;
+            // Prepare update object
+            const updateDoc = {
+                $inc: {
+                    [updateField]: incrementValue
+                }
+            };
+            // Also track post totals
+            if (metric === 'views') {
+                updateDoc.$inc['metrics.totalViews'] = incrementValue;
+                updateDoc.$inc['viewCount'] = incrementValue; // Keep legacy field in sync
+            }
+            else if (metric === 'clicks') {
+                updateDoc.$inc['metrics.totalClicks'] = incrementValue;
+            }
+            else if (metric === 'saves') {
+                updateDoc.$inc['metrics.totalSaves'] = incrementValue;
+            }
+            else if (metric === 'dwellMs') {
+                updateDoc.$inc['metrics.totalDwellMs'] = incrementValue;
+            }
+            const result = yield db.collection(POSTS_COLLECTION).updateOne({ id }, updateDoc, { arrayFilters: [{ "elem.id": mediaId }] });
+            if (result.matchedCount === 0) {
+                return res.status(404).json({ success: false, error: 'Post or media item not found' });
+            }
+            res.json({ success: true, message: 'Metrics updated' });
+        }
+        catch (error) {
+            console.error('Error updating media metrics:', error);
+            res.status(500).json({ success: false, error: 'Failed to update metrics' });
+        }
+    }),
+    // GET /api/posts/:id/analytics - Get detailed analytics for a post
+    getPostAnalytics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c;
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
+            if (!post) {
+                return res.status(404).json({ success: false, error: 'Post not found' });
+            }
+            // Calculate totals from media items if not present on post
+            const mediaItems = post.mediaItems || [];
+            let totalViews = ((_a = post.metrics) === null || _a === void 0 ? void 0 : _a.totalViews) || post.viewCount || 0;
+            let totalClicks = ((_b = post.metrics) === null || _b === void 0 ? void 0 : _b.totalClicks) || 0;
+            let totalSaves = ((_c = post.metrics) === null || _c === void 0 ? void 0 : _c.totalSaves) || 0;
+            // If metrics are missing on post level (legacy), aggregate from items
+            if (!post.metrics && mediaItems.length > 0) {
+                totalViews = 0; // Reset to recalculate from items if metrics obj missing
+                totalClicks = 0;
+                totalSaves = 0;
+                mediaItems.forEach((item) => {
+                    if (item.metrics) {
+                        totalViews += item.metrics.views || 0;
+                        totalClicks += item.metrics.clicks || 0;
+                        totalSaves += item.metrics.saves || 0;
+                    }
+                });
+                // Fallback to viewCount if items have no data yet
+                if (totalViews === 0 && post.viewCount)
+                    totalViews = post.viewCount;
+            }
+            const items = mediaItems.map((item) => {
+                var _a, _b, _c, _d;
+                const views = ((_a = item.metrics) === null || _a === void 0 ? void 0 : _a.views) || 0;
+                const clicks = ((_b = item.metrics) === null || _b === void 0 ? void 0 : _b.clicks) || 0;
+                const saves = ((_c = item.metrics) === null || _c === void 0 ? void 0 : _c.saves) || 0;
+                const ctr = views > 0 ? (clicks / views) * 100 : 0;
+                return {
+                    id: item.id,
+                    order: item.order,
+                    caption: item.caption,
+                    type: item.type,
+                    url: item.url,
+                    views,
+                    clicks,
+                    saves,
+                    dwellMs: ((_d = item.metrics) === null || _d === void 0 ? void 0 : _d.dwellMs) || 0,
+                    ctr: parseFloat(ctr.toFixed(1))
+                };
+            });
+            // Find best item based on Engagement Score (Clicks * 10 + Views)
+            let bestItemId = null;
+            if (items.length > 0) {
+                const sorted = [...items].sort((a, b) => {
+                    const scoreA = (a.clicks * 10) + a.views;
+                    const scoreB = (b.clicks * 10) + b.views;
+                    return scoreB - scoreA;
+                });
+                bestItemId = sorted[0].id;
+            }
+            res.json({
+                success: true,
+                data: {
+                    postId: id,
+                    totals: {
+                        views: totalViews,
+                        clicks: totalClicks,
+                        saves: totalSaves
+                    },
+                    items,
+                    bestItemId
+                }
+            });
+        }
+        catch (error) {
+            console.error('Error fetching post analytics:', error);
+            res.status(500).json({ success: false, error: 'Failed to fetch analytics' });
         }
     })
 };

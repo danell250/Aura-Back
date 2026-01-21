@@ -666,11 +666,11 @@ export const adsController = {
           totalImpressions += (analytics.impressions ?? 0);
           totalClicks += (analytics.clicks ?? 0);
           
-          if (!isBasic) {
-            totalEngagement += (analytics.engagement ?? 0);
-            totalSpend += (analytics.spend ?? 0);
-            totalConversions += (analytics.conversions ?? 0);
-          }
+          // Include all metrics regardless of plan for now to ensure data visibility
+          // We can enforce strict plan limits later if needed
+          totalEngagement += (analytics.engagement ?? 0);
+          totalSpend += (analytics.spend ?? 0);
+          totalConversions += (analytics.conversions ?? 0);
           
           totalReach += (analytics.reach ?? analytics.impressions ?? 0);
         }
@@ -767,10 +767,40 @@ export const adsController = {
       const { id } = req.params;
       const db = getDB();
       
+      // 1. Get Ad to find owner
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+          // If ad missing, we can't attribute cost, but we should still track impression?
+          // No, if ad is gone, we shouldn't be serving it.
+          return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      // 2. Determine Cost Per Impression (CPI)
+      let cpi = 0;
+      
+      // Look up active subscription for the ad owner
+      const now = Date.now();
+      const subscription = await db.collection('adSubscriptions').findOne({
+          userId: ad.ownerId,
+          status: 'active',
+          $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
+      });
+
+      if (subscription && subscription.packageId) {
+          const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
+          if (plan && plan.impressionLimit > 0) {
+              cpi = plan.numericPrice / plan.impressionLimit;
+          }
+      }
+
       await db.collection('adAnalytics').updateOne(
         { adId: id },
         { 
-          $inc: { impressions: 1, reach: 1 }, 
+          $inc: { 
+            impressions: 1, 
+            reach: 1, 
+            spend: cpi 
+          }, 
           $set: { lastUpdated: Date.now() } 
         }, 
         { upsert: true }
@@ -789,7 +819,8 @@ export const adsController = {
       const db = getDB();
       
       const analytics = await db.collection('adAnalytics').findOne({ adId: id });
-      const impressions = analytics?.impressions || 0;
+      const impressions = analytics?.impressions || 1; // Prevent div/0
+      const currentClicks = analytics?.clicks || 0;
       
       await db.collection('adAnalytics').updateOne(
         { adId: id },
@@ -797,7 +828,7 @@ export const adsController = {
           $inc: { clicks: 1 }, 
           $set: { 
             lastUpdated: Date.now(), 
-            ctr: impressions > 0 ? ((analytics?.clicks + 1) / impressions) * 100 : 0 
+            ctr: ((currentClicks + 1) / impressions) * 100 
           } 
         }, 
         { upsert: true }

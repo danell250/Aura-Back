@@ -27,6 +27,7 @@ exports.usersController = void 0;
 const axios_1 = __importDefault(require("axios"));
 const db_1 = require("../db");
 const s3Upload_1 = require("../utils/s3Upload");
+const userUtils_1 = require("../utils/userUtils");
 const trustService_1 = require("../services/trustService");
 const securityLogger_1 = require("../utils/securityLogger");
 const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
@@ -109,7 +110,7 @@ exports.usersController = {
             const users = yield db.collection('users').find(query).toArray();
             res.json({
                 success: true,
-                data: users,
+                data: (0, userUtils_1.transformUsers)(users),
                 count: users.length
             });
         }
@@ -192,7 +193,7 @@ exports.usersController = {
             }
             res.json({
                 success: true,
-                data: user
+                data: (0, userUtils_1.transformUser)(user)
             });
         }
         catch (error) {
@@ -241,7 +242,6 @@ exports.usersController = {
                 avatarType: userData.avatarType || 'image',
                 email: userData.email,
                 bio: userData.bio || '',
-                dob: userData.dob || '',
                 phone: userData.phone || '',
                 country: userData.country || '',
                 industry: userData.industry || '',
@@ -261,7 +261,7 @@ exports.usersController = {
             console.log('✓ User created:', userId, '| Handle:', uniqueHandle);
             res.status(201).json({
                 success: true,
-                data: newUser,
+                data: (0, userUtils_1.transformUser)(newUser),
                 message: 'User created successfully'
             });
         }
@@ -315,6 +315,19 @@ exports.usersController = {
             else {
                 delete updateData.handle;
             }
+            // Handle avatarKey/coverKey updates.
+            // We save ONLY the key to MongoDB as per requirements.
+            // The avatar/coverImage URLs are constructed on read via transformUser.
+            if (mutableUpdates.avatarKey) {
+                updateData.avatarKey = mutableUpdates.avatarKey;
+                // Ensure we don't save the URL if it was passed in updates or previously existed
+                delete updateData.avatar;
+            }
+            if (mutableUpdates.coverKey) {
+                updateData.coverKey = mutableUpdates.coverKey;
+                // Ensure we don't save the URL if it was passed in updates or previously existed
+                delete updateData.coverImage;
+            }
             updateData.updatedAt = new Date().toISOString();
             const result = yield db.collection('users').updateOne({ id }, { $set: updateData });
             if (result.matchedCount === 0) {
@@ -328,7 +341,7 @@ exports.usersController = {
             const updatedUser = yield db.collection('users').findOne({ id });
             res.json({
                 success: true,
-                data: updatedUser,
+                data: (0, userUtils_1.transformUser)(updatedUser),
                 message: 'User updated successfully'
             });
         }
@@ -381,21 +394,61 @@ exports.usersController = {
                 const profile = files.profile[0];
                 const ext = profile.originalname.split('.').pop();
                 const path = `${userId}/profile.${ext}`;
+                const fullKey = `avatars/${path}`;
                 updates.avatar = yield (0, s3Upload_1.uploadToS3)('avatars', path, profile.buffer, profile.mimetype);
                 updates.avatarType = 'image';
+                updates.avatarKey = fullKey;
             }
             if (files === null || files === void 0 ? void 0 : files.cover) {
                 const cover = files.cover[0];
                 const ext = cover.originalname.split('.').pop();
                 const path = `${userId}/cover.${ext}`;
+                const fullKey = `covers/${path}`;
                 updates.coverImage = yield (0, s3Upload_1.uploadToS3)('covers', path, cover.buffer, cover.mimetype);
                 updates.coverType = 'image';
+                updates.coverKey = fullKey;
             }
             if (Object.keys(updates).length === 0) {
                 return res.json({ success: true, message: 'No images to upload' });
             }
             const db = (0, db_1.getDB)();
             yield db.collection('users').updateOne({ id: userId }, { $set: Object.assign(Object.assign({}, updates), { updatedAt: new Date().toISOString() }) });
+            // Propagate avatar changes to related collections (Posts, Comments, Notifications)
+            if (updates.avatar) {
+                try {
+                    // 1. Update Posts
+                    yield db.collection('posts').updateMany({ "author.id": userId }, {
+                        $set: {
+                            "author.avatar": updates.avatar,
+                            "author.avatarType": updates.avatarType,
+                            "author.avatarKey": updates.avatarKey
+                        }
+                    });
+                    // 2. Update Comments
+                    yield db.collection('comments').updateMany({ "author.id": userId }, {
+                        $set: {
+                            "author.avatar": updates.avatar,
+                            "author.avatarType": updates.avatarType,
+                            "author.avatarKey": updates.avatarKey
+                        }
+                    });
+                    // 3. Update Notifications (in all users who have notifications from this user)
+                    yield db.collection('users').updateMany({ "notifications.fromUser.id": userId }, {
+                        $set: {
+                            "notifications.$[elem].fromUser.avatar": updates.avatar,
+                            "notifications.$[elem].fromUser.avatarType": updates.avatarType,
+                            "notifications.$[elem].fromUser.avatarKey": updates.avatarKey
+                        }
+                    }, {
+                        arrayFilters: [{ "elem.fromUser.id": userId }]
+                    });
+                    console.log(`Propagated avatar update for user ${userId} to posts, comments, and notifications.`);
+                }
+                catch (propError) {
+                    console.error('Error propagating avatar updates:', propError);
+                    // Don't fail the request, just log the error
+                }
+            }
             const updatedUser = yield db.collection('users').findOne({ id: userId });
             res.json({ success: true, user: updatedUser });
         }

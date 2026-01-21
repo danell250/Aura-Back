@@ -13,6 +13,7 @@ exports.messagesController = void 0;
 const Message_1 = require("../models/Message");
 const mongodb_1 = require("mongodb");
 const db_1 = require("../db");
+const userUtils_1 = require("../utils/userUtils");
 exports.messagesController = {
     // GET /api/messages/conversations - Get all conversations for a user
     getConversations: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -77,12 +78,29 @@ exports.messagesController = {
                     }
                 },
                 {
+                    $lookup: {
+                        from: 'users',
+                        localField: '_id',
+                        foreignField: 'id',
+                        as: 'otherUser'
+                    }
+                },
+                {
+                    $unwind: {
+                        path: '$otherUser',
+                        preserveNullAndEmptyArrays: true
+                    }
+                },
+                {
                     $sort: { 'lastMessage.timestamp': -1 }
                 }
             ]).toArray();
             const user = yield db.collection('users').findOne({ id: userId });
             const archivedChats = (user === null || user === void 0 ? void 0 : user.archivedChats) || [];
-            const conversationsWithArchive = conversations.map(conv => (Object.assign(Object.assign({}, conv), { isArchived: archivedChats.includes(conv._id) })));
+            const conversationsWithArchive = conversations.map(conv => {
+                const otherUser = conv.otherUser ? (0, userUtils_1.transformUser)(conv.otherUser) : null;
+                return Object.assign(Object.assign({}, conv), { otherUser, isArchived: archivedChats.includes(conv._id) });
+            });
             res.json({
                 success: true,
                 data: conversationsWithArchive
@@ -147,7 +165,7 @@ exports.messagesController = {
     // POST /api/messages - Send a new message
     sendMessage: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { senderId, receiverId, text, messageType = 'text', mediaUrl, replyTo } = req.body;
+            const { senderId, receiverId, text, messageType = 'text', mediaUrl, mediaKey, mediaMimeType, mediaSize, replyTo } = req.body;
             if (!senderId || !receiverId || !text) {
                 return res.status(400).json({
                     success: false,
@@ -170,6 +188,9 @@ exports.messagesController = {
                 isRead: false,
                 messageType,
                 mediaUrl,
+                mediaKey,
+                mediaMimeType,
+                mediaSize,
                 replyTo,
                 isEdited: false
             };
