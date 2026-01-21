@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
-import { adSubscriptionService } from '../services/adSubscriptionService';
 import axios from 'axios';
 import { logSecurityEvent } from '../utils/securityLogger';
 
@@ -56,6 +55,40 @@ export function getCurrentBillingWindow(subscriptionStart: Date) {
   const end = new Date(start);
   end.setMonth(end.getMonth() + 1);
   return { start, end };
+}
+
+const BILLING_MS = 30 * 24 * 60 * 60 * 1000;
+
+export async function ensureCurrentPeriod(db: any, sub: any) {
+  const now = Date.now();
+  let periodStart = sub.periodStart ?? sub.startDate ?? now;
+  let periodEnd = sub.periodEnd ?? sub.nextBillingDate ?? (periodStart + BILLING_MS);
+
+  // catch up if multiple months passed
+  while (now >= periodEnd) {
+    periodStart = periodEnd;
+    periodEnd = periodEnd + BILLING_MS;
+  }
+
+  // if period moved, reset adsUsed and impressionsUsed
+  const changed = periodStart !== sub.periodStart || periodEnd !== sub.periodEnd;
+  if (changed) {
+    await db.collection('adSubscriptions').updateOne(
+      { id: sub.id },
+      {
+        $set: {
+          periodStart,
+          periodEnd,
+          adsUsed: 0,
+          impressionsUsed: 0,
+          updatedAt: now
+        }
+      }
+    );
+    return { ...sub, periodStart, periodEnd, adsUsed: 0, impressionsUsed: 0 };
+  }
+
+  return sub;
 }
 
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
@@ -123,8 +156,9 @@ export const adSubscriptionsController = {
       const plan = AD_PLANS[packageId as keyof typeof AD_PLANS];
       const impressionLimit = plan ? plan.impressionLimit : 0;
 
-      const periodEnd = new Date(now);
-      periodEnd.setMonth(periodEnd.getMonth() + 1);
+      const BILLING_MS = 30 * 24 * 60 * 60 * 1000;
+      const periodStart = now;
+      const periodEnd = nextBillingDate || (now + BILLING_MS);
 
       const newSubscription = {
         id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
@@ -136,9 +170,9 @@ export const adSubscriptionsController = {
         endDate,
         nextBillingDate,
         paypalSubscriptionId: paypalSubscriptionId || null,
-        periodStart: now,
-        periodEnd: periodEnd.getTime(),
-        adsUsed: 0, // This will track active ads (checked dynamically) or legacy
+        periodStart,
+        periodEnd,
+        adsUsed: 0,
         impressionsUsed: 0,
         adLimit,
         impressionLimit,
@@ -328,21 +362,10 @@ export const adSubscriptionsController = {
         .toArray();
 
       // Update subscription periods and return
-      const enrichedSubscriptions = await Promise.all(activeSubscriptions.map(async (sub) => {
-        // Ensure period is up to date (lazy reset)
-        // This handles the monthly reset logic if it hasn't been triggered by an action yet
-        const updatedSub = await adSubscriptionService.checkAndResetSubscriptionPeriod(sub);
-        
-        return {
-          ...updatedSub,
-          // Explicitly use the stored adsUsed which tracks creation count
-          adsUsed: updatedSub.adsUsed, 
-          // Add computed fields for frontend convenience
-          remainingAds: Math.max(0, (updatedSub.adLimit || 0) - (updatedSub.adsUsed || 0)),
-          currentBillingPeriodStart: updatedSub.periodStart,
-          currentBillingPeriodEnd: updatedSub.periodEnd
-        };
-      }));
+      const updated = [];
+      for (const sub of activeSubscriptions) {
+        updated.push(await ensureCurrentPeriod(db, sub));
+      }
 
       // Auto-expire any subscriptions that have passed their end date
       await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany(
@@ -358,7 +381,7 @@ export const adSubscriptionsController = {
 
       res.json({
         success: true,
-        data: enrichedSubscriptions
+        data: updated
       });
     } catch (error) {
       console.error('Error fetching active subscriptions:', error);

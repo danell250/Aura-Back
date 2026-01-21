@@ -2,24 +2,10 @@ import { Request, Response } from 'express';
 import { getDB } from '../db';
 import { getHashtagsFromText, filterByHashtags } from '../utils/hashtagUtils';
 import { AD_PLANS } from '../constants/adPlans';
-import { getCurrentBillingWindow } from './adSubscriptionsController';
+import { ensureCurrentPeriod } from './adSubscriptionsController';
 
-import { adSubscriptionService } from '../services/adSubscriptionService';
 
-function getBillingWindow(startDate: number | string | Date, now = new Date()) {
-  let windowStart = new Date(startDate);
-  if (windowStart > now) return { windowStart, windowEnd: windowStart };
 
-  let windowEnd = new Date(windowStart);
-  windowEnd.setMonth(windowEnd.getMonth() + 1);
-
-  while (windowEnd <= now) {
-    windowStart = windowEnd;
-    windowEnd = new Date(windowStart);
-    windowEnd.setMonth(windowEnd.getMonth() + 1);
-  }
-  return { windowStart, windowEnd };
-}
 
 export const adsController = {
   // GET /api/ads - Get all ads
@@ -155,58 +141,25 @@ export const adsController = {
         }
 
         // --- NEW LOGIC START ---
-        const { windowStart, windowEnd } = getBillingWindow(subscription.startDate);
-        const nowTs = Date.now();
+        // Ensure subscription period is up to date (resets adsUsed if new month)
+        subscription = await ensureCurrentPeriod(db, subscription);
+        
+        // Hard monthly limit
+        if (subscription.adsUsed >= subscription.adLimit) {
+           const resetDate = subscription.periodEnd 
+             ? new Date(subscription.periodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+             : 'next billing cycle';
 
-        // Check if reset is needed
-        // Use periodStart/periodEnd to match existing service
-        const needsReset = !subscription.periodStart || subscription.periodStart !== windowStart.getTime();
-
-        if (needsReset) {
-          await db.collection('adSubscriptions').updateOne(
-            { id: subscription.id },
-            { 
-              $set: { 
-                adsUsed: 0, 
-                periodStart: windowStart.getTime(), 
-                periodEnd: windowEnd.getTime(), 
-                updatedAt: nowTs 
-              } 
-            }
-          );
-          subscription.adsUsed = 0;
-          subscription.periodStart = windowStart.getTime();
-          subscription.periodEnd = windowEnd.getTime();
-        }
-
-        // Atomic increment if under limit
-        const updated = await db.collection('adSubscriptions').findOneAndUpdate(
-          {
-            id: subscription.id,
-            status: 'active',
-            adsUsed: { $lt: subscription.adLimit },
-          },
-          { $inc: { adsUsed: 1 }, $set: { updatedAt: nowTs } },
-          { returnDocument: 'after' }
-        );
-
-        if (!updated || !updated.value) {
-           // Limit reached
-           const resetDate = new Date(subscription.periodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
            return res.status(409).json({
              success: false,
              code: 'AD_LIMIT_REACHED',
-             error: 'Ad limit reached',
-             message: `You’ve used all ${subscription.adLimit} ads for this month. Your limit resets on ${resetDate}.`,
-             limit: subscription.adLimit,
-             resetsAt: subscription.periodEnd,
-             resetDate,
-             currentUsage: subscription.adLimit
+             error: 'AD_LIMIT_REACHED',
+             message: `You’ve used all ${subscription.adLimit} ads for this month.`,
+             adLimit: subscription.adLimit,
+             adsUsed: subscription.adsUsed,
+             periodEnd: subscription.periodEnd
            });
         }
-        
-        // Update local subscription object for analytics or other uses if needed
-        subscription = updated.value;
         // --- NEW LOGIC END ---
       }
 
@@ -223,6 +176,14 @@ export const adsController = {
       try {
         await db.collection('ads').insertOne(newAd);
 
+        // Increment usage (atomic)
+        if (!isSpecialUser && subscription) {
+          await db.collection('adSubscriptions').updateOne(
+            { id: subscription.id },
+            { $inc: { adsUsed: 1 }, $set: { updatedAt: Date.now() } }
+          );
+        }
+
         await db.collection('adAnalytics').insertOne({
         adId: newAd.id,
         ownerId: newAd.ownerId,
@@ -236,13 +197,9 @@ export const adsController = {
         lastUpdated: Date.now()
         });
       } catch (error) {
-        // Rollback usage if we incremented it
-        if (subscription && !isSpecialUser) {
-           await db.collection('adSubscriptions').updateOne(
-             { id: subscription.id },
-             { $inc: { adsUsed: -1 } }
-           );
-        }
+        console.error('Error during ad creation transaction:', error);
+        // If ad was created but subsequent steps failed, we might want to clean up
+        // But for now, we just throw to ensure the client gets an error
         throw error;
       }
 
@@ -437,7 +394,7 @@ export const adsController = {
       if (status === 'active' && ad.status !== 'active') {
         // Get active subscription
         const now = Date.now();
-        const subscription = await db.collection('adSubscriptions').findOne({
+        let subscription = await db.collection('adSubscriptions').findOne({
           userId: currentUser.id,
           status: 'active',
           $or: [
@@ -445,6 +402,11 @@ export const adsController = {
             { endDate: { $gt: now } }
           ]
         });
+
+        if (subscription) {
+           // Ensure period is current before checking limits
+           subscription = await ensureCurrentPeriod(db, subscription);
+        }
 
         // Note: Ad limit is enforced at creation time (Monthly Quota).
         // We do NOT check simultaneous active ads here.
