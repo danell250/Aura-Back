@@ -4,6 +4,8 @@ import { getHashtagsFromText, filterByHashtags } from '../utils/hashtagUtils';
 import { AD_PLANS } from '../constants/adPlans';
 import { getCurrentBillingWindow } from './adSubscriptionsController';
 
+import { adSubscriptionService } from '../services/adSubscriptionService';
+
 export const adsController = {
   // GET /api/ads - Get all ads
   getAllAds: async (req: Request, res: Response) => {
@@ -141,29 +143,22 @@ export const adsController = {
         // Check active ads count if the new ad is being created as active
         const newAdStatus = adData.status || 'active';
         if (newAdStatus === 'active') {
-          // Calculate start of current billing cycle
-          let window = getCurrentBillingWindow(new Date(subscription.startDate));
-          const now = Date.now();
+          // Check and reset subscription period if needed (using persistent backend fields)
+          subscription = await adSubscriptionService.checkAndResetSubscriptionPeriod(subscription);
           
-          // Find current cycle
-          while (window.end.getTime() <= now) {
-             window = getCurrentBillingWindow(window.end);
-          }
-
-          const activeAdsCount = await db.collection('ads').countDocuments({
-            ownerId: userId,
-            status: 'active',
-            timestamp: { $gte: window.start.getTime(), $lt: window.end.getTime() }
-          });
-
-          // Use adLimit from subscription
+          const activeAdsCount = subscription.adsUsed;
           const planLimit = subscription.adLimit || 0;
 
           if (activeAdsCount >= planLimit) {
+            const resetDate = new Date(subscription.periodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
             return res.status(403).json({
               success: false,
+              code: 'AD_LIMIT_REACHED',
               error: 'AD_LIMIT_REACHED',
-              message: `You’ve reached your ${planLimit} ads for this month.`
+              message: `You’ve used ${activeAdsCount}/${planLimit} ads on ${subscription.packageName || 'your plan'} for this billing month. Your limit resets on ${resetDate}.`,
+              currentUsage: activeAdsCount,
+              limit: planLimit,
+              resetDate
             });
           }
         }
@@ -431,10 +426,28 @@ export const adsController = {
         const planLimit = subscription ? subscription.adLimit : 0;
 
         if (activeAdsCount >= planLimit) {
+           let resetDate = 'soon';
+           let packageName = 'your plan';
+           
+           if (subscription) {
+               const start = new Date(subscription.startDate);
+               let w = getCurrentBillingWindow(start);
+               const n = Date.now();
+               while (w.end.getTime() <= n) {
+                   w = getCurrentBillingWindow(w.end);
+               }
+               resetDate = w.end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+               packageName = subscription.packageName || 'your plan';
+           }
+
           return res.status(403).json({
             success: false,
+            code: 'AD_LIMIT_REACHED',
             error: 'AD_LIMIT_REACHED',
-            message: `You’ve reached your ${planLimit} ads for this month.`
+            message: `You’ve used ${activeAdsCount}/${planLimit} ads on ${packageName} for this billing month. Your limit resets on ${resetDate}.`,
+            currentUsage: activeAdsCount,
+            limit: planLimit,
+            resetDate
           });
         }
 

@@ -122,6 +122,9 @@ export const adSubscriptionsController = {
       const plan = AD_PLANS[packageId as keyof typeof AD_PLANS];
       const impressionLimit = plan ? plan.impressionLimit : 0;
 
+      const periodEnd = new Date(now);
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
+
       const newSubscription = {
         id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
         userId,
@@ -132,6 +135,8 @@ export const adSubscriptionsController = {
         endDate,
         nextBillingDate,
         paypalSubscriptionId: paypalSubscriptionId || null,
+        periodStart: now,
+        periodEnd: periodEnd.getTime(),
         adsUsed: 0, // This will track active ads (checked dynamically) or legacy
         impressionsUsed: 0,
         adLimit,
