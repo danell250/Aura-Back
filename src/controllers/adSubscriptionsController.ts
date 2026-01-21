@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { getDB } from '../db';
+import { adSubscriptionService } from '../services/adSubscriptionService';
 import axios from 'axios';
 import { logSecurityEvent } from '../utils/securityLogger';
 
@@ -326,24 +327,20 @@ export const adSubscriptionsController = {
         .sort({ createdAt: -1 })
         .toArray();
 
-      // Dynamically calculate active ads used count for each subscription
+      // Update subscription periods and return
       const enrichedSubscriptions = await Promise.all(activeSubscriptions.map(async (sub) => {
-        const window = getCurrentBillingWindow(sub.startDate);
+        // Ensure period is up to date (lazy reset)
+        // This handles the monthly reset logic if it hasn't been triggered by an action yet
+        const updatedSub = await adSubscriptionService.checkAndResetSubscriptionPeriod(sub);
         
-        // Count active ads created within current billing window
-        const activeAdsCount = await db.collection('ads').countDocuments({
-          ownerId: userId,
-          status: 'active',
-          timestamp: { $gte: window.start.getTime(), $lt: window.end.getTime() }
-        });
-
-        // Override the stored adsUsed with the dynamic count
         return {
-          ...sub,
-          adsUsed: activeAdsCount,
+          ...updatedSub,
+          // Explicitly use the stored adsUsed which tracks creation count
+          adsUsed: updatedSub.adsUsed, 
           // Add computed fields for frontend convenience
-          currentBillingPeriodStart: window.start.getTime(),
-          currentBillingPeriodEnd: window.end.getTime()
+          remainingAds: Math.max(0, (updatedSub.adLimit || 0) - (updatedSub.adsUsed || 0)),
+          currentBillingPeriodStart: updatedSub.periodStart,
+          currentBillingPeriodEnd: updatedSub.periodEnd
         };
       }));
 
