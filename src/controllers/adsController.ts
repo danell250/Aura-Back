@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { getDB } from '../db';
 import { getHashtagsFromText, filterByHashtags } from '../utils/hashtagUtils';
 import { AD_PLANS } from '../constants/adPlans';
+import { getCurrentBillingWindow } from './adSubscriptionsController';
 
 export const adsController = {
   // GET /api/ads - Get all ads
@@ -140,9 +141,19 @@ export const adsController = {
         // Check active ads count if the new ad is being created as active
         const newAdStatus = adData.status || 'active';
         if (newAdStatus === 'active') {
+          // Calculate start of current billing cycle
+          let window = getCurrentBillingWindow(new Date(subscription.startDate));
+          const now = Date.now();
+          
+          // Find current cycle
+          while (window.end.getTime() <= now) {
+             window = getCurrentBillingWindow(window.end);
+          }
+
           const activeAdsCount = await db.collection('ads').countDocuments({
             ownerId: userId,
-            status: 'active'
+            status: 'active',
+            timestamp: { $gte: window.start.getTime(), $lt: window.end.getTime() }
           });
 
           // Use adLimit from subscription
@@ -151,9 +162,8 @@ export const adsController = {
           if (activeAdsCount >= planLimit) {
             return res.status(403).json({
               success: false,
-              error: `Plan limit reached. You can have max ${planLimit} active signals. Upgrade to activate more.`,
-              limit: planLimit,
-              current: activeAdsCount
+              error: 'AD_LIMIT_REACHED',
+              message: `You’ve reached your ${planLimit} ads for this month.`
             });
           }
         }
@@ -388,11 +398,6 @@ export const adsController = {
       
       // Enforce limits if activating
       if (status === 'active' && ad.status !== 'active') {
-        const activeAdsCount = await db.collection('ads').countDocuments({
-          ownerId: currentUser.id,
-          status: 'active'
-        });
-
         // Get active subscription
         const now = Date.now();
         const subscription = await db.collection('adSubscriptions').findOne({
@@ -404,14 +409,32 @@ export const adsController = {
           ]
         });
 
+        let activeAdsCount = 0;
+        if (subscription) {
+           let window = getCurrentBillingWindow(new Date(subscription.startDate));
+           while (window.end.getTime() <= now) {
+              window = getCurrentBillingWindow(window.end);
+           }
+           
+           activeAdsCount = await db.collection('ads').countDocuments({
+              ownerId: currentUser.id,
+              status: 'active',
+              timestamp: { $gte: window.start.getTime(), $lt: window.end.getTime() }
+           });
+        } else {
+           activeAdsCount = await db.collection('ads').countDocuments({
+              ownerId: currentUser.id,
+              status: 'active'
+           });
+        }
+
         const planLimit = subscription ? subscription.adLimit : 0;
 
         if (activeAdsCount >= planLimit) {
           return res.status(403).json({
             success: false,
-            error: `Plan limit reached. You can have max ${planLimit} active signals. Upgrade to activate more.`,
-            limit: planLimit,
-            current: activeAdsCount
+            error: 'AD_LIMIT_REACHED',
+            message: `You’ve reached your ${planLimit} ads for this month.`
           });
         }
 
@@ -573,30 +596,21 @@ export const adsController = {
         const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
         const lastUpdated = analytics?.lastUpdated ?? ad.timestamp;
 
-        // Base metrics always included
-        const metrics: any = {
+        return {
           adId: ad.id,
-          adName: ad.headline || ad.title || 'Untitled',
-          status: ad.status || 'active',
+          adName: ad.headline,
+          status: ad.status,
           impressions,
           clicks,
           ctr,
-          reach,
           engagement,
-          conversions,
           spend,
+          reach,
+          conversions,
+          lastUpdated,
           roi: spend > 0 ? (engagement + clicks) / spend : 0,
-          createdAt: ad.timestamp || Date.now(),
-          lastUpdated
+          createdAt: ad.timestamp
         };
-
-        // if (!isBasic) {
-        //   metrics.engagement = engagement;
-        //   metrics.spend = spend;
-        //   metrics.roi = spend > 0 ? (engagement + clicks) / spend : 0;
-        // }
-
-        return metrics;
       });
 
       res.json({

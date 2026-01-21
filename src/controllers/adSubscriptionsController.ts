@@ -50,6 +50,13 @@ async function verifyPayPalWebhookSignature(req: Request): Promise<boolean> {
 }
 import { AD_PLANS } from '../constants/adPlans';
 
+export function getCurrentBillingWindow(subscriptionStart: Date) {
+  const start = new Date(subscriptionStart);
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 1);
+  return { start, end };
+}
+
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 
 export const adSubscriptionsController = {
@@ -301,7 +308,7 @@ export const adSubscriptionsController = {
       const db = getDB();
       const now = Date.now();
 
-      // Find active subscriptions that haven't expired and have available ad slots
+      // Find active subscriptions that haven't expired
       const activeSubscriptions = await db.collection(AD_SUBSCRIPTIONS_COLLECTION)
         .find({
           userId,
@@ -310,12 +317,30 @@ export const adSubscriptionsController = {
             { endDate: { $exists: false } }, // Ongoing subscriptions
             { endDate: { $gt: now } } // Not expired
           ]
-          // REMOVED: $expr: { $lt: ['$adsUsed', '$adLimit'] } 
-          // We now enforce limits dynamically based on active ads count in adsController,
-          // not based on the cumulative adsUsed counter.
         })
         .sort({ createdAt: -1 })
         .toArray();
+
+      // Dynamically calculate active ads used count for each subscription
+      const enrichedSubscriptions = await Promise.all(activeSubscriptions.map(async (sub) => {
+        const window = getCurrentBillingWindow(sub.startDate);
+        
+        // Count active ads created within current billing window
+        const activeAdsCount = await db.collection('ads').countDocuments({
+          ownerId: userId,
+          status: 'active',
+          timestamp: { $gte: window.start.getTime(), $lt: window.end.getTime() }
+        });
+
+        // Override the stored adsUsed with the dynamic count
+        return {
+          ...sub,
+          adsUsed: activeAdsCount,
+          // Add computed fields for frontend convenience
+          currentBillingPeriodStart: window.start.getTime(),
+          currentBillingPeriodEnd: window.end.getTime()
+        };
+      }));
 
       // Auto-expire any subscriptions that have passed their end date
       await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany(
@@ -331,7 +356,7 @@ export const adSubscriptionsController = {
 
       res.json({
         success: true,
-        data: activeSubscriptions
+        data: enrichedSubscriptions
       });
     } catch (error) {
       console.error('Error fetching active subscriptions:', error);
