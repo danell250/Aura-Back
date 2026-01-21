@@ -688,6 +688,46 @@ export const adsController = {
         ? Math.ceil((subscription.endDate - now) / (1000 * 60 * 60 * 24))
         : null;
 
+      const build7DayTrend = (analyticsDocs: any[]) => {
+        const days = 7;
+        const start = new Date();
+        start.setHours(0, 0, 0, 0);
+        start.setDate(start.getDate() - (days - 1));
+
+        const buckets = new Map<string, { date: string; impressions: number; clicks: number; engagement: number; spend: number }>();
+
+        for (let i = 0; i < days; i++) {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i);
+          const key = d.toISOString().slice(0, 10);
+          buckets.set(key, {
+            date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            impressions: 0,
+            clicks: 0,
+            engagement: 0,
+            spend: 0
+          });
+        }
+
+        for (const doc of analyticsDocs) {
+          const ts = doc.lastUpdated || Date.now();
+          const d = new Date(ts);
+          d.setHours(0, 0, 0, 0);
+          const key = d.toISOString().slice(0, 10);
+          const b = buckets.get(key);
+          if (!b) continue;
+
+          b.impressions += doc.impressions || 0;
+          b.clicks += doc.clicks || 0;
+          b.engagement += doc.engagement || 0;
+          b.spend += doc.spend || 0;
+        }
+
+        return Array.from(buckets.values());
+      };
+
+      const trendData = build7DayTrend(analyticsDocs);
+
       const data: any = {
         totalImpressions,
         totalClicks,
@@ -699,7 +739,7 @@ export const adsController = {
         activeAds,
         daysToNextExpiry,
         performanceScore,
-        trendData: [] // TODO: Implement historical trend data aggregation
+        trendData
       };
 
       // if (!isBasic) {
