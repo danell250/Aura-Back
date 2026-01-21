@@ -474,14 +474,14 @@ export const adsController = {
       const isPro = packageId === 'pkg-pro';
       const isEnterprise = packageId === 'pkg-enterprise';
 
-      const impressions = analytics?.impressions || 0;
-      const clicks = analytics?.clicks || 0;
-      const engagement = analytics?.engagement || 0;
-      const conversions = analytics?.conversions || 0;
-      const spend = analytics?.spend || 0;
-      const reach = analytics?.reach || impressions;
+      const impressions = analytics?.impressions ?? 0;
+      const clicks = analytics?.clicks ?? 0;
+      const engagement = analytics?.engagement ?? 0;
+      const conversions = analytics?.conversions ?? 0;
+      const spend = analytics?.spend ?? 0;
+      const reach = analytics?.reach ?? impressions;
       const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-      const lastUpdated = analytics?.lastUpdated || Date.now();
+      const lastUpdated = analytics?.lastUpdated ?? Date.now();
 
       const data: any = {
         adId: id,
@@ -489,16 +489,18 @@ export const adsController = {
         clicks,
         ctr,
         reach,
+        engagement,
+        conversions,
+        spend,
         lastUpdated
       };
 
       if (!isBasic) {
-        data.engagement = engagement;
-        data.spend = spend;
+        // data.engagement = engagement; // Always include for consistency
+        // data.spend = spend; // Always include for consistency
       }
 
       if (isEnterprise) {
-        data.conversions = conversions;
         // Mock deep analytics for now
         data.audience = {
           sentiment: 'positive',
@@ -551,46 +553,55 @@ export const adsController = {
       });
 
       const packageId = subscription ? subscription.packageId : 'pkg-starter';
-      const isBasic = packageId === 'pkg-starter';
-      const isPro = packageId === 'pkg-pro';
-      const isEnterprise = packageId === 'pkg-enterprise';
+      // const isBasic = packageId === 'pkg-starter';
+      // const isPro = packageId === 'pkg-pro';
+      // const isEnterprise = packageId === 'pkg-enterprise';
 
       const analyticsMap = new Map<string, any>();
       analyticsDocs.forEach(doc => {
         analyticsMap.set(doc.adId, doc);
       });
 
-      const metrics = ads.map((ad: any) => {
-        const analytics = analyticsMap.get(ad.id) || {};
-        const impressions = analytics.impressions || 0;
-        const clicks = analytics.clicks || 0;
-        const engagement = analytics.engagement || 0;
-        const spend = analytics.spend || 0;
+      const data = ads.map((ad: any) => {
+        const analytics = analyticsMap.get(ad.id);
+        const impressions = analytics?.impressions ?? 0;
+        const clicks = analytics?.clicks ?? 0;
+        const engagement = analytics?.engagement ?? 0;
+        const conversions = analytics?.conversions ?? 0;
+        const spend = analytics?.spend ?? 0;
+        const reach = analytics?.reach ?? impressions;
         const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-        const roi = spend > 0 ? (engagement + clicks) / spend : 0;
+        const lastUpdated = analytics?.lastUpdated ?? ad.timestamp;
 
-        const data: any = {
+        // Base metrics always included
+        const metrics: any = {
           adId: ad.id,
-          adName: ad.headline || ad.title || 'Untitled Ad',
+          adName: ad.headline || ad.title || 'Untitled',
           status: ad.status || 'active',
           impressions,
           clicks,
           ctr,
-          createdAt: ad.timestamp || Date.now()
+          reach,
+          engagement,
+          conversions,
+          spend,
+          roi: spend > 0 ? (engagement + clicks) / spend : 0,
+          createdAt: ad.timestamp || Date.now(),
+          lastUpdated
         };
 
-        if (!isBasic) {
-          data.engagement = engagement;
-          data.spend = spend;
-          data.roi = roi;
-        }
+        // if (!isBasic) {
+        //   metrics.engagement = engagement;
+        //   metrics.spend = spend;
+        //   metrics.roi = spend > 0 ? (engagement + clicks) / spend : 0;
+        // }
 
-        return data;
+        return metrics;
       });
 
       res.json({
         success: true,
-        data: metrics
+        data
       });
     } catch (error) {
       console.error('Error fetching user ad performance:', error);
@@ -631,12 +642,6 @@ export const adsController = {
         });
       }
 
-      const adIds = ads.map((ad: any) => ad.id);
-      const analyticsDocs = await db
-        .collection('adAnalytics')
-        .find({ adId: { $in: adIds } })
-        .toArray();
-
       // Check user subscription level
       const now = Date.now();
       const subscription = await db.collection('adSubscriptions').findOne({
@@ -646,70 +651,82 @@ export const adsController = {
       });
 
       const packageId = subscription ? subscription.packageId : 'pkg-starter';
-      const isBasic = packageId === 'pkg-starter';
-      const isPro = packageId === 'pkg-pro';
-      const isEnterprise = packageId === 'pkg-enterprise';
+      // const isBasic = packageId === 'pkg-starter';
+      // const isPro = packageId === 'pkg-pro';
+      // const isEnterprise = packageId === 'pkg-enterprise';
 
       let totalImpressions = 0;
       let totalClicks = 0;
       let totalEngagement = 0;
       let totalSpend = 0;
+      let totalConversions = 0;
+      let activeAds = 0;
+      let totalReach = 0;
 
+      const adIds = ads.map((ad: any) => ad.id);
+      const analyticsDocs = await db
+        .collection('adAnalytics')
+        .find({ adId: { $in: adIds } })
+        .toArray();
+
+      const analyticsMap = new Map<string, any>();
       analyticsDocs.forEach(doc => {
-        totalImpressions += doc.impressions || 0;
-        totalClicks += doc.clicks || 0;
-        totalEngagement += doc.engagement || 0;
-        totalSpend += doc.spend || 0;
+        analyticsMap.set(doc.adId, doc);
       });
 
-      const totalReach = totalImpressions;
-      const averageCTR =
-        analyticsDocs.length > 0 && totalImpressions > 0
-          ? (totalClicks / totalImpressions) * 100
-          : 0;
-      const activeAds = ads.filter((ad: any) => ad.status === 'active').length;
+      ads.forEach((ad: any) => {
+        if (ad.status === 'active') activeAds++;
+        
+        const analytics = analyticsMap.get(ad.id);
+        if (analytics) {
+          totalImpressions += (analytics.impressions ?? 0);
+          totalClicks += (analytics.clicks ?? 0);
+          totalEngagement += (analytics.engagement ?? 0);
+          totalSpend += (analytics.spend ?? 0);
+          totalConversions += (analytics.conversions ?? 0);
+          totalReach += (analytics.reach ?? analytics.impressions ?? 0);
+        }
+      });
+
+      const averageCTR = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
       
-      // Calculate next expiry
-      const activeAdsList = ads.filter((ad: any) => ad.status === 'active' && ad.expiryDate && ad.expiryDate > now);
-      const nextExpiringAd = activeAdsList.sort((a: any, b: any) => (a.expiryDate || 0) - (b.expiryDate || 0))[0];
-      const daysToNextExpiry = nextExpiringAd
-        ? Math.ceil((nextExpiringAd.expiryDate - now) / (1000 * 60 * 60 * 24))
+      // Calculate a performance score (0-100)
+      // Weighted: 30% CTR, 30% Engagement Rate, 40% active/fresh factor
+      const ctrScore = Math.min(100, (averageCTR / 2) * 100); // 2% CTR = 100 score
+      const engRate = totalImpressions > 0 ? totalEngagement / totalImpressions : 0;
+      const engScore = Math.min(100, (engRate / 0.05) * 100); // 5% engagement = 100 score
+      const performanceScore = Math.round((ctrScore * 0.3) + (engScore * 0.3) + (Math.min(100, activeAds * 20) * 0.4));
+
+      const daysToNextExpiry = subscription?.endDate 
+        ? Math.ceil((subscription.endDate - now) / (1000 * 60 * 60 * 24))
         : null;
-
-      const performanceScore = Math.min(
-        100,
-        Math.round(
-          (totalClicks * 2 + totalEngagement + totalImpressions * 0.01) /
-            (activeAds || 1)
-        )
-      );
-
-      const trendData: { date: string; impressions: number; clicks: number; engagement: number }[] =
-        [];
 
       const data: any = {
         totalImpressions,
         totalClicks,
         totalReach,
+        totalEngagement,
+        totalSpend,
+        totalConversions,
         averageCTR,
         activeAds,
         daysToNextExpiry,
         performanceScore,
-        trendData
+        trendData: [] // TODO: Implement historical trend data aggregation
       };
 
-      if (!isBasic) {
-        data.totalEngagement = totalEngagement;
-        data.totalSpend = totalSpend;
-      } else {
-        // For basic plan, ensure these are undefined or 0 if frontend expects it
-        // The interface might expect them, so let's send them if strict type, 
-        // but typically we want to hide them.
-        // If I omit them, frontend might show "undefined".
-        // Let's send them as restricted/hidden?
-        // User said: "hideAdvancedMetrics()".
-        // I'll omit them from the response data object.
-      }
+      // if (!isBasic) {
+      //   data.totalEngagement = totalEngagement;
+      //   data.totalSpend = totalSpend;
+      // } else {
+      //   // For basic plan, ensure these are undefined or 0 if frontend expects it
+      //   // The interface might expect them, so let's send them if strict type, 
+      //   // but typically we want to hide them.
+      //   // If I omit them, frontend might show "undefined".
+      //   // Let's send them as restricted/hidden?
+      //   // User said: "hideAdvancedMetrics()".
+      //   // I'll omit them from the response data object.
+      // }
 
       res.json({
         success: true,
@@ -800,14 +817,14 @@ export const adsController = {
           const io = appInstance?.get && appInstance.get('io');
           if (io && typeof io.to === 'function') {
             const analyticsDoc = await db.collection('adAnalytics').findOne({ adId: id });
-            const impressions = analyticsDoc?.impressions || 0;
-            const clicks = analyticsDoc?.clicks || 0;
-            const engagement = analyticsDoc?.engagement || 0;
-            const conversions = analyticsDoc?.conversions || 0;
-            const spend = analyticsDoc?.spend || 0;
-            const reach = analyticsDoc?.reach || impressions;
+            const impressions = analyticsDoc?.impressions ?? 0;
+            const clicks = analyticsDoc?.clicks ?? 0;
+            const engagement = analyticsDoc?.engagement ?? 0;
+            const conversions = analyticsDoc?.conversions ?? 0;
+            const spend = analyticsDoc?.spend ?? 0;
+            const reach = analyticsDoc?.reach ?? impressions;
             const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-            const lastUpdated = analyticsDoc?.lastUpdated || Date.now();
+            const lastUpdated = analyticsDoc?.lastUpdated ?? Date.now();
 
             io.to(`user:${ownerId}`).emit('analytics_update', {
               userId: ownerId,
@@ -876,14 +893,14 @@ export const adsController = {
           const io = appInstance?.get && appInstance.get('io');
           if (io && typeof io.to === 'function') {
             const analyticsDoc = await db.collection('adAnalytics').findOne({ adId: id });
-            const impressions = analyticsDoc?.impressions || 0;
-            const clicks = analyticsDoc?.clicks || 0;
-            const engagement = analyticsDoc?.engagement || 0;
-            const conversions = analyticsDoc?.conversions || 0;
-            const spend = analyticsDoc?.spend || 0;
-            const reach = analyticsDoc?.reach || impressions;
+            const impressions = analyticsDoc?.impressions ?? 0;
+            const clicks = analyticsDoc?.clicks ?? 0;
+            const engagement = analyticsDoc?.engagement ?? 0;
+            const conversions = analyticsDoc?.conversions ?? 0;
+            const spend = analyticsDoc?.spend ?? 0;
+            const reach = analyticsDoc?.reach ?? impressions;
             const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-            const lastUpdated = analyticsDoc?.lastUpdated || Date.now();
+            const lastUpdated = analyticsDoc?.lastUpdated ?? Date.now();
 
             io.to(`user:${ownerId}`).emit('analytics_update', {
               userId: ownerId,
