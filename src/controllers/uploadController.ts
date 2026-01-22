@@ -34,10 +34,10 @@ if (hasCloudinaryConfig) {
   });
 }
 
-const uploadImageToCloudinary = async (buffer: Buffer, folder: string): Promise<string> => {
+const uploadToCloudinary = async (buffer: Buffer, folder: string, resourceType: 'image' | 'video' | 'auto' = 'auto'): Promise<string> => {
   return new Promise<string>((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { folder },
+      { folder, resource_type: resourceType },
       (error, result) => {
         if (error || !result) {
           return reject(error || new Error('Cloudinary upload failed'));
@@ -67,11 +67,13 @@ export const uploadFile = async (req: Request, res: Response) => {
   }
 
   const isImage = req.file.mimetype.startsWith('image/');
+  const isVideo = req.file.mimetype.startsWith('video/');
 
-  if (hasCloudinaryConfig && isImage) {
+  if (hasCloudinaryConfig && (isImage || isVideo)) {
     try {
       const folder = process.env.CLOUDINARY_FOLDER || 'aura-uploads';
-      const secureUrl = await uploadImageToCloudinary(req.file.buffer, folder);
+      const resourceType = isVideo ? 'video' : 'image';
+      const secureUrl = await uploadToCloudinary(req.file.buffer, folder, resourceType);
 
       const db = getDB();
       await db.collection('mediaFiles').insertOne({
@@ -92,7 +94,7 @@ export const uploadFile = async (req: Request, res: Response) => {
         mimetype: req.file.mimetype
       });
     } catch (error) {
-      console.error('Failed to upload image to Cloudinary, falling back to bucket/local:', error);
+      console.error('Failed to upload to Cloudinary, falling back to bucket/local:', error);
     }
   }
 
