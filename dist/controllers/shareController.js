@@ -33,7 +33,7 @@ exports.shareController = {
             const post = yield db.collection('posts').findOne({ id });
             if (!post) {
                 // Fallback to generic metadata if post not found
-                const url = 'https://auraradiance.vercel.app';
+                const url = 'https://auraso.vercel.app';
                 return res.redirect(url);
             }
             // Construct metadata
@@ -54,7 +54,7 @@ exports.shareController = {
                 author: {
                     "@type": "Person",
                     name: authorName,
-                    url: `https://auraradiance.vercel.app/@${authorHandle}`
+                    url: `https://auraso.vercel.app/@${authorHandle}`
                 },
                 datePublished: post.timestamp || new Date().toISOString(),
                 url,

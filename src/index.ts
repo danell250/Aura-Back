@@ -328,6 +328,18 @@ app.get('/api/debug/cookies', (req, res) => {
   });
 });
 
+app.get('/api/debug/sendgrid', (req, res) => {
+  const apiKey = process.env.SENDGRID_API_KEY;
+  const fromEmail = process.env.EMAIL_FROM;
+  
+  res.json({
+    hasApiKey: !!apiKey,
+    apiKeyPreview: apiKey ? `${apiKey.substring(0, 5)}...` : null,
+    fromEmail: fromEmail,
+    env: process.env.NODE_ENV
+  });
+});
+
 app.get('/api/credits/history/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
