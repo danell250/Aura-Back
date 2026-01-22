@@ -1,6 +1,7 @@
 import { MongoClient, Db } from "mongodb";
 import dotenv from "dotenv";
 import { initializeMessageCollection } from "./models/Message";
+import { initializeUserCollection } from "./models/User";
 
 dotenv.config();
 
@@ -62,8 +63,11 @@ export async function connectDB(): Promise<Db | null> {
     try {
       initializeMessageCollection(db);
       console.log("✅ Message collection initialized");
+      
+      await initializeUserCollection(db);
+      // User collection log is inside the function
     } catch (error) {
-      console.warn("⚠️  Warning: Could not initialize message collection:", error);
+      console.warn("⚠️  Warning: Could not initialize collections:", error);
     }
     
     console.log("✅ Connected to MongoDB successfully");

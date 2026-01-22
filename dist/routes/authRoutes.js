@@ -159,12 +159,9 @@ router.get('/google/callback', (req, res, next) => {
             const db = (0, db_1.getDB)();
             const userData = req.user;
             console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
-            // FIX: Only check for THIS SPECIFIC USER by ID or googleId, NOT by name/email
+            // FIX: Check by EMAIL to link accounts
             const existingUser = yield db.collection('users').findOne({
-                $or: [
-                    { id: userData.id },
-                    { googleId: userData.googleId }
-                ]
+                email: userData.email
             });
             let userToReturn;
             if (existingUser) {
@@ -430,12 +427,9 @@ router.get('/github/callback', (req, res, next) => {
             const db = (0, db_1.getDB)();
             const userData = req.user;
             console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
-            // FIX: Only check for THIS SPECIFIC USER by ID or githubId, NOT by name/email
+            // FIX: Check by EMAIL to link accounts
             const existingUser = yield db.collection('users').findOne({
-                $or: [
-                    { id: userData.id },
-                    { githubId: userData.githubId }
-                ]
+                email: userData.email
             });
             let userToReturn;
             if (existingUser) {

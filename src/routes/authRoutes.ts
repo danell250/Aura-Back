@@ -175,12 +175,9 @@ router.get('/google/callback',
 
         console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
 
-        // FIX: Only check for THIS SPECIFIC USER by ID or googleId, NOT by name/email
+        // FIX: Check by EMAIL to link accounts
         const existingUser = await db.collection('users').findOne({
-          $or: [
-            { id: userData.id },
-            { googleId: userData.googleId }
-          ]
+          email: userData.email
         });
 
         let userToReturn: User;
@@ -530,12 +527,9 @@ router.get('/github/callback',
 
         console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
 
-        // FIX: Only check for THIS SPECIFIC USER by ID or githubId, NOT by name/email
+        // FIX: Check by EMAIL to link accounts
         const existingUser = await db.collection('users').findOne({
-          $or: [
-            { id: userData.id },
-            { githubId: userData.githubId }
-          ]
+          email: userData.email
         });
 
         let userToReturn: User;
