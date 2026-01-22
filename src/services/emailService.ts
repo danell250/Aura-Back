@@ -1,50 +1,43 @@
-// @ts-ignore
-import nodemailer from 'nodemailer';
+import sgMail from '@sendgrid/mail';
 
-// Create reusable transporter object using the default SMTP transport
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: parseInt(process.env.SMTP_PORT || '587'),
-  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+sgMail.setApiKey(process.env.SENDGRID_API_KEY || '');
 
-export const sendMagicLinkEmail = async (email: string, link: string) => {
-  // If no email credentials are set, just log the link (for dev/testing)
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    console.log('⚠️ No SMTP credentials found. Skipping email send.');
-    console.log(`📨 [MOCK EMAIL] To: ${email}`);
-    console.log(`🔗 Magic Link: ${link}`);
-    return true;
+export async function sendMagicLinkEmail(to: string, magicLink: string) {
+  const from = process.env.EMAIL_FROM;
+  
+  // For development without credentials, log the link instead of crashing
+  if (!process.env.SENDGRID_API_KEY || !from) {
+    console.log('⚠️ SendGrid credentials not found. Skipping email send.');
+    console.log(`📨 [MOCK EMAIL] To: ${to}`);
+    console.log(`🔗 Magic Link: ${magicLink}`);
+    return;
   }
 
   try {
-    const info = await transporter.sendMail({
-      from: process.env.SMTP_FROM || '"Aura" <noreply@aura.social>',
-      to: email,
-      subject: 'Your secure login link for Aura',
+    await sgMail.send({
+      to,
+      from,
+      subject: 'Your secure login link',
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2>Login to Aura</h2>
-          <p>Click the link below to sign in. This link expires in 15 minutes.</p>
+          <p>Click the button below to sign in. This link expires in 15 minutes.</p>
           <p>
-            <a href="${link}" style="display: inline-block; background-color: #4F46E5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; font-weight: bold;">
-              Sign in to Aura
+            <a href="${magicLink}"
+               style="display:inline-block;padding:10px 14px;background:#10b981;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;">
+               Sign in to Aura
             </a>
           </p>
-          <p style="color: #666; font-size: 14px;">If you didn't request this link, you can safely ignore this email.</p>
+          <p style="color: #666; font-size: 14px;">If you didn’t request this, you can safely ignore this email.</p>
         </div>
       `,
-      text: `Click the link below to sign in to Aura:\n\n${link}\n\nThis link expires in 15 minutes.`,
     });
-
-    console.log('✓ Magic link email sent:', info.messageId);
-    return true;
-  } catch (error) {
+    console.log('✓ Magic link email sent via SendGrid to:', to);
+  } catch (error: any) {
     console.error('Error sending magic link email:', error);
-    return false;
+    if (error.response) {
+      console.error(error.response.body);
+    }
+    throw error;
   }
-};
+}

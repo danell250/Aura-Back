@@ -244,7 +244,7 @@ router.post('/magic-link', (req, res) => __awaiter(void 0, void 0, void 0, funct
                 magicTokenExpires: expires
             }
         });
-        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        const frontendUrl = process.env.FRONTEND_URL || process.env.VITE_FRONTEND_URL ||
             (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
         // Updated: Point to Frontend Verify Route
         const magicLink = `${frontendUrl}/magic-login?token=${token}&email=${encodeURIComponent(email)}`;

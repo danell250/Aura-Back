@@ -301,7 +301,7 @@ router.post('/magic-link', async (req: Request, res: Response) => {
       }
     );
 
-    const frontendUrl = process.env.VITE_FRONTEND_URL || 
+    const frontendUrl = process.env.FRONTEND_URL || process.env.VITE_FRONTEND_URL || 
       (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
     
     // Updated: Point to Frontend Verify Route
