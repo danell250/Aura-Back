@@ -345,7 +345,7 @@ export const postsController = {
         {
           $project: {
             fetchedComments: 0,
-            authorDetails: 0
+            // authorDetails: 0 // Keep authorDetails to ensure profile info is fresh
           }
         }
       ];
@@ -384,10 +384,14 @@ export const postsController = {
 
       // Post-process to add userReactions for the current user
       const transformedData = data.map((post: any) => {
-        if (post.author) {
+        // Use fresh author details from lookup if available
+        if (post.authorDetails && post.authorDetails[0]) {
+          post.author = transformUser({ ...post.author, ...post.authorDetails[0] });
+        } else if (post.author) {
           post.author = transformUser(post.author);
         }
-        
+        delete post.authorDetails; // Clean up
+
         if (currentUserId) {
           if (post.reactionUsers) {
             post.userReactions = Object.keys(post.reactionUsers).filter(emoji => 
@@ -507,12 +511,13 @@ export const postsController = {
         }
       }
 
-      delete post.authorDetails;
-
       // Post-process to add userReactions for the current user
-      if (post.author) {
+      if (post.authorDetails && post.authorDetails[0]) {
+        post.author = transformUser({ ...post.author, ...post.authorDetails[0] });
+      } else if (post.author) {
         post.author = transformUser(post.author);
       }
+      delete post.authorDetails;
 
       if (currentUserId) {
         if (post.reactionUsers) {

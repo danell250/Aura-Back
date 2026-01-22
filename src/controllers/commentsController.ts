@@ -27,9 +27,27 @@ export const commentsController = {
         .limit(limitNum)
         .toArray();
 
-      // Post-process to add userReactions for the current user
+      // Extract unique author IDs to fetch latest profile data
+      const authorIds = [...new Set(data.map((c: any) => c.author?.id).filter(Boolean))];
+      
+      // Fetch latest user details to ensure avatars/names are up-to-date
+      const authors = await db.collection(USERS_COLLECTION)
+        .find({ id: { $in: authorIds } })
+        .project({ 
+          id: 1, firstName: 1, lastName: 1, name: 1, handle: 1, 
+          avatar: 1, avatarKey: 1, avatarType: 1, isVerified: 1 
+        })
+        .toArray();
+      
+      const authorMap = new Map(authors.map((u: any) => [u.id, u]));
+
+      // Post-process to update author info and add userReactions
       data.forEach((comment: any) => {
-        if (comment.author) {
+        // Update author with latest data if available
+        if (comment.author?.id && authorMap.has(comment.author.id)) {
+          const latestAuthor = authorMap.get(comment.author.id);
+          comment.author = transformUser(latestAuthor);
+        } else if (comment.author) {
           comment.author = transformUser(comment.author);
         }
       });
@@ -71,6 +89,17 @@ export const commentsController = {
       if (!comment) {
         return res.status(404).json({ success: false, error: 'Comment not found', message: `Comment with ID ${id} does not exist` });
       }
+
+      // Fetch latest author info
+      if (comment.author?.id) {
+        const latestAuthor = await db.collection(USERS_COLLECTION).findOne({ id: comment.author.id });
+        if (latestAuthor) {
+          comment.author = transformUser(latestAuthor);
+        } else {
+          comment.author = transformUser(comment.author);
+        }
+      }
+
       res.json({ success: true, data: comment });
     } catch (error) {
       console.error('Error fetching comment:', error);
