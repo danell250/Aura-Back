@@ -21,6 +21,10 @@ function sendMagicLinkEmail(to, magicLink) {
         // For development without credentials, log the link instead of crashing
         if (!process.env.SENDGRID_API_KEY || !from) {
             console.log('⚠️ SendGrid credentials not found. Skipping email send.');
+            if (!process.env.SENDGRID_API_KEY)
+                console.log('   - Missing SENDGRID_API_KEY');
+            if (!from)
+                console.log('   - Missing EMAIL_FROM');
             console.log(`📨 [MOCK EMAIL] To: ${to}`);
             console.log(`🔗 Magic Link: ${magicLink}`);
             return;
