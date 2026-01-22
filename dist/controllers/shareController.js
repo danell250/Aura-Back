@@ -43,8 +43,8 @@ exports.shareController = {
             const postContent = post.content || '';
             const title = escapeHtml(`Post by ${authorName} on Aura`);
             const description = escapeHtml(truncateContent(postContent, 200));
-            const image = post.mediaUrl || 'https://auraradiance.vercel.app/og-image.jpg?v=2';
-            const url = `https://auraradiance.vercel.app/p/${id}`;
+            const image = post.mediaUrl || 'https://auraso.vercel.app/og-image.jpg?v=2';
+            const url = `https://auraso.vercel.app/p/${id}`;
             const structuredData = {
                 "@context": "https://schema.org",
                 "@type": "BlogPosting",
@@ -63,7 +63,7 @@ exports.shareController = {
                     name: "Aura",
                     logo: {
                         "@type": "ImageObject",
-                        url: "https://auraradiance.vercel.app/logo.png"
+                        url: "https://auraso.vercel.app/logo.png"
                     }
                 }
             };

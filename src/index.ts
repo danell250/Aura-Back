@@ -114,33 +114,35 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// CORS configuration
-app.use(cors({
-  origin: (origin, callback) => {
-    // allow server-to-server & tools like curl/postman
-    if (!origin) return callback(null, true);
+// Enable trust proxy for secure cookies behind load balancers (like Render/Heroku)
+app.set("trust proxy", 1);
+app.use(cookieParser());
 
-    // Use environment variable from Render, fallback to hardcoded values
-    const frontendUrl = process.env.VITE_FRONTEND_URL;
-    const allowed = [
-      frontendUrl,
-      "https://auraradiance.vercel.app",
-      "https://aura-front-s1bw.onrender.com",
-      "http://localhost:5173"
-    ].filter(Boolean);
+const allowedOrigins = [
+  "https://auraso.vercel.app",
+  "https://auraradiance.vercel.app",
+  "https://aura-front-s1bw.onrender.com",
+  "http://localhost:5173",
+  "http://localhost:5003",
+  process.env.VITE_FRONTEND_URL
+].filter(Boolean) as string[];
 
-    if (allowed.includes(origin)) {
-      return callback(null, true);
-    }
-
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, cb) => {
+    // allow non-browser tools (no origin) and allow your frontends
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    
     console.error("❌ Blocked by CORS:", origin);
-    console.log("🔗 Allowed origins:", allowed);
-    return callback(new Error("Not allowed by CORS"));
+    return cb(new Error(`CORS blocked origin: ${origin}`));
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // IMPORTANT for preflight
 
 // Passport GitHub OAuth Strategy Configuration
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
@@ -300,7 +302,7 @@ app.get('/api/debug/env', (req, res) => {
     hasGitHubOAuthConfig: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
     allowedOrigins: [
       process.env.VITE_FRONTEND_URL,
-      "https://auraradiance.vercel.app", 
+      "https://auraso.vercel.app", 
       "http://localhost:5173"
     ].filter(Boolean)
   });
@@ -422,9 +424,9 @@ app.get('/share/post/:id', async (req, res) => {
     const isImage = mediaUrl && (post.mediaType === 'image' || /\.(png|jpg|jpeg|webp|gif)$/i.test(mediaUrl));
     const isVideo = mediaUrl && (post.mediaType === 'video' || /\.(mp4|webm|ogg|mov)$/i.test(mediaUrl));
     // Use the new logo icon as fallback if no image is present
-    const imageForOg = isImage ? mediaUrl : (avatarUrl || 'https://auraradiance.vercel.app/logo-icon.svg');
+    const imageForOg = isImage ? mediaUrl : (avatarUrl || 'https://auraso.vercel.app/logo-icon.svg');
     // Frontend URL for redirection
-    const frontendUrl = `https://auraradiance.vercel.app/p/${post.id}`;
+    const frontendUrl = `https://auraso.vercel.app/p/${post.id}`;
     
     const html = `<!doctype html>
 <html lang="en">
@@ -922,7 +924,7 @@ async function startServer() {
     const frontendUrl = process.env.VITE_FRONTEND_URL;
     const allowedOrigins = [
       frontendUrl,
-      'https://auraradiance.vercel.app',
+      'https://auraso.vercel.app',
       'https://aura-front-s1bw.onrender.com',
       'http://localhost:5173'
     ].filter(Boolean) as string[];
