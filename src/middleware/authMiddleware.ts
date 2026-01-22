@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { getDB } from '../db';
+import { getDB, isDBConnected } from '../db';
 import { User } from '../types';
 import admin from '../firebaseAdmin';
 import { verifyAccessToken } from '../utils/jwtUtils';
@@ -162,6 +162,10 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
 // Middleware to get user data from JWT and attach to request
 export const attachUser = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    if (!isDBConnected()) {
+      return next();
+    }
+
     // 1. JWT Token Auth
     let token = null;
     if (req.cookies && req.cookies.accessToken) {

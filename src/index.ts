@@ -346,6 +346,15 @@ app.get('/api/debug/sendgrid', (req, res) => {
 app.get('/api/credits/history/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    
+    if (!isDBConnected()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Service Unavailable',
+        message: 'Database service is currently unavailable'
+      });
+    }
+
     const db = getDB();
     const transactions = await db
       .collection('transactions')
