@@ -323,16 +323,19 @@ router.post("/magic-link", async (req: Request, res: Response) => {
     );
 
     const frontendUrl = process.env.VITE_FRONTEND_URL || (process.env.NODE_ENV === "development" ? "http://localhost:5173" : "https://auraso.vercel.app");
-    const magicLink = `${frontendUrl}/magic?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
+    const magicLink = `${frontendUrl}/magic-login?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
     
     console.log('📧 Attempting to send magic link email to:', normalizedEmail);
     await sendMagicLinkEmail(normalizedEmail, magicLink);
     console.log('✅ sendMagicLinkEmail completed');
 
     return res.json({ success: true, message: "If that email exists, a link was sent." });
-  } catch (e) {
+  } catch (e: any) {
     console.error("❌ magic-link error:", e);
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    return res.status(500).json({ 
+      success: false, 
+      message: e.message || "Internal server error" 
+    });
   }
 });
 

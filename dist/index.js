@@ -170,8 +170,6 @@ app.use((0, cookie_parser_1.default)());
 const allowedOrigins = [
     "https://auraso.vercel.app",
     "https://www.auraso.vercel.app",
-    "https://auraradiance.vercel.app",
-    "https://www.auraradiance.vercel.app",
     "https://aura-front-s1bw.onrender.com",
     "http://localhost:5173",
     "http://localhost:5003",

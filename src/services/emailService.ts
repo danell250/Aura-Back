@@ -5,15 +5,12 @@ sgMail.setApiKey(process.env.SENDGRID_API_KEY || '');
 export async function sendMagicLinkEmail(to: string, magicLink: string) {
   const from = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM;
   
-  // For development without credentials, log the link instead of crashing
   if (!process.env.SENDGRID_API_KEY || !from) {
-    console.log('⚠️ SendGrid credentials not found. Skipping email send.');
-    if (!process.env.SENDGRID_API_KEY) console.log('   - Missing SENDGRID_API_KEY');
-    if (!from) console.log('   - Missing SENDGRID_FROM_EMAIL or EMAIL_FROM');
+    console.error('❌ SendGrid credentials not found.');
+    if (!process.env.SENDGRID_API_KEY) console.error('   - Missing SENDGRID_API_KEY');
+    if (!from) console.error('   - Missing SENDGRID_FROM_EMAIL or EMAIL_FROM');
     
-    console.log(`📨 [MOCK EMAIL] To: ${to}`);
-    console.log(`🔗 Magic Link: ${magicLink}`);
-    return;
+    throw new Error("Email configuration is missing (SENDGRID_API_KEY or EMAIL_FROM). Set these in your environment.");
   }
 
   try {
