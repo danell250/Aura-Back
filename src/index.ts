@@ -129,7 +129,9 @@ app.use(cookieParser());
 
 const allowedOrigins = [
   "https://auraso.vercel.app",
+  "https://www.auraso.vercel.app",
   "https://auraradiance.vercel.app",
+  "https://www.auraradiance.vercel.app",
   "https://aura-front-s1bw.onrender.com",
   "http://localhost:5173",
   "http://localhost:5003",
@@ -312,8 +314,17 @@ app.get('/api/debug/env', (req, res) => {
     allowedOrigins: [
       process.env.VITE_FRONTEND_URL,
       "https://auraso.vercel.app", 
+      "https://www.auraso.vercel.app",
       "http://localhost:5173"
     ].filter(Boolean)
+  });
+});
+
+app.get('/api/debug/cookies', (req, res) => {
+  res.json({
+    cookies: req.cookies,
+    signedCookies: req.signedCookies,
+    headers: req.headers
   });
 });
 

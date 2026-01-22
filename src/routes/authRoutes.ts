@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import passport from 'passport';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { getDB } from '../db';
 import { requireAuth, attachUser } from '../middleware/authMiddleware';
@@ -271,21 +272,47 @@ router.post("/magic-link", async (req: Request, res: Response) => {
     const db = getDB();
     const normalizedEmail = String(email).toLowerCase().trim();
     console.log('🔍 Searching for user:', normalizedEmail);
-    const user = await db.collection("users").findOne({ email: normalizedEmail });
+    let user = await db.collection("users").findOne({ email: normalizedEmail });
     
-    // Security: don't reveal whether user exists
+    // Create user if not exists (Sign Up via Magic Link)
     if (!user) {
-      console.log('⚠️ User not found for email:', normalizedEmail);
-      return res.json({ success: true, message: "If that email exists, a link was sent." });
+      console.log('➕ User not found. Creating new user for email:', normalizedEmail);
+      const firstName = normalizedEmail.split('@')[0];
+      const uniqueHandle = await generateUniqueHandle(firstName, '');
+      
+      const newUser = {
+        id: crypto.randomUUID(),
+        email: normalizedEmail,
+        firstName: firstName,
+        lastName: '',
+        name: firstName,
+        handle: uniqueHandle,
+        avatar: `https://ui-avatars.com/api/?name=${firstName}&background=random`,
+        avatarType: 'url',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+        auraCredits: 100,
+        trustScore: 10,
+        activeGlow: 'none',
+        acquaintances: [],
+        blockedUsers: [],
+        refreshTokens: []
+      };
+      
+      await db.collection("users").insertOne(newUser);
+      user = newUser as any;
+      console.log('✓ Created new user for magic link:', user!.id);
+    } else {
+      console.log('✅ User found:', user!.id);
     }
 
-    console.log('✅ User found:', user.id);
     const token = generateMagicToken();
     const tokenHash = hashToken(token);
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
 
     await db.collection("users").updateOne(
-      { id: user.id },
+      { id: user!.id },
       {
         $set: {
           magicLinkTokenHash: tokenHash,
@@ -359,10 +386,15 @@ router.post("/magic-link/verify", async (req: Request, res: Response) => {
 
 // ============ REFRESH TOKEN ============
 router.post('/refresh-token', async (req: Request, res: Response) => {
+  console.log('🔄 POST /refresh-token hit');
+  console.log('   - Cookies:', req.cookies);
+  console.log('   - Origin:', req.headers.origin);
+  
   try {
     const refreshToken = req.cookies.refreshToken;
 
     if (!refreshToken) {
+      console.log('❌ No refresh token in cookies');
       logSecurityEvent({
         req,
         type: 'refresh_failed',
