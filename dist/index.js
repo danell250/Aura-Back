@@ -179,7 +179,7 @@ const corsOptions = {
     allowedHeaders: ["Content-Type", "Authorization"],
 };
 app.use((0, cors_1.default)(corsOptions));
-app.options("*", (0, cors_1.default)(corsOptions)); // IMPORTANT for preflight
+app.options(/.*/, (0, cors_1.default)(corsOptions)); // IMPORTANT for preflight
 // Passport GitHub OAuth Strategy Configuration
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
     passport_1.default.use(new passport_github2_1.Strategy({

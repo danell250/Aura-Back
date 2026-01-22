@@ -142,7 +142,7 @@ const corsOptions: cors.CorsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // IMPORTANT for preflight
+app.options(/.*/, cors(corsOptions)); // IMPORTANT for preflight
 
 // Passport GitHub OAuth Strategy Configuration
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
