@@ -6,6 +6,15 @@ import { verifyAccessToken } from '../utils/jwtUtils';
 
 // Middleware to check if user is authenticated via JWT or Firebase
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
+  // Check database connection first
+  if (!isDBConnected()) {
+    return res.status(503).json({
+      success: false,
+      error: 'Service Unavailable',
+      message: 'Database service is currently unavailable'
+    });
+  }
+
   // 1. Check JWT Token (Cookie or Header)
   let token: string | null = null;
   let decoded: { id: string; email?: string; name?: string } | null = null;
@@ -162,10 +171,6 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
 // Middleware to get user data from JWT and attach to request
 export const attachUser = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (!isDBConnected()) {
-      return next();
-    }
-
     // 1. JWT Token Auth
     let token = null;
     if (req.cookies && req.cookies.accessToken) {
