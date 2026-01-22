@@ -806,6 +806,21 @@ export const postsController = {
             )
         );
       }
+
+      // Emit real-time event for new post if it's public and visible
+      const io = req.app.get('io');
+      if (io) {
+        const isPublic = !visibility || visibility === 'public';
+        const isLockedTimeCapsule = isTimeCapsule && unlockDate && new Date(unlockDate) > new Date();
+        
+        if (isPublic && !isLockedTimeCapsule) {
+          io.emit('new_post', newPost);
+        } else if (visibility === 'acquaintances') {
+          // TODO: Efficiently emit to acquaintances only
+          // For now, we don't emit to avoid leaking to public
+        }
+      }
+
       res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
     } catch (error) {
       console.error('Error creating post:', error);
@@ -957,6 +972,12 @@ export const postsController = {
 
       if (updatedPost.author && updatedPost.author.id) {
         emitAuthorInsightsUpdate(req.app, updatedPost.author.id);
+      }
+
+      // Broadcast post update to all connected clients for real-time reactions
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('post_updated', updatedPost);
       }
 
       res.json({ success: true, data: updatedPost, message: `Reaction ${action} successfully` });

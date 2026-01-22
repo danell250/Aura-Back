@@ -220,6 +220,20 @@ export const commentsController = {
         newComment.author = transformUser(newComment.author);
       }
 
+      // Emit real-time event for new comment
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('comment_added', {
+          postId,
+          comment: newComment
+        });
+        
+        // Also emit post update to ensure counts are synced
+        // We don't send the whole post, just the ID and updated count/metadata if needed
+        // But since we have comment_added, frontend can increment count locally.
+        // However, let's also emit a lightweight post_updated for safety if we want
+      }
+
       res.status(201).json({ success: true, data: newComment, message: 'Comment created successfully' });
     } catch (error) {
       console.error('Error creating comment:', error);

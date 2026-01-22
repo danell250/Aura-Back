@@ -142,18 +142,24 @@ const corsOptions: cors.CorsOptions = {
   origin: (origin, cb) => {
     // allow non-browser tools (no origin) and allow your frontends
     if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
+    
+    // Check for allowed origins or vercel deployments
+    if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+      return cb(null, true);
+    }
     
     console.error("❌ Blocked by CORS:", origin);
+    // For now, in development/debugging, let's allow it but log it
+    // return cb(null, true); 
     return cb(new Error(`CORS blocked origin: ${origin}`));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
 };
 
 app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions)); // IMPORTANT for preflight
+app.options('*', cors(corsOptions)); // Enable pre-flight for all routes
 
 // Passport GitHub OAuth Strategy Configuration
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
@@ -206,17 +212,14 @@ if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
   console.warn('⚠️ GitHub OAuth environment variables not found. GitHub login will not be available.');
 }
 
-// Remove the problematic wildcard options route
-// app.options("*", cors());
-
 // Session middleware
 app.use(session({
   secret: process.env.SESSION_SECRET || 'fallback_secret_for_development',
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production', // Set to true in production with HTTPS
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    secure: process.env.NODE_ENV === 'production' || process.env.RENDER === 'true', // Secure in production or on Render
+    sameSite: (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') ? 'none' : 'lax',
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
