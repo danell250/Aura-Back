@@ -63,12 +63,13 @@ export const verifyRefreshToken = (token: string): { id: string } | null => {
 
 // Set Token Cookies
 export const setTokenCookies = (res: Response, accessToken: string, refreshToken: string) => {
-  const isProduction = process.env.NODE_ENV === 'production';
+  // Treat as production if NODE_ENV is production OR if running on Render
+  const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
   
   // Access Token Cookie
   res.cookie('accessToken', accessToken, {
     httpOnly: true,
-    secure: isProduction,
+    secure: isProduction, // Secure is required for SameSite=None
     sameSite: isProduction ? 'none' : 'lax',
     maxAge: 15 * 60 * 1000 // 15 minutes
   });
@@ -84,7 +85,7 @@ export const setTokenCookies = (res: Response, accessToken: string, refreshToken
 
 // Clear Token Cookies
 export const clearTokenCookies = (res: Response) => {
-  const isProduction = process.env.NODE_ENV === 'production';
+  const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
   
   res.clearCookie('accessToken', {
     httpOnly: true,
