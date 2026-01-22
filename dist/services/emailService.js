@@ -17,14 +17,14 @@ const mail_1 = __importDefault(require("@sendgrid/mail"));
 mail_1.default.setApiKey(process.env.SENDGRID_API_KEY || '');
 function sendMagicLinkEmail(to, magicLink) {
     return __awaiter(this, void 0, void 0, function* () {
-        const from = process.env.EMAIL_FROM;
+        const from = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM;
         // For development without credentials, log the link instead of crashing
         if (!process.env.SENDGRID_API_KEY || !from) {
             console.log('⚠️ SendGrid credentials not found. Skipping email send.');
             if (!process.env.SENDGRID_API_KEY)
                 console.log('   - Missing SENDGRID_API_KEY');
             if (!from)
-                console.log('   - Missing EMAIL_FROM');
+                console.log('   - Missing SENDGRID_FROM_EMAIL or EMAIL_FROM');
             console.log(`📨 [MOCK EMAIL] To: ${to}`);
             console.log(`🔗 Magic Link: ${magicLink}`);
             return;
