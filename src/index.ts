@@ -967,8 +967,11 @@ async function startServer() {
     const io = new SocketIOServer(server, {
       cors: {
         origin: allowedOrigins,
-        credentials: true
-      }
+        credentials: true,
+        methods: ["GET", "POST"]
+      },
+      transports: ['polling', 'websocket'],
+      path: '/socket.io/'
     });
 
     app.set('io', io);
