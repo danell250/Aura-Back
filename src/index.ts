@@ -29,6 +29,15 @@ import { Server as SocketIOServer } from 'socket.io';
 
 dotenv.config();
 
+// Debug: Check SendGrid Config
+if (process.env.SENDGRID_API_KEY && process.env.EMAIL_FROM) {
+  console.log('✅ SendGrid configured with API Key and From Email:', process.env.EMAIL_FROM);
+} else {
+  console.warn('⚠️ SendGrid NOT configured:');
+  if (!process.env.SENDGRID_API_KEY) console.warn('   - Missing SENDGRID_API_KEY');
+  if (!process.env.EMAIL_FROM) console.warn('   - Missing EMAIL_FROM');
+}
+
 // Passport Google OAuth Strategy Configuration
 if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
   passport.use(new GoogleStrategy({
