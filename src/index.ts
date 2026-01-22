@@ -249,7 +249,7 @@ app.use((req, res, next) => {
 });
 
 // Pre-flight handling is managed by CORS middleware above
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use(cookieParser());
 
 // Debug middleware to log all requests
@@ -959,7 +959,7 @@ async function startServer() {
     const frontendUrl = process.env.VITE_FRONTEND_URL;
     const allowedOrigins = [
       frontendUrl,
-      'https://auraso.vercel.app',
+      'https://auraradiance.vercel.app',
       'https://aura-front-s1bw.onrender.com',
       'http://localhost:5173'
     ].filter(Boolean) as string[];
@@ -971,7 +971,9 @@ async function startServer() {
         methods: ["GET", "POST"]
       },
       transports: ['polling', 'websocket'],
-      path: '/socket.io/'
+      path: '/socket.io/',
+      pingInterval: 25000,
+      pingTimeout: 20000,
     });
 
     app.set('io', io);
