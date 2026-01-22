@@ -1285,18 +1285,48 @@ export const postsController = {
     try {
       const { limit = 10, hours = 24 } = req.query as Record<string, any>;
       const db = getDB();
-      const since = Date.now() - (parseInt(String(hours), 10) || 24) * 60 * 60 * 1000;
-
-      const pipeline = [
+      const limitNum = Math.min(parseInt(String(limit), 10) || 10, 100);
+      
+      const getPipeline = (since: number) => [
         { $match: { timestamp: { $gte: since } } },
         { $unwind: '$hashtags' },
         { $group: { _id: { $toLower: '$hashtags' }, count: { $sum: 1 } } },
         { $sort: { count: -1 } },
-        { $limit: Math.min(parseInt(String(limit), 10) || 10, 100) }
+        { $limit: limitNum }
       ];
 
-      const tags = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
-      res.json({ success: true, data: tags, message: 'Trending hashtags retrieved successfully' });
+      // 1. Try requested time window (default 24h)
+      let since = Date.now() - (parseInt(String(hours), 10) || 24) * 60 * 60 * 1000;
+      let tags = await db.collection(POSTS_COLLECTION).aggregate(getPipeline(since)).toArray();
+      let windowUsed = '24h';
+
+      // 2. If empty, try 7 days
+      if (tags.length === 0) {
+        since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        tags = await db.collection(POSTS_COLLECTION).aggregate(getPipeline(since)).toArray();
+        windowUsed = '7d';
+      }
+
+      // 3. If still empty, try 30 days
+      if (tags.length === 0) {
+        since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        tags = await db.collection(POSTS_COLLECTION).aggregate(getPipeline(since)).toArray();
+        windowUsed = '30d';
+      }
+
+      // 4. If still empty, try All Time
+      if (tags.length === 0) {
+        since = 0; // Beginning of time
+        tags = await db.collection(POSTS_COLLECTION).aggregate(getPipeline(since)).toArray();
+        windowUsed = 'all_time';
+      }
+
+      res.json({ 
+        success: true, 
+        data: tags, 
+        message: 'Trending hashtags retrieved successfully',
+        meta: { windowUsed } 
+      });
     } catch (error) {
       console.error('Error fetching trending hashtags:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch trending hashtags', message: 'Internal server error' });
