@@ -11,6 +11,8 @@ import {
   clearTokenCookies,
   verifyRefreshToken
 } from '../utils/jwtUtils';
+import { generateMagicToken, hashToken } from '../utils/tokenUtils';
+import { sendMagicLinkEmail } from '../services/emailService';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { transformUser } from '../utils/userUtils';
 import { User } from '../types';
@@ -255,6 +257,250 @@ router.get('/google/callback',
     }
   }
 );
+
+// ============ MAGIC LINK ============
+
+router.post('/magic-link', async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email is required',
+        message: 'Please provide your email address'
+      });
+    }
+
+    const db = getDB();
+    const user = await db.collection('users').findOne({ 
+      email: { $regex: new RegExp(`^${email}$`, 'i') } 
+    });
+
+    if (!user) {
+      // Security: Don't reveal if user exists
+      // But for this implementation, we'll just return success to avoid enumeration
+      // Ideally we might send a "Sign up" email instead
+      return res.json({
+        success: true,
+        message: 'If an account exists with this email, a magic link has been sent.'
+      });
+    }
+
+    const token = generateMagicToken();
+    const hashedToken = hashToken(token);
+    const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
+
+    await db.collection('users').updateOne(
+      { id: user.id },
+      { 
+        $set: { 
+          magicToken: hashedToken,
+          magicTokenExpires: expires
+        } 
+      }
+    );
+
+    const frontendUrl = process.env.VITE_FRONTEND_URL || 
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
+    
+    // Updated: Point to Frontend Verify Route
+    const magicLink = `${frontendUrl}/magic-login?token=${token}&email=${encodeURIComponent(email)}`;
+
+    await sendMagicLinkEmail(email, magicLink);
+
+    logSecurityEvent({
+      req,
+      type: 'magic_link_requested',
+      metadata: { userId: user.id, email }
+    });
+
+    res.json({
+      success: true,
+      message: 'If an account exists with this email, a magic link has been sent.'
+    });
+
+  } catch (error) {
+    console.error('Error requesting magic link:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to send magic link',
+      message: 'Internal server error'
+    });
+  }
+});
+
+// GET /magic-link/verify - Verifies token and redirects
+router.get('/magic-link/verify', async (req: Request, res: Response) => {
+  try {
+    const { email, token } = req.query;
+
+    const frontendUrl = process.env.VITE_FRONTEND_URL || 
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
+
+    if (!email || !token) {
+      return res.redirect(`${frontendUrl}/login?error=missing_credentials`);
+    }
+
+    const db = getDB();
+    const user = await db.collection('users').findOne({ 
+      email: { $regex: new RegExp(`^${email as string}$`, 'i') } 
+    });
+
+    if (!user || !user.magicToken || !user.magicTokenExpires) {
+       return res.redirect(`${frontendUrl}/login?error=invalid_link`);
+    }
+
+    // Check expiration
+    if (new Date() > new Date(user.magicTokenExpires)) {
+      return res.redirect(`${frontendUrl}/login?error=expired_link`);
+    }
+
+    // Verify token hash
+    const hashedToken = hashToken(token as string);
+    if (hashedToken !== user.magicToken) {
+      return res.redirect(`${frontendUrl}/login?error=invalid_token`);
+    }
+
+    // Clear magic token
+    await db.collection('users').updateOne(
+      { id: user.id },
+      { 
+        $unset: { magicToken: "", magicTokenExpires: "" },
+        $set: { lastLogin: new Date().toISOString() }
+      }
+    );
+
+    // Generate session tokens
+    const accessToken = generateAccessToken(user as unknown as User);
+    const refreshToken = generateRefreshToken(user as unknown as User);
+
+    await db.collection('users').updateOne(
+      { id: user.id },
+      {
+        $push: { refreshTokens: refreshToken } as any
+      }
+    );
+
+    setTokenCookies(res, accessToken, refreshToken);
+
+    logSecurityEvent({
+      req,
+      type: 'login_magic_link',
+      metadata: { userId: user.id }
+    });
+
+    if (req.headers.accept?.includes('application/json')) {
+      return res.json({ success: true, user: { id: user.id, email: user.email, name: user.name } });
+    }
+
+    res.redirect(`${frontendUrl}/feed`);
+
+  } catch (error) {
+    console.error('Error verifying magic link:', error);
+    const frontendUrl = process.env.VITE_FRONTEND_URL || 
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraradiance.vercel.app');
+    
+    if (req.headers.accept?.includes('application/json')) {
+      return res.status(500).json({ success: false, message: 'Server error' });
+    }
+    
+    res.redirect(`${frontendUrl}/login?error=server_error`);
+  }
+});
+
+// Deprecated or alternative JSON-based verification
+router.post('/magic-login', async (req: Request, res: Response) => {
+  try {
+    const { email, token } = req.body;
+
+    if (!email || !token) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing credentials',
+        message: 'Email and token are required'
+      });
+    }
+
+    const db = getDB();
+    const user = await db.collection('users').findOne({ 
+      email: { $regex: new RegExp(`^${email}$`, 'i') } 
+    });
+
+    if (!user || !user.magicToken || !user.magicTokenExpires) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid request',
+        message: 'Invalid or expired login link'
+      });
+    }
+
+    // Check expiration
+    if (new Date() > new Date(user.magicTokenExpires)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Expired token',
+        message: 'This login link has expired. Please request a new one.'
+      });
+    }
+
+    // Verify token hash
+    const hashedToken = hashToken(token);
+    // Use constant-time comparison in production, but simple string compare for now
+    if (hashedToken !== user.magicToken) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid token',
+        message: 'Invalid login link'
+      });
+    }
+
+    // Clear magic token
+    await db.collection('users').updateOne(
+      { id: user.id },
+      { 
+        $unset: { magicToken: "", magicTokenExpires: "" },
+        $set: { lastLogin: new Date().toISOString() }
+      }
+    );
+
+    // Generate session tokens
+    const accessToken = generateAccessToken(user as unknown as User);
+    const refreshToken = generateRefreshToken(user as unknown as User);
+
+    await db.collection('users').updateOne(
+      { id: user.id },
+      {
+        $push: { refreshTokens: refreshToken } as any
+      }
+    );
+
+    setTokenCookies(res, accessToken, refreshToken);
+
+    logSecurityEvent({
+      req,
+      type: 'login_magic_link',
+      metadata: { userId: user.id }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        user: transformUser(user),
+        // token: accessToken // Removed to enforce cookie-only flow
+      },
+      message: 'Login successful'
+    });
+
+  } catch (error) {
+    console.error('Error verifying magic link:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Login failed',
+      message: 'Internal server error'
+    });
+  }
+});
 
 // ============ REFRESH TOKEN ============
 router.post('/refresh-token', async (req: Request, res: Response) => {

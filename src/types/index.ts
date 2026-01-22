@@ -39,6 +39,8 @@ export interface User {
   privacySettings?: PrivacySettings;
   archivedChats?: string[];
   refreshTokens?: string[]; // Array of valid refresh tokens
+  magicToken?: string | null;
+  magicTokenExpires?: string | null; // ISO Date string
   serendipitySkips?: {
     targetUserId: string;
     lastSkippedAt: string;

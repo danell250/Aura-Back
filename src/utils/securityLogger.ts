@@ -9,7 +9,9 @@ export type SecurityEventType =
   | 'webhook_signature_failed'
   | 'rate_limit_triggered'
   | 'payment_failure'
-  | 'alert_login_spike';
+  | 'alert_login_spike'
+  | 'magic_link_requested'
+  | 'login_magic_link';
 
 interface SecurityEvent {
   type: SecurityEventType;
