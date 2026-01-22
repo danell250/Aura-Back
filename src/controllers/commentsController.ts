@@ -81,7 +81,7 @@ export const commentsController = {
   createComment: async (req: Request, res: Response) => {
     try {
       const { postId } = req.params;
-      const { text, authorId, parentId, taggedUserIds } = req.body as { text: string; authorId: string; parentId?: string; taggedUserIds?: string[] };
+      const { text, authorId, parentId, taggedUserIds, tempId } = req.body as { text: string; authorId: string; parentId?: string; taggedUserIds?: string[], tempId?: string };
       if (!text || !authorId) {
         return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text and authorId are required' });
       }
@@ -225,7 +225,8 @@ export const commentsController = {
       if (io) {
         io.emit('comment_added', {
           postId,
-          comment: newComment
+          comment: newComment,
+          tempId // Pass back the temporary ID for optimistic update reconciliation
         });
         
         // Also emit post update to ensure counts are synced
@@ -264,6 +265,15 @@ export const commentsController = {
 
       await db.collection(COMMENTS_COLLECTION).updateOne({ id }, { $set: updates });
       const updated = await db.collection(COMMENTS_COLLECTION).findOne({ id });
+      
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('comment_updated', {
+          postId: existing.postId,
+          comment: updated
+        });
+      }
+
       res.json({ success: true, data: updated, message: 'Comment updated successfully' });
     } catch (error) {
       console.error('Error updating comment:', error);
@@ -288,6 +298,15 @@ export const commentsController = {
       }
 
       await db.collection(COMMENTS_COLLECTION).deleteOne({ id });
+      
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('comment_deleted', {
+          commentId: id,
+          postId: existing.postId
+        });
+      }
+
       res.json({ success: true, message: 'Comment deleted successfully' });
     } catch (error) {
       console.error('Error deleting comment:', error);
@@ -359,6 +378,16 @@ export const commentsController = {
         );
       } else {
         updatedComment.userReactions = [];
+      }
+
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('comment_reaction_updated', {
+          commentId: id,
+          postId: updatedComment.postId,
+          reactions: updatedComment.reactions,
+          reactionUsers: updatedComment.reactionUsers
+        });
       }
 
       res.json({ success: true, data: updatedComment, message: `Reaction ${action} successfully` });

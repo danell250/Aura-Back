@@ -6,11 +6,11 @@ export async function sendMagicLinkEmail(to: string, magicLink: string) {
   const from = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM;
   
   if (!process.env.SENDGRID_API_KEY || !from) {
-    console.error('❌ SendGrid credentials not found.');
-    if (!process.env.SENDGRID_API_KEY) console.error('   - Missing SENDGRID_API_KEY');
-    if (!from) console.error('   - Missing SENDGRID_FROM_EMAIL or EMAIL_FROM');
-    
-    throw new Error("Email configuration is missing (SENDGRID_API_KEY or EMAIL_FROM). Set these in your environment.");
+    console.warn('⚠️ SendGrid credentials not found. Magic link will be logged to console only.');
+    console.log('--- MAGIC LINK ---');
+    console.log(magicLink);
+    console.log('------------------');
+    return; // Don't throw, just return success (simulated)
   }
 
   try {
