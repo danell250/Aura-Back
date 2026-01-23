@@ -529,6 +529,45 @@ export const postsController = {
         }
       }
 
+      // Refresh comment authors for single post
+      if (Array.isArray(post.comments) && post.comments.length > 0) {
+        const commentAuthorIds = new Set<string>();
+        post.comments.forEach((c: any) => {
+          if (c.author?.id) commentAuthorIds.add(c.author.id);
+        });
+
+        if (commentAuthorIds.size > 0) {
+          const commentAuthors = await db.collection(USERS_COLLECTION)
+            .find({ id: { $in: Array.from(commentAuthorIds) } })
+            .project({ 
+              id: 1, firstName: 1, lastName: 1, name: 1, handle: 1, 
+              avatar: 1, avatarKey: 1, avatarType: 1, isVerified: 1 
+            })
+            .toArray();
+          
+          const commentAuthorMap = new Map(commentAuthors.map((u: any) => [u.id, u]));
+
+          post.comments.forEach((c: any) => {
+            if (c.author?.id && commentAuthorMap.has(c.author.id)) {
+              const latest = commentAuthorMap.get(c.author.id);
+              c.author = transformUser(latest);
+            } else if (c.author) {
+              c.author = transformUser(c.author);
+            }
+            
+            if (currentUserId) {
+               if (c.reactionUsers) {
+                 c.userReactions = Object.keys(c.reactionUsers).filter(emoji => 
+                   Array.isArray(c.reactionUsers[emoji]) && c.reactionUsers[emoji].includes(currentUserId)
+                 );
+               } else {
+                 c.userReactions = [];
+               }
+            }
+          });
+        }
+      }
+
       res.json({ success: true, data: post });
     } catch (error) {
       console.error('Error fetching post:', error);
