@@ -30,10 +30,10 @@ import { Server as SocketIOServer } from 'socket.io';
 dotenv.config();
 
 // Debug: Check SendGrid Config
-if (process.env.SENDGRID_API_KEY) {
-  const fromEmail = process.env.EMAIL_FROM || process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za';
-  console.log('✅ SendGrid configured with API Key and From Email:', fromEmail);
-} else {
+  if (process.env.SENDGRID_API_KEY) {
+    const from = `${process.env.SENDGRID_FROM_NAME || 'Aura'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+    console.log(`✅ SendGrid configured with API Key and From: "${from}"`);
+  } else {
   console.warn('⚠️ SendGrid NOT configured:');
   if (!process.env.SENDGRID_API_KEY) console.warn('   - Missing SENDGRID_API_KEY');
 }

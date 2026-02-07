@@ -3,12 +3,8 @@ import sgMail from '@sendgrid/mail';
 sgMail.setApiKey(process.env.SENDGRID_API_KEY || '');
 
 export async function sendMagicLinkEmail(to: string, magicLink: string) {
-  // Configured as per request: From Name: Aura, From Email: no-reply@aura.net.za
-  const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM || 'no-reply@aura.net.za';
-  const from = {
-    name: 'Aura',
-    email: fromEmail
-  };
+  // Configured as per request: using SENDGRID_FROM_NAME and SENDGRID_FROM_EMAIL
+  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
   
   if (!process.env.SENDGRID_API_KEY) {
     console.warn('⚠️ SendGrid credentials not found. Magic link will be logged to console only.');
@@ -22,7 +18,7 @@ export async function sendMagicLinkEmail(to: string, magicLink: string) {
     await sgMail.send({
       to,
       from,
-      subject: 'Your secure login link',
+      subject: 'Your secure login link for Aura',
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
           <h2>Login to Aura</h2>
