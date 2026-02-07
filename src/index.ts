@@ -128,6 +128,8 @@ app.set("trust proxy", 1);
 app.use(cookieParser());
 
 const allowedOrigins = [
+  "https://www.aura.net.za",
+  "https://aura.net.za",
   "https://auraso.vercel.app",
   "https://www.auraso.vercel.app",
   "https://auraradiance.vercel.app",
@@ -468,9 +470,9 @@ app.get('/share/post/:id', async (req, res) => {
     const isImage = mediaUrl && (post.mediaType === 'image' || /\.(png|jpg|jpeg|webp|gif)$/i.test(mediaUrl));
     const isVideo = mediaUrl && (post.mediaType === 'video' || /\.(mp4|webm|ogg|mov)$/i.test(mediaUrl));
     // Use the new logo icon as fallback if no image is present
-    const imageForOg = isImage ? mediaUrl : (avatarUrl || 'https://auraso.vercel.app/logo-icon.svg');
+    const imageForOg = isImage ? mediaUrl : (avatarUrl || 'https://www.aura.net.za/logo-icon.svg');
     // Frontend URL for redirection
-    const frontendUrl = `https://auraso.vercel.app/p/${post.id}`;
+    const frontendUrl = `https://www.aura.net.za/p/${post.id}`;
     
     const html = `<!doctype html>
 <html lang="en">
@@ -968,6 +970,8 @@ async function startServer() {
     const frontendUrl = process.env.VITE_FRONTEND_URL;
     const allowedOrigins = [
       frontendUrl,
+      'https://www.aura.net.za',
+      'https://aura.net.za',
       'https://auraradiance.vercel.app',
       'https://aura-front-s1bw.onrender.com',
       'http://localhost:5173'

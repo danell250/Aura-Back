@@ -347,7 +347,7 @@ export const commentsController = {
   reactToComment: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { reaction } = req.body as { reaction: string };
+      const { reaction, action: forceAction } = req.body as { reaction: string, action?: 'add' | 'remove' };
       const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
 
       if (!reaction) {
@@ -368,26 +368,36 @@ export const commentsController = {
       const usersForEmoji = currentReactionUsers[reaction] || [];
       const hasReacted = usersForEmoji.includes(userId);
       let action = 'added';
+      let shouldUpdate = true;
 
-      if (hasReacted) {
-        // Remove reaction
-        action = 'removed';
-        await db.collection(COMMENTS_COLLECTION).updateOne(
-          { id },
-          {
-            $pull: { [`reactionUsers.${reaction}`]: userId },
-            $inc: { [`reactions.${reaction}`]: -1 }
-          }
-        );
+      if (forceAction) {
+         if (forceAction === 'add' && hasReacted) shouldUpdate = false;
+         if (forceAction === 'remove' && !hasReacted) shouldUpdate = false;
+         action = forceAction === 'add' ? 'added' : 'removed';
       } else {
-        // Add reaction
-        await db.collection(COMMENTS_COLLECTION).updateOne(
-          { id },
-          {
-            $addToSet: { [`reactionUsers.${reaction}`]: userId },
-            $inc: { [`reactions.${reaction}`]: 1 }
-          }
-        );
+         action = hasReacted ? 'removed' : 'added';
+      }
+
+      if (shouldUpdate) {
+        if (action === 'removed') {
+           // Remove reaction
+           await db.collection(COMMENTS_COLLECTION).updateOne(
+             { id },
+             {
+               $pull: { [`reactionUsers.${reaction}`]: userId },
+               $inc: { [`reactions.${reaction}`]: -1 }
+             }
+           );
+        } else {
+           // Add reaction
+           await db.collection(COMMENTS_COLLECTION).updateOne(
+             { id },
+             {
+               $addToSet: { [`reactionUsers.${reaction}`]: userId },
+               $inc: { [`reactions.${reaction}`]: 1 }
+             }
+           );
+        }
       }
 
       // Fetch updated comment to return consistent state

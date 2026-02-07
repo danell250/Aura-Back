@@ -24,7 +24,7 @@ export const shareController = {
 
       if (!post) {
         // Fallback to generic metadata if post not found
-        const url = 'https://auraradiance.vercel.app';
+        const url = 'https://www.aura.net.za';
         return res.redirect(url);
       }
 
@@ -36,8 +36,8 @@ export const shareController = {
       const postContent = post.content || '';
       const title = escapeHtml(`Post by ${authorName} on Aura`);
       const description = escapeHtml(truncateContent(postContent, 200));
-      const image = post.mediaUrl || 'https://auraradiance.vercel.app/og-image.jpg?v=2';
-      const url = `https://auraradiance.vercel.app/p/${id}`;
+      const image = post.mediaUrl || 'https://www.aura.net.za/og-image.jpg?v=2';
+      const url = `https://www.aura.net.za/p/${id}`;
 
       const structuredData = {
         "@context": "https://schema.org",
@@ -48,7 +48,7 @@ export const shareController = {
         author: {
           "@type": "Person",
           name: authorName,
-          url: `https://auraradiance.vercel.app/@${authorHandle}`
+          url: `https://www.aura.net.za/@${authorHandle}`
         },
         datePublished: post.timestamp || new Date().toISOString(),
         url,
@@ -57,7 +57,7 @@ export const shareController = {
           name: "Aura",
           logo: {
             "@type": "ImageObject",
-            url: "https://auraradiance.vercel.app/logo.png"
+            url: "https://www.aura.net.za/logo.png"
           }
         }
       };

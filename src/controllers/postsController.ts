@@ -226,7 +226,7 @@ export const postsController = {
   // GET /api/posts - Get all posts (with filters & pagination)
   getAllPosts: async (req: Request, res: Response) => {
     try {
-      const { page = 1, limit = 20, userId, energy, hashtags } = req.query as Record<string, any>;
+      const { page = 1, limit = 20, userId, energy, hashtags, sort } = req.query as Record<string, any>;
       const db = getDB();
       const currentUserId = (req as any).user?.id;
 
@@ -317,8 +317,50 @@ export const postsController = {
             ]
           }
         },
-        ...( !userId || userId !== currentUserId ? [visibilityMatchStage] : [] ),
-        { $sort: { timestamp: -1 } },
+        ...( !userId || userId !== currentUserId ? [visibilityMatchStage] : [] )
+      ];
+
+      if (sort === 'trending') {
+        pipeline.push(
+          {
+            $addFields: {
+              totalReactions: {
+                $sum: {
+                  $map: {
+                    input: { $objectToArray: { $ifNull: ['$reactions', {}] } },
+                    as: 'r',
+                    in: '$$r.v'
+                  }
+                }
+              }
+            }
+          },
+          {
+            $lookup: {
+              from: 'comments',
+              localField: 'id',
+              foreignField: 'postId',
+              pipeline: [{ $count: 'count' }],
+              as: 'commentCountArr'
+            }
+          },
+          {
+            $addFields: {
+              commentCountVal: { $ifNull: [{ $arrayElemAt: ['$commentCountArr.count', 0] }, 0] }
+            }
+          },
+          {
+            $addFields: {
+              engagementScore: { $add: ['$totalReactions', '$commentCountVal'] }
+            }
+          },
+          { $sort: { engagementScore: -1, timestamp: -1 } }
+        );
+      } else {
+        pipeline.push({ $sort: { timestamp: -1 } });
+      }
+
+      pipeline.push(
         { $skip: (pageNum - 1) * limitNum },
         { $limit: limitNum },
         {
@@ -345,10 +387,14 @@ export const postsController = {
         {
           $project: {
             fetchedComments: 0,
+            commentCountArr: 0, // Cleanup temp fields
+            commentCountVal: 0,
+            totalReactions: 0,
+            engagementScore: 0
             // authorDetails: 0 // Keep authorDetails to ensure profile info is fresh
           }
         }
-      ];
+      );
 
       const data = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
 
@@ -946,7 +992,7 @@ export const postsController = {
   reactToPost: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { reaction } = req.body;
+      const { reaction, action: forceAction } = req.body;
       const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
 
       if (!reaction) {
@@ -967,26 +1013,36 @@ export const postsController = {
       const usersForEmoji = currentReactionUsers[reaction] || [];
       const hasReacted = usersForEmoji.includes(userId);
       let action = 'added';
+      let shouldUpdate = true;
 
-      if (hasReacted) {
-         // Remove reaction
-         action = 'removed';
-         await db.collection(POSTS_COLLECTION).updateOne(
-           { id },
-           {
-             $pull: { [`reactionUsers.${reaction}`]: userId },
-             $inc: { [`reactions.${reaction}`]: -1 }
-           }
-         );
+      if (forceAction) {
+         if (forceAction === 'add' && hasReacted) shouldUpdate = false;
+         if (forceAction === 'remove' && !hasReacted) shouldUpdate = false;
+         action = forceAction === 'add' ? 'added' : 'removed';
       } else {
-         // Add reaction
-         await db.collection(POSTS_COLLECTION).updateOne(
-           { id },
-           {
-             $addToSet: { [`reactionUsers.${reaction}`]: userId },
-             $inc: { [`reactions.${reaction}`]: 1 }
-           }
-         );
+         action = hasReacted ? 'removed' : 'added';
+      }
+
+      if (shouldUpdate) {
+        if (action === 'removed') {
+           // Remove reaction
+           await db.collection(POSTS_COLLECTION).updateOne(
+             { id },
+             {
+               $pull: { [`reactionUsers.${reaction}`]: userId },
+               $inc: { [`reactions.${reaction}`]: -1 }
+             }
+           );
+        } else {
+           // Add reaction
+           await db.collection(POSTS_COLLECTION).updateOne(
+             { id },
+             {
+               $addToSet: { [`reactionUsers.${reaction}`]: userId },
+               $inc: { [`reactions.${reaction}`]: 1 }
+             }
+           );
+        }
       }
 
       // Notify author only if adding a reaction and it's not self-reaction
