@@ -30,12 +30,12 @@ import { Server as SocketIOServer } from 'socket.io';
 dotenv.config();
 
 // Debug: Check SendGrid Config
-if (process.env.SENDGRID_API_KEY && process.env.EMAIL_FROM) {
-  console.log('✅ SendGrid configured with API Key and From Email:', process.env.EMAIL_FROM);
+if (process.env.SENDGRID_API_KEY) {
+  const fromEmail = process.env.EMAIL_FROM || process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za';
+  console.log('✅ SendGrid configured with API Key and From Email:', fromEmail);
 } else {
   console.warn('⚠️ SendGrid NOT configured:');
   if (!process.env.SENDGRID_API_KEY) console.warn('   - Missing SENDGRID_API_KEY');
-  if (!process.env.EMAIL_FROM) console.warn('   - Missing EMAIL_FROM');
 }
 
 // Passport Google OAuth Strategy Configuration
@@ -335,7 +335,7 @@ app.get('/api/debug/cookies', (req, res) => {
 
 app.get('/api/debug/sendgrid', (req, res) => {
   const apiKey = process.env.SENDGRID_API_KEY;
-  const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM;
+  const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM || 'no-reply@aura.net.za';
   
   res.json({
     hasApiKey: !!apiKey,

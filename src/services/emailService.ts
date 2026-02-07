@@ -3,9 +3,14 @@ import sgMail from '@sendgrid/mail';
 sgMail.setApiKey(process.env.SENDGRID_API_KEY || '');
 
 export async function sendMagicLinkEmail(to: string, magicLink: string) {
-  const from = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM;
+  // Configured as per request: From Name: Aura, From Email: no-reply@aura.net.za
+  const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM || 'no-reply@aura.net.za';
+  const from = {
+    name: 'Aura',
+    email: fromEmail
+  };
   
-  if (!process.env.SENDGRID_API_KEY || !from) {
+  if (!process.env.SENDGRID_API_KEY) {
     console.warn('⚠️ SendGrid credentials not found. Magic link will be logged to console only.');
     console.log('--- MAGIC LINK ---');
     console.log(magicLink);
