@@ -34,10 +34,22 @@ export const shareController = {
       const trustScore = post.author?.trustScore || 0;
 
       const postContent = post.content || '';
-      const title = escapeHtml(`Post by ${authorName} on Aura`);
-      const description = escapeHtml(truncateContent(postContent, 200));
+      
+      // Title: Post title (if time capsule) or first line of content
+      const firstLine = postContent.split('\n').find((line: string) => line.trim().length > 0) || 'Post on Aura';
+      const titleText = post.timeCapsuleTitle || (firstLine.length > 80 ? firstLine.substring(0, 80) + '...' : firstLine);
+      const title = escapeHtml(titleText);
+      
+      // Description: First 2-3 meaningful sentences
+      // Split by sentence delimiters (., !, ?) keeping the delimiter
+      const sentences = postContent.match(/[^.!?]+[.!?]+/g) || [postContent];
+      // Take first 3 sentences or up to 300 chars
+      const descriptionText = sentences.slice(0, 3).join(' ').trim();
+      const description = escapeHtml(truncateContent(descriptionText, 300));
+      
       const image = post.mediaUrl || 'https://www.aura.net.za/og-image.jpg?v=2';
-      const url = `https://www.aura.net.za/p/${id}`;
+      // Use the canonical frontend URL as requested
+      const url = `https://www.aura.net.za/post/${id}`;
 
       const structuredData = {
         "@context": "https://schema.org",
