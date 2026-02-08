@@ -61,24 +61,38 @@ export const verifyRefreshToken = (token: string): { id: string } | null => {
   }
 };
 
+// Shared Cookie Options
+const getCookieOptions = (isProduction: boolean): any => {
+  const options: any = {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+    path: '/'
+  };
+
+  // Only set domain if explicitly configured
+  if (process.env.COOKIE_DOMAIN) {
+    options.domain = process.env.COOKIE_DOMAIN;
+  }
+
+  return options;
+};
+
 // Set Token Cookies
 export const setTokenCookies = (res: Response, accessToken: string, refreshToken: string) => {
   // Treat as production if NODE_ENV is production OR if running on Render
   const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
+  const options = getCookieOptions(isProduction);
   
   // Access Token Cookie
   res.cookie('accessToken', accessToken, {
-    httpOnly: true,
-    secure: isProduction, // Secure is required for SameSite=None
-    sameSite: isProduction ? 'none' : 'lax',
+    ...options,
     maxAge: 15 * 60 * 1000 // 15 minutes
   });
 
   // Refresh Token Cookie
   res.cookie('refreshToken', refreshToken, {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
+    ...options,
     maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   });
 };
@@ -86,18 +100,10 @@ export const setTokenCookies = (res: Response, accessToken: string, refreshToken
 // Clear Token Cookies
 export const clearTokenCookies = (res: Response) => {
   const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
+  const options = getCookieOptions(isProduction);
   
-  res.clearCookie('accessToken', {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax'
-  });
-
-  res.clearCookie('refreshToken', {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax'
-  });
+  res.clearCookie('accessToken', options);
+  res.clearCookie('refreshToken', options);
 };
 
 // Middleware to protect routes with JWT (Updated to check cookies)

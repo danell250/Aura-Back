@@ -1097,8 +1097,10 @@ router.post('/logout', attachUser, async (req: Request, res: Response) => {
         await db.collection('users').updateOne(
           { id: userId },
           { 
-            $pull: { refreshTokens: refreshToken } as any,
-            $set: { lastActive: new Date().toISOString() }
+            $set: { 
+              refreshTokens: [],
+              lastActive: new Date().toISOString() 
+            }
           }
         );
       }
