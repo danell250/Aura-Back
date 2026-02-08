@@ -247,26 +247,7 @@ export const attachUser = async (req: Request, res: Response, next: NextFunction
       }
     }
 
-    // 4. Simple User ID Auth (for manually registered users)
-    const userIdHeader = req.headers['x-user-id'] as string;
-    if (userIdHeader && !req.user) {
-      try {
-        const db = getDB();
-        const user = await db.collection('users').findOne({ id: userIdHeader });
-        
-        if (user) {
-          req.user = {
-            ...user,
-            id: user.id
-          } as unknown as User;
-          
-          // Mock isAuthenticated
-          req.isAuthenticated = (() => true) as any;
-        }
-      } catch (e) {
-        console.warn('Failed to get user by ID in attachUser:', e);
-      }
-    }
+
     
     next();
   } catch (error) {

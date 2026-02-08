@@ -31,6 +31,8 @@ export interface User {
   // Backend-specific fields
   googleId?: string;
   githubId?: string;
+  linkedinId?: string;
+  discordId?: string;
   passwordHash?: string;
   isAdmin?: boolean; // Required for admin checks
   createdAt?: string;

@@ -343,6 +343,10 @@ router.get('/linkedin/callback', async (req: Request, res: Response) => {
     const profile = profileResponse.data;
     // LinkedIn profile structure: { sub, name, given_name, family_name, picture, email, ... }
 
+    if (!profile.email_verified) {
+       return res.redirect('/login?error=linkedin_email_not_verified');
+    }
+
     const db = getDB();
     // 4. Find or Create User
     // Identify-First: Check by EMAIL
@@ -434,6 +438,191 @@ router.get('/linkedin/callback', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('LinkedIn OAuth callback error:', error?.response?.data || error.message);
     res.redirect('/login?error=linkedin_callback_error');
+  }
+});
+
+// ============ DISCORD OAUTH ============
+router.get('/discord', (req: Request, res: Response) => {
+  if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
+    return res.status(503).json({
+      success: false,
+      message: 'Discord login is not configured on the server.'
+    });
+  }
+
+  // 1. Generate a secure random state
+  const state = crypto.randomBytes(16).toString('hex');
+
+  // 2. Store state in a secure, httpOnly cookie (valid for 5 mins)
+  res.cookie('discord_auth_state', state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 5 * 60 * 1000 // 5 minutes
+  });
+
+  // 3. Construct the authorization URL
+  const redirectUri = process.env.DISCORD_CALLBACK_URL || 'https://www.aura.net.za/api/auth/discord/callback';
+  const clientId = process.env.DISCORD_CLIENT_ID;
+  const scope = 'identify email'; 
+  
+  const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
+  
+  // 4. Redirect user to Discord
+  res.redirect(authUrl);
+});
+
+router.get('/discord/callback', async (req: Request, res: Response) => {
+  const { code, state, error } = req.query;
+
+  // Handle Discord errors
+  if (error) {
+    console.error('Discord OAuth Error:', error);
+    return res.redirect('/login?error=discord_auth_failed');
+  }
+
+  if (!code) {
+    return res.redirect('/login?error=no_code');
+  }
+
+  // 1. Validate State
+  const storedState = req.cookies.discord_auth_state;
+  if (!state || !storedState || state !== storedState) {
+    console.error('Discord OAuth State Mismatch:', { received: state, stored: storedState });
+    return res.redirect('/login?error=state_mismatch');
+  }
+
+  // Clear the state cookie once used
+  res.clearCookie('discord_auth_state');
+
+  try {
+    const redirectUri = process.env.DISCORD_CALLBACK_URL || 'https://www.aura.net.za/api/auth/discord/callback';
+    
+    // 2. Exchange code for access token
+    const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+      client_id: process.env.DISCORD_CLIENT_ID as string,
+      client_secret: process.env.DISCORD_CLIENT_SECRET as string,
+      grant_type: 'authorization_code',
+      code: code as string,
+      redirect_uri: redirectUri
+    }), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+
+    const accessToken = tokenResponse.data.access_token;
+
+    // 3. Fetch user info
+    const userResponse = await axios.get('https://discord.com/api/users/@me', {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`
+      }
+    });
+
+    const profile = userResponse.data;
+    // Discord profile: { id, username, discriminator, global_name, avatar, email, verified, ... }
+
+    if (!profile.email) {
+       // Email is required for our Identify-First strategy
+       return res.redirect('/login?error=discord_no_email');
+    }
+
+    if (!profile.verified) {
+       return res.redirect('/login?error=discord_email_not_verified');
+    }
+
+    const db = getDB();
+    
+    // 4. Find or Create User
+    // Identify-First: Check by EMAIL
+    const existingUser = await db.collection('users').findOne({ email: profile.email });
+
+    let userToReturn: User;
+
+    if (existingUser) {
+      console.log('✓ Found existing user by email (Discord):', existingUser.email);
+
+      // 2. Account exists (could be from Google, Magic Link, or Password)
+      // Simply "link" this Discord ID to the existing account
+      const updates: any = {
+        lastLogin: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        // Always link the ID of the current provider
+        discordId: profile.id || existingUser.discordId,
+      };
+
+      // 3. DO NOT overwrite firstName, lastName, or handle if they already exist
+      // Only fill them in if the existing record is missing them
+      if (!existingUser.firstName) updates.firstName = profile.global_name || profile.username;
+      if (!existingUser.avatar) {
+         updates.avatar = profile.avatar 
+           ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png` 
+           : `https://ui-avatars.com/api/?name=${profile.username}&background=random`;
+      }
+
+      await db.collection('users').updateOne(
+        { id: existingUser.id },
+        { $set: updates }
+      );
+      
+      userToReturn = { ...existingUser, ...updates } as User;
+    } else {
+      console.log('➕ New user from Discord OAuth');
+      const uniqueHandle = await generateUniqueHandle(
+        profile.username, 
+        ''
+      );
+
+      const newUser = {
+        id: crypto.randomUUID(),
+        discordId: profile.id,
+        firstName: profile.global_name || profile.username,
+        lastName: '', // Discord doesn't provide last name
+        name: profile.global_name || profile.username,
+        email: profile.email,
+        avatar: profile.avatar 
+           ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png` 
+           : `https://ui-avatars.com/api/?name=${profile.username}&background=random`,
+        avatarType: 'url',
+        handle: uniqueHandle,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+        auraCredits: 100,
+        trustScore: 10,
+        activeGlow: 'none',
+        acquaintances: [],
+        blockedUsers: [],
+        refreshTokens: []
+      };
+
+      await db.collection('users').insertOne(newUser as any);
+      userToReturn = newUser as any;
+    }
+
+    // 5. Session Management
+    const newAccessToken = generateAccessToken(userToReturn);
+    const refreshToken = generateRefreshToken(userToReturn);
+
+    await db.collection('users').updateOne(
+      { id: userToReturn.id },
+      {
+        $push: { refreshTokens: refreshToken } as any
+      }
+    );
+
+    setTokenCookies(res, newAccessToken, refreshToken);
+
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+
+    console.log('[OAuth:Discord] Redirecting to:', `${frontendUrl}/dashboard`);
+    res.redirect(`${frontendUrl}/dashboard`);
+
+  } catch (error: any) {
+    console.error('Discord OAuth callback error:', error?.response?.data || error.message);
+    res.redirect('/login?error=discord_callback_error');
   }
 });
 
@@ -812,16 +1001,27 @@ router.get('/user', requireAuth, (req: Request, res: Response) => {
 });
 
 // ============ LOGOUT ============
-router.post('/logout', async (req: Request, res: Response) => {
+router.post('/logout', attachUser, async (req: Request, res: Response) => {
   try {
     const refreshToken = req.cookies.refreshToken;
+    const user = (req as any).user as User | undefined;
 
     if (refreshToken) {
       const db = getDB();
-      const decoded = verifyRefreshToken(refreshToken);
-      if (decoded) {
+      
+      // Try to find user ID from token or request
+      let userId = user?.id;
+
+      if (!userId) {
+        const decoded = verifyRefreshToken(refreshToken);
+        if (decoded) {
+          userId = decoded.id;
+        }
+      }
+
+      if (userId) {
         await db.collection('users').updateOne(
-          { id: decoded.id },
+          { id: userId },
           { 
             $pull: { refreshTokens: refreshToken } as any,
             $set: { lastActive: new Date().toISOString() }

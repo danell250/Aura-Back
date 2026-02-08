@@ -21,6 +21,8 @@ export interface IUser {
   isPrivate?: boolean;
   googleId?: string;
   githubId?: string;
+  linkedinId?: string;
+  discordId?: string;
   magicLinkToken?: string;
   magicLinkExpires?: Date;
   updatedAt?: string;
