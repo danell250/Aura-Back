@@ -3,6 +3,7 @@ import passport from 'passport';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
+import axios from 'axios';
 import { getDB } from '../db';
 import { requireAuth, attachUser } from '../middleware/authMiddleware';
 import {
@@ -175,7 +176,7 @@ router.get('/google/callback',
 
         console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
 
-        // FIX: Check by EMAIL to link accounts
+        // Identify-First: Check by EMAIL
         const existingUser = await db.collection('users').findOne({
           email: userData.email
         });
@@ -183,26 +184,26 @@ router.get('/google/callback',
         let userToReturn: User;
 
         if (existingUser) {
-          console.log('✓ Found existing user:', existingUser.id);
-          // PRESERVE existing handle - NEVER change it
+          console.log('✓ Found existing user by email:', existingUser.email);
+          
           const updates: any = {
-            firstName: userData.firstName,
-            lastName: userData.lastName,
-            name: userData.name,
-            email: userData.email,
-            avatar: userData.avatar,
-            avatarType: userData.avatarType,
-            googleId: userData.googleId,
             lastLogin: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            updatedAt: new Date().toISOString(),
+            // Always link the ID of the current provider
+            googleId: userData.googleId || existingUser.googleId,
           };
-          updates.handle = existingUser.handle; // CRITICAL: Keep original handle
+
+          // DO NOT update these if they already exist
+          // This keeps the user's chosen identity intact
+          if (!existingUser.handle) updates.handle = userData.handle;
+          if (!existingUser.firstName) updates.firstName = userData.firstName;
+          if (!existingUser.avatar) updates.avatar = userData.avatar;
 
           await db.collection('users').updateOne(
             { id: existingUser.id },
             { $set: updates }
           );
-          console.log('✓ Updated existing user after OAuth:', existingUser.id, '| Handle preserved:', existingUser.handle);
+          
           userToReturn = { ...existingUser, ...updates } as User;
         } else {
           console.log('➕ New user from Google OAuth');
@@ -255,6 +256,186 @@ router.get('/google/callback',
     }
   }
 );
+
+// ============ GITHUB OAUTH ============
+// ... (existing GitHub implementation)
+
+// ============ LINKEDIN OAUTH ============
+router.get('/linkedin', (req: Request, res: Response) => {
+  if (!process.env.LINKEDIN_CLIENT_ID || !process.env.LINKEDIN_CLIENT_SECRET) {
+    return res.status(503).json({
+      success: false,
+      message: 'LinkedIn login is not configured on the server.'
+    });
+  }
+
+  // 1. Generate a secure random state
+  const state = crypto.randomBytes(16).toString('hex');
+
+  // 2. Store state in a secure, httpOnly cookie (valid for 5 mins)
+  res.cookie('linkedin_auth_state', state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production', // secure in prod
+    sameSite: 'lax', // allows redirect from external site
+    maxAge: 5 * 60 * 1000 // 5 minutes
+  });
+
+  // 3. Construct the authorization URL
+  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/auth/linkedin/callback';
+  const clientId = process.env.LINKEDIN_CLIENT_ID;
+  const scope = 'openid profile email';
+  
+  const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(scope)}`;
+  
+  // 4. Redirect user to LinkedIn
+  res.redirect(authUrl);
+});
+
+router.get('/linkedin/callback', async (req: Request, res: Response) => {
+  const { code, state, error } = req.query;
+
+  // Handle LinkedIn errors
+  if (error) {
+    console.error('LinkedIn OAuth Error:', error);
+    return res.redirect('/login?error=linkedin_auth_failed');
+  }
+
+  if (!code) {
+    return res.redirect('/login?error=no_code');
+  }
+
+  // 1. Validate State
+  const storedState = req.cookies.linkedin_auth_state;
+  if (!state || !storedState || state !== storedState) {
+    console.error('LinkedIn OAuth State Mismatch:', { received: state, stored: storedState });
+    return res.redirect('/login?error=state_mismatch');
+  }
+
+  // Clear the state cookie once used
+  res.clearCookie('linkedin_auth_state');
+
+  try {
+    const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/auth/linkedin/callback';
+    
+    // 2. Exchange code for access token
+    const tokenResponse = await axios.post('https://www.linkedin.com/oauth/v2/accessToken', null, {
+      params: {
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+        client_id: process.env.LINKEDIN_CLIENT_ID,
+        client_secret: process.env.LINKEDIN_CLIENT_SECRET
+      },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+
+    const accessToken = tokenResponse.data.access_token;
+
+    // 3. Fetch user info
+    const profileResponse = await axios.get('https://api.linkedin.com/v2/userinfo', {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`
+      }
+    });
+
+    const profile = profileResponse.data;
+    // LinkedIn profile structure: { sub, name, given_name, family_name, picture, email, ... }
+
+    const db = getDB();
+    // 4. Find or Create User
+    // Identify-First: Check by EMAIL
+    const existingUser = await db.collection('users').findOne({ email: profile.email });
+
+    let userToReturn: User;
+
+    if (existingUser) {
+      console.log('✓ Found existing user by email:', existingUser.email);
+
+      // 2. Account exists (could be from Google, Magic Link, or Password)
+      // Simply "link" this LinkedIn sub ID to the existing account if not already there
+      const updates: any = {
+        lastLogin: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        // Always link the ID of the current provider
+        linkedinId: profile.sub || existingUser.linkedinId,
+      };
+
+      // 3. DO NOT overwrite firstName, lastName, or handle if they already exist
+      // Only fill them in if the existing record is missing them
+      if (!existingUser.firstName) updates.firstName = profile.given_name;
+      if (!existingUser.avatar) updates.avatar = profile.picture;
+      // Also preserve handle
+      if (!existingUser.handle) {
+         // Generate one if really needed, though usually we won't need to do this here 
+         // as we don't have userData.handle from LinkedIn usually.
+         // But for consistency with the request:
+         // LinkedIn profile doesn't always have a handle concept, so we skip unless we want to generate one.
+      }
+
+      await db.collection('users').updateOne(
+        { id: existingUser.id },
+        { $set: updates }
+      );
+      
+      userToReturn = { ...existingUser, ...updates } as User;
+    } else {
+      console.log('➕ New user from LinkedIn OAuth');
+      const uniqueHandle = await generateUniqueHandle(
+        profile.given_name || 'User',
+        profile.family_name || ''
+      );
+
+      const newUser = {
+        id: crypto.randomUUID(),
+        linkedinId: profile.sub,
+        firstName: profile.given_name || 'User',
+        lastName: profile.family_name || '',
+        name: profile.name || 'User',
+        email: profile.email || '',
+        avatar: profile.picture || `https://ui-avatars.com/api/?name=${profile.name}&background=random`,
+        avatarType: 'url',
+        handle: uniqueHandle,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+        auraCredits: 100,
+        trustScore: 10,
+        activeGlow: 'none',
+        acquaintances: [],
+        blockedUsers: [],
+        refreshTokens: []
+      };
+
+      await db.collection('users').insertOne(newUser as any);
+      userToReturn = newUser as any;
+    }
+
+    // 5. Session Management
+    const newAccessToken = generateAccessToken(userToReturn);
+    const refreshToken = generateRefreshToken(userToReturn);
+
+    await db.collection('users').updateOne(
+      { id: userToReturn.id },
+      {
+        $push: { refreshTokens: refreshToken } as any
+      }
+    );
+
+    setTokenCookies(res, newAccessToken, refreshToken);
+
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+
+    console.log('[OAuth:LinkedIn] Redirecting to:', `${frontendUrl}/dashboard`);
+    res.redirect(`${frontendUrl}/dashboard`);
+
+  } catch (error: any) {
+    console.error('LinkedIn OAuth callback error:', error?.response?.data || error.message);
+    res.redirect('/login?error=linkedin_callback_error');
+  }
+});
 
 // ============ MAGIC LINK ============
 
@@ -530,7 +711,7 @@ router.get('/github/callback',
 
         console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
 
-        // FIX: Check by EMAIL to link accounts
+        // Identify-First: Check by EMAIL
         const existingUser = await db.collection('users').findOne({
           email: userData.email
         });
@@ -538,26 +719,26 @@ router.get('/github/callback',
         let userToReturn: User;
 
         if (existingUser) {
-          console.log('✓ Found existing user:', existingUser.id);
-          // PRESERVE existing handle - NEVER change it
+          console.log('✓ Found existing user by email:', existingUser.email);
+          
           const updates: any = {
-            firstName: userData.firstName,
-            lastName: userData.lastName,
-            name: userData.name,
-            email: userData.email,
-            avatar: userData.avatar,
-            avatarType: userData.avatarType,
-            githubId: userData.githubId,
             lastLogin: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            updatedAt: new Date().toISOString(),
+            // Always link the ID of the current provider
+            githubId: userData.githubId || existingUser.githubId,
           };
-          updates.handle = existingUser.handle; // CRITICAL: Keep original handle
+
+          // DO NOT update these if they already exist
+          // This keeps the user's chosen identity intact
+          if (!existingUser.handle) updates.handle = userData.handle;
+          if (!existingUser.firstName) updates.firstName = userData.firstName;
+          if (!existingUser.avatar) updates.avatar = userData.avatar;
 
           await db.collection('users').updateOne(
             { id: existingUser.id },
             { $set: updates }
           );
-          console.log('✓ Updated existing user after GitHub OAuth:', existingUser.id, '| Handle preserved:', existingUser.handle);
+          
           userToReturn = { ...existingUser, ...updates } as User;
         } else {
           console.log('➕ New user from GitHub OAuth');
@@ -612,6 +793,8 @@ router.get('/github/callback',
     }
   }
 );
+
+
 
 // ============ GET CURRENT USER ============
 router.get('/user', requireAuth, (req: Request, res: Response) => {
