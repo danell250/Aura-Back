@@ -556,140 +556,112 @@ router.get('/discord', (req: Request, res: Response) => {
     });
   }
 
-  // 1. Generate a secure random state
   const state = crypto.randomBytes(16).toString('hex');
 
-  // 2. Store state in a secure, httpOnly cookie (valid for 5 mins)
-  res.cookie('discord_auth_state', state, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 5 * 60 * 1000 // 5 minutes
-  });
+  const redirectUri =
+    process.env.DISCORD_CALLBACK_URL ||
+    (process.env.NODE_ENV === 'production'
+      ? 'https://aura-back-s1bw.onrender.com/api/auth/discord/callback'
+      : 'http://localhost:5000/api/auth/discord/callback');
 
-  // 3. Construct the authorization URL
-  const redirectUri = process.env.DISCORD_CALLBACK_URL || 'https://www.aura.net.za/api/auth/discord/callback';
-  const clientId = process.env.DISCORD_CLIENT_ID;
-  const scope = 'identify email'; 
-  
-  const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
-  
-  // 4. Redirect user to Discord
-  res.redirect(authUrl);
+  const authUrl =
+    `https://discord.com/oauth2/authorize` +
+    `?client_id=${process.env.DISCORD_CLIENT_ID}` +
+    `&response_type=code` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&scope=${encodeURIComponent('identify email')}` +
+    `&state=${state}`;
+
+  return res.redirect(authUrl);
 });
 
 router.get('/discord/callback', async (req: Request, res: Response) => {
-  const { code, state, error } = req.query;
+  const { code, error } = req.query;
 
-  // Handle Discord errors
-  if (error) {
-    console.error('Discord OAuth Error:', error);
-    return res.redirect('/login?error=discord_auth_failed');
-  }
-
-  if (!code) {
-    return res.redirect('/login?error=no_code');
-  }
-
-  // 1. Validate State
-  const storedState = req.cookies.discord_auth_state;
-  if (!state || !storedState || state !== storedState) {
-    console.error('Discord OAuth State Mismatch:', { received: state, stored: storedState });
-    return res.redirect('/login?error=state_mismatch');
-  }
-
-  // Clear the state cookie once used
-  res.clearCookie('discord_auth_state');
+  if (error) return res.redirect('/login?error=discord_auth_failed');
+  if (!code) return res.redirect('/login?error=discord_no_code');
 
   try {
-    const redirectUri = process.env.DISCORD_CALLBACK_URL || 'https://www.aura.net.za/api/auth/discord/callback';
-    
-    // 2. Exchange code for access token
-    const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
-      client_id: process.env.DISCORD_CLIENT_ID as string,
-      client_secret: process.env.DISCORD_CLIENT_SECRET as string,
+    const redirectUri =
+      process.env.DISCORD_CALLBACK_URL ||
+      (process.env.NODE_ENV === 'production'
+        ? 'https://aura-back-s1bw.onrender.com/api/auth/discord/callback'
+        : 'http://localhost:5000/api/auth/discord/callback');
+
+    // Exchange code for token
+    const body = new URLSearchParams({
+      client_id: process.env.DISCORD_CLIENT_ID!,
+      client_secret: process.env.DISCORD_CLIENT_SECRET!,
       grant_type: 'authorization_code',
-      code: code as string,
-      redirect_uri: redirectUri
-    }), {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      }
+      code: String(code),
+      redirect_uri: redirectUri,
     });
 
-    const accessToken = tokenResponse.data.access_token;
-
-    // 3. Fetch user info
-    const userResponse = await axios.get('https://discord.com/api/users/@me', {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      }
+    const tokenRes = await axios.post('https://discord.com/api/oauth2/token', body.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
-    const profile = userResponse.data;
-    // Discord profile: { id, username, discriminator, global_name, avatar, email, verified, ... }
+    const accessToken = tokenRes.data.access_token as string;
 
-    if (!profile.email) {
-       // Email is required for our Identify-First strategy
-       return res.redirect('/login?error=discord_no_email');
-    }
+    // Fetch user
+    const userRes = await axios.get('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
 
-    if (!profile.verified) {
-       return res.redirect('/login?error=discord_email_not_verified');
-    }
+    const discord = userRes.data as {
+      id: string;
+      username: string;
+      global_name?: string;
+      email?: string;
+      verified?: boolean;
+      avatar?: string | null;
+    };
+
+    const email = (discord.email || '').trim().toLowerCase();
+    if (!email) return res.redirect('/login?error=discord_no_email');
+    if (discord.verified === false) return res.redirect('/login?error=discord_email_not_verified');
 
     const db = getDB();
-    
-    // 4. Find or Create User
-    // Identify-First: Check by EMAIL
-    const existingUser = await db.collection('users').findOne({ email: profile.email });
+    const existingUser = await db.collection('users').findOne({ email });
+
+    // Build Discord avatar URL (optional)
+    const discordAvatar =
+      discord.avatar
+        ? `https://cdn.discordapp.com/avatars/${discord.id}/${discord.avatar}.png?size=256`
+        : null;
 
     let userToReturn: User;
 
     if (existingUser) {
-      console.log('✓ Found existing user by email (Discord):', existingUser.email);
-
-      // 2. Account exists (could be from Google, Magic Link, or Password)
-      // Simply "link" this Discord ID to the existing account
+      // ✅ Do NOT overwrite profile fields; only link provider + lastLogin
       const updates: any = {
+        discordId: discord.id,
         lastLogin: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        // Always link the ID of the current provider
-        discordId: profile.id || existingUser.discordId,
       };
 
-      // 3. DO NOT overwrite firstName, lastName, or handle if they already exist
-      // Only fill them in if the existing record is missing them
-      if (!existingUser.firstName) updates.firstName = profile.global_name || profile.username;
-      if (!existingUser.avatar) {
-         updates.avatar = profile.avatar 
-           ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png` 
-           : `https://ui-avatars.com/api/?name=${profile.username}&background=random`;
+      // Only fill missing profile fields (optional, safe)
+      if (!existingUser.name) updates.name = discord.global_name || discord.username;
+      if (!existingUser.firstName) updates.firstName = (discord.global_name || discord.username || 'User').split(' ')[0];
+      if (!existingUser.avatar && discordAvatar) {
+        updates.avatar = discordAvatar;
+        updates.avatarType = 'url';
       }
 
-      await db.collection('users').updateOne(
-        { id: existingUser.id },
-        { $set: updates }
-      );
-      
+      await db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
       userToReturn = { ...existingUser, ...updates } as User;
     } else {
-      console.log('➕ New user from Discord OAuth');
-      const uniqueHandle = await generateUniqueHandle(
-        profile.username, 
-        ''
-      );
+      const displayName = discord.global_name || discord.username || 'User';
+      const uniqueHandle = await generateUniqueHandle(displayName, '');
 
-      const newUser = {
+      const newUser: any = {
         id: crypto.randomUUID(),
-        discordId: profile.id,
-        firstName: profile.global_name || profile.username,
-        lastName: '', // Discord doesn't provide last name
-        name: profile.global_name || profile.username,
-        email: profile.email,
-        avatar: profile.avatar 
-           ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png` 
-           : `https://ui-avatars.com/api/?name=${profile.username}&background=random`,
+        discordId: discord.id,
+        firstName: displayName.split(' ')[0] || 'User',
+        lastName: '',
+        name: displayName,
+        email,
+        avatar: discordAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}`,
         avatarType: 'url',
         handle: uniqueHandle,
         createdAt: new Date().toISOString(),
@@ -703,32 +675,28 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
         refreshTokens: []
       };
 
-      await db.collection('users').insertOne(newUser as any);
-      userToReturn = newUser as any;
+      await db.collection('users').insertOne(newUser);
+      userToReturn = newUser as User;
     }
 
-    // 5. Session Management
     const newAccessToken = generateAccessToken(userToReturn);
-    const refreshToken = generateRefreshToken(userToReturn);
+    const newRefreshToken = generateRefreshToken(userToReturn);
 
     await db.collection('users').updateOne(
       { id: userToReturn.id },
-      {
-        $push: { refreshTokens: refreshToken } as any
-      }
+      { $push: { refreshTokens: newRefreshToken } as any }
     );
 
-    setTokenCookies(res, newAccessToken, refreshToken);
+    setTokenCookies(res, newAccessToken, newRefreshToken);
 
-    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+    const frontendUrl =
+      process.env.VITE_FRONTEND_URL ||
       (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
 
-    console.log('[OAuth:Discord] Redirecting to:', `${frontendUrl}/dashboard`);
-    res.redirect(`${frontendUrl}/dashboard`);
-
-  } catch (error: any) {
-    console.error('Discord OAuth callback error:', error?.response?.data || error.message);
-    res.redirect('/login?error=discord_callback_error');
+    return res.redirect(`${frontendUrl}/feed`);
+  } catch (e: any) {
+    console.error('Discord OAuth callback error:', e?.response?.data || e.message);
+    return res.redirect('/login?error=discord_callback_error');
   }
 });
 
