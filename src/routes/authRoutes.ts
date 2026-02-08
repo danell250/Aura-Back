@@ -364,7 +364,10 @@ router.post("/magic-link/verify", async (req: Request, res: Response) => {
     // one-time use
     await db.collection("users").updateOne(
       { id: user.id },
-      { $unset: { magicLinkTokenHash: "", magicLinkExpiresAt: "" } }
+      { 
+        $unset: { magicLinkTokenHash: "", magicLinkExpiresAt: "" },
+        $set: { lastLogin: new Date().toISOString() }
+      }
     );
 
     const accessToken = generateAccessToken(user);
@@ -636,7 +639,10 @@ router.post('/logout', async (req: Request, res: Response) => {
       if (decoded) {
         await db.collection('users').updateOne(
           { id: decoded.id },
-          { $pull: { refreshTokens: refreshToken } as any }
+          { 
+            $pull: { refreshTokens: refreshToken } as any,
+            $set: { lastActive: new Date().toISOString() }
+          }
         );
       }
     }

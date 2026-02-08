@@ -369,13 +369,20 @@ export const usersController = {
       }
 
       // Get updated user
-      const updatedUser = await db.collection('users').findOne({ id });
+            const updatedUser = await db.collection('users').findOne({ id });
+            const transformedUser = transformUser(updatedUser);
 
-      res.json({
-        success: true,
-        data: transformUser(updatedUser),
-        message: 'User updated successfully'
-      });
+            // Broadcast update to all clients via Socket.IO
+            const io = req.app.get('io');
+            if (io) {
+              io.emit('user_updated', transformedUser);
+            }
+
+            res.json({
+              success: true,
+              data: transformedUser,
+              message: 'User updated successfully'
+            });
     } catch (error) {
       console.error('Error updating user:', error);
       res.status(500).json({
@@ -519,8 +526,15 @@ export const usersController = {
       }
 
       const updatedUser = await db.collection('users').findOne({ id: userId });
+      const transformedUser = transformUser(updatedUser);
 
-      res.json({ success: true, user: updatedUser });
+      // Broadcast update to all clients via Socket.IO
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('user_updated', transformedUser);
+      }
+
+      res.json({ success: true, user: transformedUser });
     } catch (e) {
       console.error('Upload failed:', e);
       res.status(500).json({ success: false, error: 'Upload failed' });
