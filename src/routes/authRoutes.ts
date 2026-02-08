@@ -258,7 +258,113 @@ router.get('/google/callback',
 );
 
 // ============ GITHUB OAUTH ============
-// ... (existing GitHub implementation)
+router.get('/github',
+  (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+      return res.status(503).json({
+        success: false,
+        message: 'GitHub login is not configured on the server.'
+      });
+    }
+    next();
+  },
+  passport.authenticate('github', { scope: ['user:email'] })
+);
+
+router.get('/github/callback',
+  (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+      return res.redirect('/login?error=github_not_configured');
+    }
+    next();
+  },
+  passport.authenticate('github', { failureRedirect: '/login' }),
+  async (req: Request, res: Response) => {
+    try {
+      if (req.user) {
+        const db = getDB();
+        const userData = req.user as any;
+
+        console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
+
+        // Identify-First: Check by EMAIL
+        const existingUser = await db.collection('users').findOne({
+          email: userData.email
+        });
+
+        let userToReturn: User;
+
+        if (existingUser) {
+          console.log('✓ Found existing user by email:', existingUser.email);
+          
+          const updates: any = {
+            lastLogin: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            // Always link the ID of the current provider
+            githubId: userData.githubId || existingUser.githubId,
+          };
+
+          // DO NOT update these if they already exist
+          if (!existingUser.firstName) updates.firstName = userData.firstName;
+          if (!existingUser.avatar) updates.avatar = userData.avatar;
+          
+          await db.collection('users').updateOne(
+            { id: existingUser.id },
+            { $set: updates }
+          );
+          
+          userToReturn = { ...existingUser, ...updates } as User;
+        } else {
+          console.log('➕ New user from GitHub OAuth');
+          // NEW USER: Generate unique handle
+          const uniqueHandle = await generateUniqueHandle(
+            userData.firstName || 'User',
+            userData.lastName || ''
+          );
+
+          const newUser = {
+            ...userData,
+            handle: uniqueHandle,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastLogin: new Date().toISOString(),
+            auraCredits: 100,
+            trustScore: 10,
+            activeGlow: 'none',
+            acquaintances: [],
+            blockedUsers: [],
+            refreshTokens: []
+          };
+
+          await db.collection('users').insertOne(newUser);
+          console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
+          userToReturn = newUser as User;
+        }
+
+        const accessToken = generateAccessToken(userToReturn);
+        const refreshToken = generateRefreshToken(userToReturn);
+
+        await db.collection('users').updateOne(
+          { id: userToReturn.id },
+          {
+            $push: { refreshTokens: refreshToken } as any
+          }
+        );
+
+        setTokenCookies(res, accessToken, refreshToken);
+
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+
+        console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
+        res.redirect(`${frontendUrl}/feed`);
+      }
+    } catch (error) {
+      console.error('Error in OAuth callback:', error);
+      res.redirect('/login?error=oauth_failed');
+    }
+  }
+);
 
 // ============ LINKEDIN OAUTH ============
 router.get('/linkedin', (req: Request, res: Response) => {
@@ -281,7 +387,7 @@ router.get('/linkedin', (req: Request, res: Response) => {
   });
 
   // 3. Construct the authorization URL
-  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/auth/linkedin/callback';
+  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   const scope = 'openid profile email';
   
@@ -315,7 +421,7 @@ router.get('/linkedin/callback', async (req: Request, res: Response) => {
   res.clearCookie('linkedin_auth_state');
 
   try {
-    const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/auth/linkedin/callback';
+    const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
     
     // 2. Exchange code for access token
     const tokenResponse = await axios.post('https://www.linkedin.com/oauth/v2/accessToken', null, {

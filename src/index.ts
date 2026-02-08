@@ -53,9 +53,14 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
       const firstName = nameParts[0] || 'User';
       const lastName = nameParts.slice(1).join(' ') || '';
       const email = profile.emails?.[0]?.value;
+      const isVerified = profile.emails?.[0]?.verified;
       
       if (!email) {
         return done(new Error('Google account does not have an email address'), undefined);
+      }
+
+      if (isVerified === false) {
+        return done(new Error('Google email is not verified. Please verify your email on Google.'), undefined);
       }
       
       // Create user object with Google profile data
@@ -178,9 +183,14 @@ if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
       const nameParts = displayName.trim().split(/\s+/);
       const firstName = nameParts[0] || username;
       const lastName = nameParts.slice(1).join(' ') || '';
-      const email =
-        (profile.emails && profile.emails[0] && profile.emails[0].value) ||
-        `${username}@github`;
+      
+      const emailObj = profile.emails?.[0];
+      const email = (emailObj && emailObj.value) || `${username}@github`;
+      
+      // Enforce email verification if available
+      if (emailObj && emailObj.verified === false) {
+        return done(new Error('GitHub email is not verified. Please verify your email on GitHub.'), undefined);
+      }
 
       const user = {
         id: profile.id,
