@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-console.log('🚀 MongoDB Setup Assistant for Aura™ Social Backend\n');
+console.log('🚀 MongoDB Setup Assistant for Aura Social Backend\n');
 
 // Check if MongoDB is installed locally
 function checkLocalMongoDB() {

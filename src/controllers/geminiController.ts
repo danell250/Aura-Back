@@ -63,7 +63,7 @@ export const generatePostInspiration = async (req: Request, res: Response) => {
     res.json({ text: fallbackResponse });
   } catch (error) {
     console.error("Inspiration Error:", error);
-    res.status(500).json({ error: "The Aura™ is currently shifting. Try again later!" });
+    res.status(500).json({ error: "The Aura is currently shifting. Try again later!" });
   }
 };
 
@@ -101,7 +101,7 @@ export const analyzeDataAura = async (req: Request, res: Response) => {
     res.json({ text: fallbackResponse });
   } catch (error) {
     console.error("Analysis Error:", error);
-    res.status(500).json({ error: "Unable to calibrate neural Aura™ at this time." });
+    res.status(500).json({ error: "Unable to calibrate neural Aura at this time." });
   }
 };
 

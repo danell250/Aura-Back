@@ -35,7 +35,7 @@ dotenv.config();
 
 // Debug: Check SendGrid Config
   if (process.env.SENDGRID_API_KEY) {
-    const from = `${process.env.SENDGRID_FROM_NAME || 'Aura™'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+    const from = `${process.env.SENDGRID_FROM_NAME || 'Aura'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
     console.log(`✅ SendGrid configured with API Key and From: "${from}"`);
   } else {
   console.warn('⚠️ SendGrid NOT configured:');
@@ -78,7 +78,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         avatar: profile.photos?.[0]?.value || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
         avatarType: 'image' as const,
         handle: `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`,
-        bio: 'New to Aura™',
+        bio: 'New to Aura',
         industry: 'Other',
         companyName: '',
         phone: '',
@@ -223,7 +223,7 @@ if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
         avatar: (profile.photos && profile.photos[0] && profile.photos[0].value) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
         avatarType: 'image' as const,
         handle: `@${username.toLowerCase()}${Math.floor(Math.random() * 10000)}`,
-        bio: 'New to Aura™',
+        bio: 'New to Aura',
         industry: 'Other',
         companyName: '',
         phone: '',
@@ -434,7 +434,7 @@ app.get('/payment-success', (req, res) => {
         <!DOCTYPE html>
         <html>
         <head>
-          <title>Payment Successful - Aura™</title>
+          <title>Payment Successful - Aura</title>
           <meta http-equiv="refresh" content="3;url=/?payment=success${pkgParam}">
           <style>
             body { font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f0fdf4; }
@@ -447,7 +447,7 @@ app.get('/payment-success', (req, res) => {
         <body>
           <div class="success">✅ Payment Successful!</div>
           <div class="message">If your payment was completed, your access will be activated shortly after verification.</div>
-          <div class="message">Redirecting you back to Aura™...</div>
+          <div class="message">Redirecting you back to Aura...</div>
           <script>
             setTimeout(function() {
               window.location.href = '/?payment=success${pkgParam}';
@@ -465,7 +465,7 @@ app.get('/payment-cancelled', async (req, res) => {
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Payment Cancelled - Aura™</title>
+      <title>Payment Cancelled - Aura</title>
       <meta http-equiv="refresh" content="3;url=/">
       <style>
         body { font-family: system-ui; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; text-align: center; padding: 4rem; }
@@ -551,7 +551,7 @@ app.get('/api/users-direct', (_req, res) => {
 
 app.get('/', (_req, res) => {
   res.json({
-    message: 'Aura™ Social Backend is running',
+    message: 'Aura Social Backend is running',
     status: 'ok',
     database: isDBConnected() ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString()
@@ -589,9 +589,9 @@ async function seedDummyPostsIfEmpty() {
     const authors = [
       {
         id: 'seed-editorial',
-        firstName: 'Aura™',
+        firstName: 'Aura',
         lastName: 'Editorial',
-        name: 'Aura™ Editorial Desk',
+        name: 'Aura Editorial Desk',
         handle: '@auranews',
         avatar: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?q=80&w=256&auto=format&fit=crop',
         avatarType: 'image',
@@ -668,7 +668,7 @@ async function seedDummyPostsIfEmpty() {
         id: 'seed-news-2',
         author: editorial,
         content:
-          'Market Update: Short-form business explainers are now the fastest growing category on Aura™, outpacing lifestyle and entertainment in week-over-week growth.\n\nIf you can teach clearly for 60 seconds, you can open an entirely new acquisition channel.\n\n#News #Business #Education',
+          'Market Update: Short-form business explainers are now the fastest growing category on Aura, outpacing lifestyle and entertainment in week-over-week growth.\n\nIf you can teach clearly for 60 seconds, you can open an entirely new acquisition channel.\n\n#News #Business #Education',
         mediaUrl:
           'https://images.unsplash.com/photo-1525182008055-f88b95ff7980?q=80&w=1200&auto=format&fit=crop',
         mediaType: 'image',
@@ -756,7 +756,7 @@ async function seedDummyPostsIfEmpty() {
         id: 'seed-ad-business-1',
         author: agency,
         content:
-          'Ad: Launching a B2B podcast but worried it will become an expensive hobby?\n\nSignal Studio builds end-to-end “revenue podcasts” for SaaS and professional services.\n\nWhat we handle:\n• Strategy and show positioning\n• Guest pipeline and outreach\n• Recording, editing and clipping\n• Distribution across Aura™, LinkedIn and email\n• Revenue attribution dashboard\n\nReply “PODCAST” below and we will DM you a full case study.\n\n#B2B #Podcasting #LeadGen',
+          'Ad: Launching a B2B podcast but worried it will become an expensive hobby?\n\nSignal Studio builds end-to-end “revenue podcasts” for SaaS and professional services.\n\nWhat we handle:\n• Strategy and show positioning\n• Guest pipeline and outreach\n• Recording, editing and clipping\n• Distribution across Aura, LinkedIn and email\n• Revenue attribution dashboard\n\nReply “PODCAST” below and we will DM you a full case study.\n\n#B2B #Podcasting #LeadGen',
         mediaUrl:
           'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?q=80&w=1200&auto=format&fit=crop',
         mediaType: 'image',
@@ -817,7 +817,7 @@ async function seedDummyAdsIfEmpty() {
         ownerEmail: 'hello@signalstudio.io',
         headline: 'Turn Your B2B Podcast Into a Sales Channel',
         description:
-          'We build “revenue podcasts” for B2B teams. Strategy, booking, editing, clipping, and distribution across Aura™ + LinkedIn, all handled for you.\n\nClients see their first SQLs within 60–90 days of launch.\n\nTap to see the full case study.',
+          'We build “revenue podcasts” for B2B teams. Strategy, booking, editing, clipping, and distribution across Aura + LinkedIn, all handled for you.\n\nClients see their first SQLs within 60–90 days of launch.\n\nTap to see the full case study.',
         mediaUrl:
           'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?q=80&w=1200&auto=format&fit=crop',
         mediaType: 'image',
@@ -898,7 +898,7 @@ async function seedDummyAdsIfEmpty() {
 // Enhanced server startup with database connection management
 async function startServer() {
   try {
-    console.log('🚀 Starting Aura™ Social Backend...');
+    console.log('🚀 Starting Aura Social Backend...');
     console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🔧 Port: ${PORT}`);
     

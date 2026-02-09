@@ -883,7 +883,7 @@ export const usersController = {
       await db.collection('reports').insertOne(reportDoc);
 
       const toEmail = process.env.ADMIN_EMAIL || 'danelloosthuizen3@gmail.com';
-      const subject = `Aura™ User Report: ${target.name || target.handle || targetUserId}`;
+      const subject = `Aura User Report: ${target.name || target.handle || targetUserId}`;
       const body = [
         `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,
         `Target: ${target.name || target.handle || targetUserId} (${targetUserId})`,
@@ -1396,7 +1396,7 @@ export const usersController = {
           ],
           legalBasis: 'Consent and legitimate interest',
           retentionPeriod: '2 years after account deletion',
-          thirdPartySharing: 'None - all data remains within Aura™ platform',
+          thirdPartySharing: 'None - all data remains within Aura platform',
           dataLocation: 'United States (with EU adequacy protections)'
         },
         exportedAt: new Date().toISOString(),

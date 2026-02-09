@@ -1453,7 +1453,7 @@ router.post('/register', async (req: Request, res: Response) => {
       email: normalizedEmail,
       phone: phone?.trim() || '',
       handle: finalHandle,
-      bio: 'New to Aura™',
+      bio: 'New to Aura',
       industry: 'Other',
       companyName: '',
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
