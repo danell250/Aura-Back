@@ -30,14 +30,14 @@ export const shareController = {
       }
 
       // Construct metadata
-      const authorName = post.author?.name || 'Aura User';
+      const authorName = post.author?.name || 'Aura™ User';
       const authorHandle = post.author?.handle || '';
       const trustScore = post.author?.trustScore || 0;
 
       const postContent = post.content || '';
       
       // Title: Post title (if time capsule) or first line of content
-      const firstLine = postContent.split('\n').find((line: string) => line.trim().length > 0) || 'Post on Aura';
+      const firstLine = postContent.split('\n').find((line: string) => line.trim().length > 0) || 'Post on Aura™';
       const titleText = post.timeCapsuleTitle || (firstLine.length > 80 ? firstLine.substring(0, 80) + '...' : firstLine);
       const title = escapeHtml(titleText);
       
@@ -67,7 +67,7 @@ export const shareController = {
         url,
         publisher: {
           "@type": "Organization",
-          name: "Aura",
+          name: "Aura™",
           logo: {
             "@type": "ImageObject",
             url: `${frontendUrl}/logo.png`
@@ -99,7 +99,7 @@ export const shareController = {
   <meta property="og:image" content="${image}" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
-  <meta property="og:site_name" content="Aura" />
+  <meta property="og:site_name" content="Aura™" />
   <meta property="article:author" content="${escapeHtml(authorName)}" />
 
   <!-- Twitter / X -->
@@ -155,7 +155,7 @@ export const shareController = {
 <body>
   <div class="loader">
     <div class="spinner"></div>
-    <p>Redirecting to Aura...</p>
+    <p>Redirecting to Aura™...</p>
     <p><small><a href="${url}">Click here if not redirected</a></small></p>
   </div>
 </body>

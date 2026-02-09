@@ -21,7 +21,7 @@ export const AD_PLANS = {
   },
   'pkg-pro': {
     id: 'pkg-pro',
-    name: 'Aura Radiance — Growth Tools Tier',
+    name: 'Aura™ Radiance — Growth Tools Tier',
     subtitle: 'Grow your presence',
     durationDays: 30,
     price: '$199 / month',
@@ -58,7 +58,7 @@ export const AD_PLANS = {
       '– audience behavior',
       '– timing performance',
       '– signal interaction trends',
-      'Verified Aura Badge',
+      'Verified Aura™ Badge',
       'Priority / White-Glove Support'
     ],
     gradient: 'from-slate-900 via-emerald-900 to-black',
