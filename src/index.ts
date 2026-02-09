@@ -3,6 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import passport from 'passport';
 import session from 'express-session';
+import helmet from 'helmet';
+import compression from 'compression';
+import morgan from 'morgan';
+import rateLimit from 'express-rate-limit';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import cookieParser from 'cookie-parser';
@@ -43,7 +47,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
   passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: process.env.GOOGLE_CALLBACK_URL || "https://aura-back-s1bw.onrender.com/api/auth/google/callback"
+    callbackURL: process.env.GOOGLE_CALLBACK_URL || `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/google/callback`
   },
   async (_accessToken, _refreshToken, profile, done) => {
     try {
@@ -121,6 +125,23 @@ passport.deserializeUser(async (id: string, done) => {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Security & Optimization Middleware
+app.use(helmet({
+  contentSecurityPolicy: false, // Disabled to avoid breaking external resources (images, scripts)
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
+app.use(compression());
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+
+// Global Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, // Limit each IP to 1000 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api', limiter);
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(process.cwd(), 'uploads');

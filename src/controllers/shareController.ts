@@ -22,10 +22,11 @@ export const shareController = {
       const db = getDB();
       const post = await db.collection('posts').findOne({ id });
 
+      const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://www.aura.net.za';
+
       if (!post) {
         // Fallback to generic metadata if post not found
-        const url = 'https://www.aura.net.za';
-        return res.redirect(url);
+        return res.redirect(frontendUrl);
       }
 
       // Construct metadata
@@ -47,9 +48,9 @@ export const shareController = {
       const descriptionText = sentences.slice(0, 3).join(' ').trim();
       const description = escapeHtml(truncateContent(descriptionText, 300));
       
-      const image = post.mediaUrl || 'https://www.aura.net.za/og-image.jpg?v=2';
+      const image = post.mediaUrl || `${frontendUrl}/og-image.jpg?v=2`;
       // Use the canonical frontend URL as requested
-      const url = `https://www.aura.net.za/post/${id}`;
+      const url = `${frontendUrl}/post/${id}`;
 
       const structuredData = {
         "@context": "https://schema.org",
@@ -60,7 +61,7 @@ export const shareController = {
         author: {
           "@type": "Person",
           name: authorName,
-          url: `https://www.aura.net.za/@${authorHandle}`
+          url: `${frontendUrl}/@${authorHandle}`
         },
         datePublished: post.timestamp || new Date().toISOString(),
         url,
@@ -69,7 +70,7 @@ export const shareController = {
           name: "Aura",
           logo: {
             "@type": "ImageObject",
-            url: "https://www.aura.net.za/logo.png"
+            url: `${frontendUrl}/logo.png`
           }
         }
       };

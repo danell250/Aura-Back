@@ -882,7 +882,7 @@ export const usersController = {
 
       await db.collection('reports').insertOne(reportDoc);
 
-      const toEmail = 'danelloosthuizen3@gmail.com';
+      const toEmail = process.env.ADMIN_EMAIL || 'danelloosthuizen3@gmail.com';
       const subject = `Aura User Report: ${target.name || target.handle || targetUserId}`;
       const body = [
         `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,

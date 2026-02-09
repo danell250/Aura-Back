@@ -560,9 +560,7 @@ router.get('/discord', (req: Request, res: Response) => {
 
   const redirectUri =
     process.env.DISCORD_CALLBACK_URL ||
-    (process.env.NODE_ENV === 'production'
-      ? 'https://aura-back-s1bw.onrender.com/api/auth/discord/callback'
-      : 'http://localhost:5000/api/auth/discord/callback');
+    `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/discord/callback`;
 
   const authUrl =
     `https://discord.com/oauth2/authorize` +
@@ -584,9 +582,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
   try {
     const redirectUri =
       process.env.DISCORD_CALLBACK_URL ||
-      (process.env.NODE_ENV === 'production'
-        ? 'https://aura-back-s1bw.onrender.com/api/auth/discord/callback'
-        : 'http://localhost:5000/api/auth/discord/callback');
+      `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/discord/callback`;
 
     // Exchange code for token
     const body = new URLSearchParams({
