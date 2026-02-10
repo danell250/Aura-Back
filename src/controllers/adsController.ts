@@ -46,12 +46,25 @@ export const adsController = {
       ];
       
       const skip = (Number(page) - 1) * Number(limit);
-      const ads = await db.collection('ads')
-        .find(query)
-        .sort({ timestamp: -1 })
-        .skip(skip)
-        .limit(Number(limit))
-        .toArray();
+      const ads = await db.collection('ads').aggregate([
+        { $match: query },
+        {
+          $addFields: {
+            totalReactions: {
+              $sum: {
+                $map: {
+                  input: { $objectToArray: { $ifNull: ['$reactions', {}] } },
+                  as: 'r',
+                  in: '$$r.v'
+                }
+              }
+            }
+          }
+        },
+        { $sort: { totalReactions: -1, timestamp: -1 } },
+        { $skip: skip },
+        { $limit: Number(limit) }
+      ]).toArray();
       
       // Add userReactions for current user
       if (currentUserId) {

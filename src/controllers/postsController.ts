@@ -332,6 +332,9 @@ export const postsController = {
                     in: '$$r.v'
                   }
                 }
+              },
+              boostScore: {
+                $cond: { if: { $eq: ['$isBoosted', true] }, then: 10000, else: 0 }
               }
             }
           },
@@ -351,13 +354,23 @@ export const postsController = {
           },
           {
             $addFields: {
-              engagementScore: { $add: ['$totalReactions', '$commentCountVal'] }
+              engagementScore: { $add: ['$boostScore', '$totalReactions', '$commentCountVal'] }
             }
           },
           { $sort: { engagementScore: -1, timestamp: -1 } }
         );
       } else {
-        pipeline.push({ $sort: { timestamp: -1 } });
+        // Default sort: Boosted posts first, then by timestamp (newest)
+        pipeline.push(
+          {
+            $addFields: {
+              isBoostedSort: {
+                $cond: { if: { $eq: ['$isBoosted', true] }, then: 1, else: 0 }
+              }
+            }
+          },
+          { $sort: { isBoostedSort: -1, timestamp: -1 } }
+        );
       }
 
       pipeline.push(
