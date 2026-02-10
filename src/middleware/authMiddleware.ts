@@ -3,6 +3,7 @@ import { getDB, isDBConnected } from '../db';
 import { User } from '../types';
 import admin from '../firebaseAdmin';
 import { verifyAccessToken } from '../utils/jwtUtils';
+import { transformUser } from '../utils/userUtils';
 
 // Middleware to check if user is authenticated via JWT or Firebase
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
@@ -43,7 +44,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
       const user = await db.collection('users').findOne({ id: decoded.id });
       
       if (user) {
-        req.user = user as unknown as User;
+        req.user = transformUser(user) as unknown as User;
         req.isAuthenticated = (() => true) as any;
         return next();
       }
@@ -78,7 +79,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
         const user = await db.collection('users').findOne({ id: decodedToken.uid });
         
         if (user) {
-          req.user = user as unknown as User;
+          req.user = transformUser(user) as unknown as User;
         } else {
           // User authenticated but not in DB yet
           req.user = {
@@ -130,7 +131,7 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
         const user = await db.collection('users').findOne({ id: decoded.id });
         
         if (user) {
-          req.user = user as unknown as User;
+          req.user = transformUser(user) as unknown as User;
           req.isAuthenticated = (() => true) as any;
         }
       } catch (error) {
@@ -156,7 +157,7 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
         const user = await db.collection('users').findOne({ id: decodedToken.uid });
         
         if (user) {
-          req.user = user as unknown as User;
+          req.user = transformUser(user) as unknown as User;
           req.isAuthenticated = (() => true) as any;
         }
       }
@@ -187,10 +188,7 @@ export const attachUser = async (req: Request, res: Response, next: NextFunction
         const user = await db.collection('users').findOne({ id: decoded.id });
         
         if (user) {
-          req.user = {
-            ...user,
-            id: user.id
-          } as unknown as User;
+          req.user = transformUser(user) as unknown as User;
           
           req.isAuthenticated = (() => true) as any;
         }

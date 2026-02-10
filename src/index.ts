@@ -30,6 +30,7 @@ import fs from 'fs';
 import { connectDB, checkDBHealth, isDBConnected, getDB } from './db';
 import { recalculateAllTrustScores } from './services/trustService';
 import { Server as SocketIOServer } from 'socket.io';
+import { transformUser } from './utils/userUtils';
 
 dotenv.config();
 
@@ -113,7 +114,7 @@ passport.deserializeUser(async (id: string, done) => {
     const user = await db.collection('users').findOne({ id });
     
     if (user) {
-      done(null, user);
+      done(null, transformUser(user));
     } else {
       done(null, false);
     }

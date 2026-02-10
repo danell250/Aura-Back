@@ -799,7 +799,9 @@ export const postsController = {
 
       const db = getDB();
       // Try to fetch full author from DB
-      const author = await db.collection(USERS_COLLECTION).findOne({ id: authorId });
+      const authorRaw = await db.collection(USERS_COLLECTION).findOne({ id: authorId });
+      const author = authorRaw ? transformUser(authorRaw) : null;
+      
       const authorEmbed = author ? {
         id: author.id,
         firstName: author.firstName,

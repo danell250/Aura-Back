@@ -3,8 +3,10 @@ export const transformUser = (user: any): any => {
   if (!user) return user;
   
   const s3Bucket = process.env.S3_BUCKET_NAME;
-  const s3Region = process.env.S3_REGION;
-  const s3BaseUrl = process.env.S3_PUBLIC_BASE_URL || `https://${s3Bucket}.s3.${s3Region}.amazonaws.com`;
+  const s3Region = process.env.S3_REGION || 'us-east-1';
+  const s3BaseUrl = process.env.S3_PUBLIC_BASE_URL 
+    ? process.env.S3_PUBLIC_BASE_URL.replace(/\/$/, '') 
+    : `https://${s3Bucket}.s3.${s3Region}.amazonaws.com`;
 
   // Create a copy to ensure we don't mutate the original if it's frozen (though unlikely for DB results)
   // and to treat it as a plain object.
