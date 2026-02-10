@@ -179,6 +179,7 @@ export const adsController = {
       const newAd = {
         ...adData,
         ownerId: userId,
+        ownerActiveGlow: currentUser.activeGlow, // Enforce from trusted user object
         id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         timestamp: Date.now(),
         reactions: {},

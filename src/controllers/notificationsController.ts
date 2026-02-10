@@ -57,7 +57,8 @@ export const createNotificationInDB = async (
     handle: fromUserDoc.handle,
     avatar: fromUserDoc.avatar,
     avatarKey: fromUserDoc.avatarKey,
-    avatarType: fromUserDoc.avatarType || 'image'
+    avatarType: fromUserDoc.avatarType || 'image',
+    activeGlow: fromUserDoc.activeGlow
   } : {
     id: fromUserId,
     firstName: 'User',
@@ -65,7 +66,8 @@ export const createNotificationInDB = async (
     name: 'User',
     handle: '@user',
     avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`,
-    avatarType: 'image'
+    avatarType: 'image',
+    activeGlow: undefined
   };
 
   const newNotification = {
@@ -195,17 +197,19 @@ export const notificationsController = {
         name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
         handle: fromUserDoc.handle,
         avatar: fromUserDoc.avatar,
-        avatarKey: fromUserDoc.avatarKey,
-        avatarType: fromUserDoc.avatarType || 'image'
-      } : {
-        id: fromUserId,
-        firstName: 'User',
-        lastName: '',
-        name: 'User',
-        handle: '@user',
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`,
-        avatarType: 'image'
-      };
+    avatarKey: fromUserDoc.avatarKey,
+    avatarType: fromUserDoc.avatarType || 'image',
+    activeGlow: fromUserDoc.activeGlow
+  } : {
+    id: fromUserId,
+    firstName: 'User',
+    lastName: '',
+    name: 'User',
+    handle: '@user',
+    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`,
+    avatarType: 'image',
+    activeGlow: undefined
+  };
 
       const newNotification = {
         id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,

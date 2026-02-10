@@ -125,7 +125,8 @@ export const commentsController = {
         handle: author.handle,
         avatar: author.avatar,
         avatarKey: author.avatarKey,
-        avatarType: author.avatarType || 'image'
+        avatarType: author.avatarType || 'image',
+        activeGlow: author.activeGlow
       } : {
         id: authorId,
         firstName: 'User',
@@ -133,7 +134,8 @@ export const commentsController = {
         name: 'User',
         handle: '@user',
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`,
-        avatarType: 'image'
+        avatarType: 'image',
+        activeGlow: undefined
       };
 
       const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];

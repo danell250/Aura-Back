@@ -368,6 +368,47 @@ export const usersController = {
         });
       }
 
+      // Propagate activeGlow changes to related collections
+      if (mutableUpdates.activeGlow) {
+        try {
+          // 1. Update Posts
+          await db.collection('posts').updateMany(
+            { "author.id": id },
+            { $set: { "author.activeGlow": mutableUpdates.activeGlow } }
+          );
+
+          // 2. Update Comments
+          await db.collection('comments').updateMany(
+            { "author.id": id },
+            { $set: { "author.activeGlow": mutableUpdates.activeGlow } }
+          );
+
+          // 3. Update Notifications
+          await db.collection('users').updateMany(
+            { "notifications.fromUser.id": id },
+            { 
+              $set: { 
+                "notifications.$[elem].fromUser.activeGlow": mutableUpdates.activeGlow 
+              } 
+            },
+            {
+              arrayFilters: [{ "elem.fromUser.id": id }]
+            }
+          );
+
+          // 4. Update Ads
+          await db.collection('ads').updateMany(
+            { "ownerId": id },
+            { $set: { "ownerActiveGlow": mutableUpdates.activeGlow } }
+          );
+          
+          console.log(`Propagated activeGlow update for user ${id} to posts, comments, notifications, and ads.`);
+        } catch (propError) {
+          console.error('Error propagating activeGlow updates:', propError);
+          // Don't fail the request, just log the error
+        }
+      }
+
       // Get updated user
             const updatedUser = await db.collection('users').findOne({ id });
             const transformedUser = transformUser(updatedUser);
