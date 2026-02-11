@@ -30,6 +30,7 @@ router.get('/plans/:planId', (req, res) => {
     });
 });
 // Analytics routes (specific paths before :id)
+router.get('/mine', authMiddleware_1.requireAuth, adsController_1.adsController.getMyAds);
 router.get('/analytics/campaign/:userId', authMiddleware_1.requireAuth, adsController_1.adsController.getCampaignPerformance);
 router.get('/analytics/user/:userId', authMiddleware_1.requireAuth, adsController_1.adsController.getUserAdPerformance);
 // Tracking routes

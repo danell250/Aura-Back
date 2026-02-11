@@ -50,6 +50,10 @@ const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const passport_1 = __importDefault(require("passport"));
 const express_session_1 = __importDefault(require("express-session"));
+const helmet_1 = __importDefault(require("helmet"));
+const compression_1 = __importDefault(require("compression"));
+const morgan_1 = __importDefault(require("morgan"));
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const passport_google_oauth20_1 = require("passport-google-oauth20");
 const passport_github2_1 = require("passport-github2");
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
@@ -73,26 +77,27 @@ const fs_1 = __importDefault(require("fs"));
 const db_1 = require("./db");
 const trustService_1 = require("./services/trustService");
 const socket_io_1 = require("socket.io");
+const userUtils_1 = require("./utils/userUtils");
+const jwtUtils_1 = require("./utils/jwtUtils");
 dotenv_1.default.config();
 // Debug: Check SendGrid Config
-if (process.env.SENDGRID_API_KEY && process.env.EMAIL_FROM) {
-    console.log('✅ SendGrid configured with API Key and From Email:', process.env.EMAIL_FROM);
+if (process.env.SENDGRID_API_KEY) {
+    const from = `${process.env.SENDGRID_FROM_NAME || 'Aura'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+    console.log(`✅ SendGrid configured with API Key and From: "${from}"`);
 }
 else {
     console.warn('⚠️ SendGrid NOT configured:');
     if (!process.env.SENDGRID_API_KEY)
         console.warn('   - Missing SENDGRID_API_KEY');
-    if (!process.env.EMAIL_FROM)
-        console.warn('   - Missing EMAIL_FROM');
 }
 // Passport Google OAuth Strategy Configuration
 if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     passport_1.default.use(new passport_google_oauth20_1.Strategy({
         clientID: process.env.GOOGLE_CLIENT_ID,
         clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-        callbackURL: process.env.GOOGLE_CALLBACK_URL || "https://aura-back-s1bw.onrender.com/api/auth/google/callback"
+        callbackURL: process.env.GOOGLE_CALLBACK_URL || `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/google/callback`
     }, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d;
+        var _a, _b, _c, _d, _e, _f;
         try {
             // Parse name from profile
             const displayName = profile.displayName || '';
@@ -100,8 +105,12 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
             const firstName = nameParts[0] || 'User';
             const lastName = nameParts.slice(1).join(' ') || '';
             const email = (_b = (_a = profile.emails) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.value;
+            const isVerified = (_d = (_c = profile.emails) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.verified;
             if (!email) {
                 return done(new Error('Google account does not have an email address'), undefined);
+            }
+            if (isVerified === false) {
+                return done(new Error('Google email is not verified. Please verify your email on Google.'), undefined);
             }
             // Create user object with Google profile data
             const user = {
@@ -111,7 +120,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
                 lastName: lastName,
                 name: displayName || `${firstName} ${lastName}`.trim(),
                 email: email.toLowerCase().trim(),
-                avatar: ((_d = (_c = profile.photos) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.value) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
+                avatar: ((_f = (_e = profile.photos) === null || _e === void 0 ? void 0 : _e[0]) === null || _f === void 0 ? void 0 : _f.value) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.id}`,
                 avatarType: 'image',
                 handle: `@${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`,
                 bio: 'New to Aura',
@@ -146,7 +155,7 @@ passport_1.default.deserializeUser((id, done) => __awaiter(void 0, void 0, void 
         const db = (0, db_1.getDB)();
         const user = yield db.collection('users').findOne({ id });
         if (user) {
-            done(null, user);
+            done(null, (0, userUtils_1.transformUser)(user));
         }
         else {
             done(null, false);
@@ -159,6 +168,21 @@ passport_1.default.deserializeUser((id, done) => __awaiter(void 0, void 0, void 
 }));
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
+// Security & Optimization Middleware
+app.use((0, helmet_1.default)({
+    contentSecurityPolicy: false, // Disabled to avoid breaking external resources (images, scripts)
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
+app.use((0, compression_1.default)());
+app.use((0, morgan_1.default)(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+// Global Rate Limiting
+const limiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1000, // Limit each IP to 1000 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use('/api', limiter);
 // Ensure uploads directory exists
 const uploadsDir = path_1.default.join(process.cwd(), 'uploads');
 if (!fs_1.default.existsSync(uploadsDir)) {
@@ -168,8 +192,12 @@ if (!fs_1.default.existsSync(uploadsDir)) {
 app.set("trust proxy", 1);
 app.use((0, cookie_parser_1.default)());
 const allowedOrigins = [
+    "https://www.aura.net.za",
+    "https://aura.net.za",
     "https://auraso.vercel.app",
     "https://www.auraso.vercel.app",
+    "https://auraradiance.vercel.app",
+    "https://www.auraradiance.vercel.app",
     "https://aura-front-s1bw.onrender.com",
     "http://localhost:5173",
     "http://localhost:5003",
@@ -180,17 +208,21 @@ const corsOptions = {
         // allow non-browser tools (no origin) and allow your frontends
         if (!origin)
             return cb(null, true);
-        if (allowedOrigins.includes(origin))
+        // Check for allowed origins or vercel deployments
+        if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
             return cb(null, true);
+        }
         console.error("❌ Blocked by CORS:", origin);
+        // For now, in development/debugging, let's allow it but log it
+        // return cb(null, true); 
         return cb(new Error(`CORS blocked origin: ${origin}`));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
 };
 app.use((0, cors_1.default)(corsOptions));
-app.options(/.*/, (0, cors_1.default)(corsOptions)); // IMPORTANT for preflight
+app.options(/.*/, (0, cors_1.default)(corsOptions)); // Enable pre-flight for all routes
 // Passport GitHub OAuth Strategy Configuration
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
     passport_1.default.use(new passport_github2_1.Strategy({
@@ -199,14 +231,19 @@ if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
         callbackURL: process.env.GITHUB_CALLBACK_URL || "https://aura-back-s1bw.onrender.com/api/auth/github/callback",
         scope: ['user:email']
     }, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const displayName = profile.displayName || '';
             const username = profile.username || 'githubuser';
             const nameParts = displayName.trim().split(/\s+/);
             const firstName = nameParts[0] || username;
             const lastName = nameParts.slice(1).join(' ') || '';
-            const email = (profile.emails && profile.emails[0] && profile.emails[0].value) ||
-                `${username}@github`;
+            const emailObj = (_a = profile.emails) === null || _a === void 0 ? void 0 : _a[0];
+            const email = (emailObj && emailObj.value) || `${username}@github`;
+            // Enforce email verification if available
+            if (emailObj && emailObj.verified === false) {
+                return done(new Error('GitHub email is not verified. Please verify your email on GitHub.'), undefined);
+            }
             const user = {
                 id: profile.id,
                 githubId: profile.id,
@@ -239,16 +276,14 @@ if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
 else {
     console.warn('⚠️ GitHub OAuth environment variables not found. GitHub login will not be available.');
 }
-// Remove the problematic wildcard options route
-// app.options("*", cors());
 // Session middleware
 app.use((0, express_session_1.default)({
     secret: process.env.SESSION_SECRET || 'fallback_secret_for_development',
     resave: false,
     saveUninitialized: false,
     cookie: {
-        secure: process.env.NODE_ENV === 'production', // Set to true in production with HTTPS
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        secure: process.env.NODE_ENV === 'production' || process.env.RENDER === 'true', // Secure in production or on Render
+        sameSite: (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true') ? 'none' : 'lax',
         maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
 }));
@@ -274,7 +309,7 @@ app.use((req, res, next) => {
     next();
 });
 // Pre-flight handling is managed by CORS middleware above
-app.use(express_1.default.json());
+app.use(express_1.default.json({ limit: '50mb' }));
 app.use((0, cookie_parser_1.default)());
 // Debug middleware to log all requests
 app.use((req, res, next) => {
@@ -346,7 +381,7 @@ app.get('/api/debug/cookies', (req, res) => {
 });
 app.get('/api/debug/sendgrid', (req, res) => {
     const apiKey = process.env.SENDGRID_API_KEY;
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM;
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM || 'no-reply@aura.net.za';
     res.json({
         hasApiKey: !!apiKey,
         apiKeyPreview: apiKey ? `${apiKey.substring(0, 5)}...` : null,
@@ -357,6 +392,13 @@ app.get('/api/debug/sendgrid', (req, res) => {
 app.get('/api/credits/history/:userId', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { userId } = req.params;
+        if (!(0, db_1.isDBConnected)()) {
+            return res.status(503).json({
+                success: false,
+                error: 'Service Unavailable',
+                message: 'Database service is currently unavailable'
+            });
+        }
         const db = (0, db_1.getDB)();
         const transactions = yield db
             .collection('transactions')
@@ -404,10 +446,11 @@ app.get('/payment-success', (req, res) => {
           <title>Payment Successful - Aura</title>
           <meta http-equiv="refresh" content="3;url=/?payment=success${pkgParam}">
           <style>
-            body { font-family: system-ui; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; padding: 4rem; }
-            .success { font-size: 3rem; margin-bottom: 1rem; }
-            .message { font-size: 1.2rem; opacity: 0.9; }
-            .details { font-size: 0.9rem; margin-top: 2rem; opacity: 0.7; }
+            body { font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f0fdf4; }
+            .card { background: white; padding: 2rem; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); text-align: center; max-width: 400px; }
+            h1 { color: #166534; margin-bottom: 1rem; }
+            p { color: #374151; margin-bottom: 2rem; }
+            .btn { background: #16a34a; color: white; padding: 0.75rem 1.5rem; border-radius: 0.5rem; text-decoration: none; font-weight: 500; }
           </style>
         </head>
         <body>
@@ -445,99 +488,6 @@ app.get('/payment-cancelled', (req, res) => __awaiter(void 0, void 0, void 0, fu
   `);
 }));
 console.log('Routes registered successfully');
-app.get('/share/post/:id', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const db = (0, db_1.getDB)();
-        const post = yield db.collection('posts').findOne({ id: req.params.id });
-        if (!post) {
-            res.status(404).send('Not found');
-            return;
-        }
-        const protocol = req.protocol;
-        const host = req.get('host');
-        const shareUrl = `${protocol}://${host}/share/post/${post.id}`;
-        const author = post.author || {};
-        const title = `${author.name || 'Post'} on Aura`;
-        const description = String(post.content || '').slice(0, 300);
-        const mediaUrl = post.mediaUrl || '';
-        const avatarUrl = author.avatar || '';
-        const isImage = mediaUrl && (post.mediaType === 'image' || /\.(png|jpg|jpeg|webp|gif)$/i.test(mediaUrl));
-        const isVideo = mediaUrl && (post.mediaType === 'video' || /\.(mp4|webm|ogg|mov)$/i.test(mediaUrl));
-        // Use the new logo icon as fallback if no image is present
-        const imageForOg = isImage ? mediaUrl : (avatarUrl || 'https://auraso.vercel.app/logo-icon.svg');
-        // Frontend URL for redirection
-        const frontendUrl = `https://auraso.vercel.app/p/${post.id}`;
-        const html = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>${title}</title>
-    <meta property="og:title" content="${title}">
-    <meta property="og:description" content="${description}">
-    <meta property="og:type" content="article">
-    <meta property="og:url" content="${shareUrl}">
-    <meta property="og:image" content="${imageForOg}">
-    ${isVideo ? `<meta property="og:video" content="${mediaUrl}">` : ''}
-    <meta name="twitter:title" content="${title}">
-    <meta name="twitter:description" content="${description}">
-    <meta name="twitter:image" content="${imageForOg}">
-    <meta name="twitter:card" content="${imageForOg ? 'summary_large_image' : 'summary'}">
-    <script>
-        // Redirect to the frontend app
-        setTimeout(function() {
-          window.location.href = "${frontendUrl}";
-        }, 100);
-    </script>
-    <style>
-      body{margin:0;background:#0f172a;color:#fff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
-      .container{max-width:680px;margin:0 auto;padding:24px}
-      .card{background:#0b1220;border:1px solid #1f2937;border-radius:24px;box-shadow:0 12px 30px rgba(0,0,0,.35);overflow:hidden}
-      .header{display:flex;gap:12px;align-items:center;padding:20px}
-      .avatar{width:44px;height:44px;border-radius:12px;border:1px solid #334155;overflow:hidden;background:#0f172a}
-      .avatar img{width:100%;height:100%;object-fit:cover}
-      .names{flex:1;min-width:0}
-      .name{font-weight:700;font-size:14px;letter-spacing:-.01em}
-      .handle{font-size:12px;color:#94a3b8}
-      .content{padding:0 20px 20px;font-size:15px;line-height:1.6;color:#e2e8f0;white-space:pre-wrap}
-      .media{margin:0 20px 20px;border-radius:16px;overflow:hidden;background:#0f172a;border:1px solid #1f2937;display:flex;align-items:center;justify-content:center}
-      .media img{width:100%;height:auto;max-height:600px;object-fit:cover}
-      .media video{width:100%;height:auto;max-height:600px}
-      .footer{display:flex;gap:12px;align-items:center;padding:16px 20px;border-top:1px solid #1f2937}
-      .badge{padding:6px 10px;border-radius:12px;font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
-      .energy{background:#022c22;color:#34d399;border:1px solid #065f46}
-      .date{color:#94a3b8;font-size:11px;margin-left:auto}
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <div class="card">
-        <div class="header">
-          <div class="avatar">${avatarUrl ? `<img src="${avatarUrl}" alt="${author.name || ''}">` : ''}</div>
-          <div class="names">
-            <div class="name">${author.name || ''}</div>
-            <div class="handle">${author.handle || ''}</div>
-          </div>
-          ${post.isBoosted ? `<span class="badge" style="background:#064e3b;color:#a7f3d0;border:1px solid #10b981">Boosted</span>` : ``}
-          ${post.isTimeCapsule ? `<span class="badge" style="background:#3b0764;color:#e9d5ff;border:1px solid #8b5cf6">${post.isUnlocked ? 'Unlocked' : 'Time Capsule'}</span>` : ``}
-        </div>
-        <div class="content">${String(post.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
-        ${mediaUrl ? `<div class="media">${isImage ? `<img src="${mediaUrl}" alt="">` : isVideo ? `<video src="${mediaUrl}" controls playsinline></video>` : ``}</div>` : ``}
-        <div class="footer">
-          ${post.energy ? `<span class="badge energy">${post.energy}</span>` : ``}
-          <span class="date">${new Date(post.timestamp || Date.now()).toLocaleDateString()}</span>
-        </div>
-      </div>
-    </div>
-  </body>
-</html>`;
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.status(200).send(html);
-    }
-    catch (e) {
-        res.status(500).send('Server error');
-    }
-}));
 // Health check endpoints
 app.get('/health', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const dbHealthy = yield (0, db_1.checkDBHealth)();
@@ -935,27 +885,54 @@ function startServer() {
             const frontendUrl = process.env.VITE_FRONTEND_URL;
             const allowedOrigins = [
                 frontendUrl,
-                'https://auraso.vercel.app',
+                'https://www.aura.net.za',
+                'https://aura.net.za',
+                'https://auraradiance.vercel.app',
                 'https://aura-front-s1bw.onrender.com',
                 'http://localhost:5173'
             ].filter(Boolean);
             const io = new socket_io_1.Server(server, {
                 cors: {
                     origin: allowedOrigins,
-                    credentials: true
-                }
+                    credentials: true,
+                    methods: ["GET", "POST"]
+                },
+                transports: ['polling', 'websocket'],
+                path: '/socket.io/',
+                pingInterval: 25000,
+                pingTimeout: 20000,
             });
             app.set('io', io);
+            // Socket authentication middleware
+            io.use((socket, next) => {
+                var _a;
+                const token = (_a = socket.handshake.auth) === null || _a === void 0 ? void 0 : _a.token;
+                if (!token) {
+                    return next(new Error('Authentication error: Token missing'));
+                }
+                const decoded = (0, jwtUtils_1.verifyAccessToken)(token);
+                if (!decoded) {
+                    return next(new Error('Authentication error: Invalid token'));
+                }
+                socket.user = decoded;
+                next();
+            });
             io.on('connection', socket => {
-                console.log('🔌 Socket.IO client connected', socket.id);
+                const user = socket.user;
+                console.log(`🔌 Socket.IO client connected: ${socket.id} (User: ${user === null || user === void 0 ? void 0 : user.id})`);
                 socket.on('join_user_room', (userId) => {
-                    if (typeof userId === 'string' && userId.trim()) {
-                        socket.join(`user:${userId}`);
+                    // Security: Only allow users to join their own room
+                    if (user && user.id === userId) {
+                        socket.join(userId);
+                        console.log(`🏠 User ${user.id} joined their private room`);
+                    }
+                    else {
+                        console.warn(`⚠️ User ${user === null || user === void 0 ? void 0 : user.id} tried to join room for ${userId}`);
                     }
                 });
                 socket.on('leave_user_room', (userId) => {
                     if (typeof userId === 'string' && userId.trim()) {
-                        socket.leave(`user:${userId}`);
+                        socket.leave(userId);
                     }
                 });
                 socket.on('disconnect', () => {

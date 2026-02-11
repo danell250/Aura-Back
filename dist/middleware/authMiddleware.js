@@ -16,8 +16,17 @@ exports.requireAdmin = exports.requireOwnership = exports.attachUser = exports.o
 const db_1 = require("../db");
 const firebaseAdmin_1 = __importDefault(require("../firebaseAdmin"));
 const jwtUtils_1 = require("../utils/jwtUtils");
+const userUtils_1 = require("../utils/userUtils");
 // Middleware to check if user is authenticated via JWT or Firebase
 const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
+    // Check database connection first
+    if (!(0, db_1.isDBConnected)()) {
+        return res.status(503).json({
+            success: false,
+            error: 'Service Unavailable',
+            message: 'Database service is currently unavailable'
+        });
+    }
     // 1. Check JWT Token (Cookie or Header)
     let token = null;
     let decoded = null;
@@ -42,7 +51,7 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id: decoded.id });
             if (user) {
-                req.user = user;
+                req.user = (0, userUtils_1.transformUser)(user);
                 req.isAuthenticated = (() => true);
                 return next();
             }
@@ -72,7 +81,7 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decodedToken.uid });
                 if (user) {
-                    req.user = user;
+                    req.user = (0, userUtils_1.transformUser)(user);
                 }
                 else {
                     // User authenticated but not in DB yet
@@ -122,7 +131,7 @@ const optionalAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, funct
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decoded.id });
                 if (user) {
-                    req.user = user;
+                    req.user = (0, userUtils_1.transformUser)(user);
                     req.isAuthenticated = (() => true);
                 }
             }
@@ -144,7 +153,7 @@ const optionalAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, funct
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decodedToken.uid });
                 if (user) {
-                    req.user = user;
+                    req.user = (0, userUtils_1.transformUser)(user);
                     req.isAuthenticated = (() => true);
                 }
             }
@@ -173,7 +182,7 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decoded.id });
                 if (user) {
-                    req.user = Object.assign(Object.assign({}, user), { id: user.id });
+                    req.user = (0, userUtils_1.transformUser)(user);
                     req.isAuthenticated = (() => true);
                 }
             }
@@ -215,22 +224,6 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
             }
             catch (e) {
                 // console.warn('Failed to verify token in attachUser:', e);
-            }
-        }
-        // 4. Simple User ID Auth (for manually registered users)
-        const userIdHeader = req.headers['x-user-id'];
-        if (userIdHeader && !req.user) {
-            try {
-                const db = (0, db_1.getDB)();
-                const user = yield db.collection('users').findOne({ id: userIdHeader });
-                if (user) {
-                    req.user = Object.assign(Object.assign({}, user), { id: user.id });
-                    // Mock isAuthenticated
-                    req.isAuthenticated = (() => true);
-                }
-            }
-            catch (e) {
-                console.warn('Failed to get user by ID in attachUser:', e);
             }
         }
         next();

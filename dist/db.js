@@ -21,6 +21,9 @@ exports.closeDB = closeDB;
 const mongodb_1 = require("mongodb");
 const dotenv_1 = __importDefault(require("dotenv"));
 const Message_1 = require("./models/Message");
+const User_1 = require("./models/User");
+const AdAnalyticsDaily_1 = require("./models/AdAnalyticsDaily");
+const AdEventDedupe_1 = require("./models/AdEventDedupe");
 dotenv_1.default.config();
 const mongoUri = process.env.MONGO_URI;
 // Enhanced MongoDB connection configuration
@@ -73,9 +76,14 @@ function connectDB() {
             try {
                 (0, Message_1.initializeMessageCollection)(db);
                 console.log("✅ Message collection initialized");
+                yield (0, User_1.initializeUserCollection)(db);
+                yield (0, AdAnalyticsDaily_1.initializeAdAnalyticsDailyCollection)(db);
+                console.log("✅ AdAnalyticsDaily collection initialized");
+                yield (0, AdEventDedupe_1.initializeAdEventDedupesCollection)(db);
+                console.log("✅ AdEventDedupes collection initialized");
             }
             catch (error) {
-                console.warn("⚠️  Warning: Could not initialize message collection:", error);
+                console.warn("⚠️  Warning: Could not initialize collections:", error);
             }
             console.log("✅ Connected to MongoDB successfully");
             console.log(`📊 MongoDB connected to database: aura`);

@@ -1532,19 +1532,20 @@ export const postsController = {
 
       const totalPosts = posts.length;
 
-      const totalViews = posts.reduce((sum, p) => sum + (p.viewCount || 0), 0);
+      const totalViews = posts.reduce((sum: number, p: any) => sum + (p.viewCount || 0), 0);
 
-      const totalRadiance = posts.reduce((sum, p) => {
+      const totalRadiance = posts.reduce((sum: number, p: any) => {
         const reactions = p.reactions || {};
-        return sum + Object.values(reactions).reduce((a: any, b: any) => (Number(a) || 0) + (Number(b) || 0), 0);
+        const reactionCount = Object.values(reactions).reduce((a: any, b: any) => (Number(a) || 0) + (Number(b) || 0), 0);
+        return sum + (p.radiance || reactionCount || 0);
       }, 0);
 
-      const boostedPosts = posts.filter(p => p.isBoosted).length;
+      const boostedPosts = posts.filter((p: any) => p.isBoosted).length;
 
       const topPosts = posts
-        .sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0))
+        .sort((a: any, b: any) => (b.viewCount || 0) - (a.viewCount || 0))
         .slice(0, 5)
-        .map(p => ({
+        .map((p: any) => ({
           id: p.id,
           content: (p.content || '').slice(0, 120),
           views: p.viewCount || 0,

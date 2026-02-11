@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.postsController = void 0;
+exports.postsController = exports.emitAuthorInsightsUpdate = void 0;
 const db_1 = require("../db");
 const hashtagUtils_1 = require("../utils/hashtagUtils");
 const notificationsController_1 = require("./notificationsController");
@@ -55,7 +55,7 @@ const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, vo
             .limit(5)
             .toArray();
         const user = yield db.collection(USERS_COLLECTION).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
-        io.to(`user:${authorId}`).emit('analytics_update', {
+        io.to(authorId).emit('analytics_update', {
             userId: authorId,
             stats: {
                 totals: {
@@ -86,6 +86,7 @@ const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, vo
         console.error('emitAuthorInsightsUpdate error', err);
     }
 });
+exports.emitAuthorInsightsUpdate = emitAuthorInsightsUpdate;
 exports.postsController = {
     health: (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
         res.json({
@@ -213,7 +214,7 @@ exports.postsController = {
     getAllPosts: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a, _b;
         try {
-            const { page = 1, limit = 20, userId, energy, hashtags } = req.query;
+            const { page = 1, limit = 20, userId, energy, hashtags, sort } = req.query;
             const db = (0, db_1.getDB)();
             const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             const query = {};
@@ -292,38 +293,81 @@ exports.postsController = {
                         ]
                     }
                 },
-                ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : []),
-                { $sort: { timestamp: -1 } },
-                { $skip: (pageNum - 1) * limitNum },
-                { $limit: limitNum },
-                {
+                ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : [])
+            ];
+            if (sort === 'trending') {
+                pipeline.push({
+                    $addFields: {
+                        totalReactions: {
+                            $sum: {
+                                $map: {
+                                    input: { $objectToArray: { $ifNull: ['$reactions', {}] } },
+                                    as: 'r',
+                                    in: '$$r.v'
+                                }
+                            }
+                        },
+                        boostScore: {
+                            $cond: { if: { $eq: ['$isBoosted', true] }, then: 10000, else: 0 }
+                        }
+                    }
+                }, {
                     $lookup: {
                         from: 'comments',
                         localField: 'id',
                         foreignField: 'postId',
-                        as: 'fetchedComments'
+                        pipeline: [{ $count: 'count' }],
+                        as: 'commentCountArr'
                     }
-                },
-                {
+                }, {
                     $addFields: {
-                        commentCount: { $size: '$fetchedComments' },
-                        comments: '$fetchedComments',
-                        isUnlocked: {
-                            $cond: {
-                                if: { $eq: ['$isTimeCapsule', true] },
-                                then: { $lte: ['$unlockDate', now] },
-                                else: true
-                            }
+                        commentCountVal: { $ifNull: [{ $arrayElemAt: ['$commentCountArr.count', 0] }, 0] }
+                    }
+                }, {
+                    $addFields: {
+                        engagementScore: { $add: ['$boostScore', '$totalReactions', '$commentCountVal'] }
+                    }
+                }, { $sort: { engagementScore: -1, timestamp: -1 } });
+            }
+            else {
+                // Default sort: Boosted posts first, then by timestamp (newest)
+                pipeline.push({
+                    $addFields: {
+                        isBoostedSort: {
+                            $cond: { if: { $eq: ['$isBoosted', true] }, then: 1, else: 0 }
                         }
                     }
-                },
-                {
-                    $project: {
-                        fetchedComments: 0,
-                        authorDetails: 0
+                }, { $sort: { isBoostedSort: -1, timestamp: -1 } });
+            }
+            pipeline.push({ $skip: (pageNum - 1) * limitNum }, { $limit: limitNum }, {
+                $lookup: {
+                    from: 'comments',
+                    localField: 'id',
+                    foreignField: 'postId',
+                    as: 'fetchedComments'
+                }
+            }, {
+                $addFields: {
+                    commentCount: { $size: '$fetchedComments' },
+                    comments: '$fetchedComments',
+                    isUnlocked: {
+                        $cond: {
+                            if: { $eq: ['$isTimeCapsule', true] },
+                            then: { $lte: ['$unlockDate', now] },
+                            else: true
+                        }
                     }
                 }
-            ];
+            }, {
+                $project: {
+                    fetchedComments: 0,
+                    commentCountArr: 0, // Cleanup temp fields
+                    commentCountVal: 0,
+                    totalReactions: 0,
+                    engagementScore: 0
+                    // authorDetails: 0 // Keep authorDetails to ensure profile info is fresh
+                }
+            });
             const data = yield db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
             // Get total count with privacy filtering
             const countPipeline = [
@@ -355,9 +399,14 @@ exports.postsController = {
             const total = ((_b = countResult[0]) === null || _b === void 0 ? void 0 : _b.total) || 0;
             // Post-process to add userReactions for the current user
             const transformedData = data.map((post) => {
-                if (post.author) {
+                // Use fresh author details from lookup if available
+                if (post.authorDetails && post.authorDetails[0]) {
+                    post.author = (0, userUtils_1.transformUser)(Object.assign(Object.assign({}, post.author), post.authorDetails[0]));
+                }
+                else if (post.author) {
                     post.author = (0, userUtils_1.transformUser)(post.author);
                 }
+                delete post.authorDetails; // Clean up
                 if (currentUserId) {
                     if (post.reactionUsers) {
                         post.userReactions = Object.keys(post.reactionUsers).filter(emoji => Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId));
@@ -433,6 +482,18 @@ exports.postsController = {
             if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
             }
+            // Increment view count if not the author
+            if (currentUserId !== post.author.id) {
+                yield db.collection(POSTS_COLLECTION).updateOne({ id }, {
+                    $inc: { viewCount: 1 },
+                    $setOnInsert: { viewCount: 1 }
+                });
+                post.viewCount = (post.viewCount || 0) + 1;
+                // Trigger insights update for author
+                if (post.author.id) {
+                    (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id);
+                }
+            }
             // Check privacy settings
             const authorDetails = (_b = post.authorDetails) === null || _b === void 0 ? void 0 : _b[0];
             if ((authorDetails === null || authorDetails === void 0 ? void 0 : authorDetails.isPrivate) && currentUserId !== post.author.id) {
@@ -467,17 +528,57 @@ exports.postsController = {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'Time Capsule is not yet unlocked' });
                 }
             }
-            delete post.authorDetails;
             // Post-process to add userReactions for the current user
-            if (post.author) {
+            if (post.authorDetails && post.authorDetails[0]) {
+                post.author = (0, userUtils_1.transformUser)(Object.assign(Object.assign({}, post.author), post.authorDetails[0]));
+            }
+            else if (post.author) {
                 post.author = (0, userUtils_1.transformUser)(post.author);
             }
+            delete post.authorDetails;
             if (currentUserId) {
                 if (post.reactionUsers) {
                     post.userReactions = Object.keys(post.reactionUsers).filter(emoji => Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId));
                 }
                 else {
                     post.userReactions = [];
+                }
+            }
+            // Refresh comment authors for single post
+            if (Array.isArray(post.comments) && post.comments.length > 0) {
+                const commentAuthorIds = new Set();
+                post.comments.forEach((c) => {
+                    var _a;
+                    if ((_a = c.author) === null || _a === void 0 ? void 0 : _a.id)
+                        commentAuthorIds.add(c.author.id);
+                });
+                if (commentAuthorIds.size > 0) {
+                    const commentAuthors = yield db.collection(USERS_COLLECTION)
+                        .find({ id: { $in: Array.from(commentAuthorIds) } })
+                        .project({
+                        id: 1, firstName: 1, lastName: 1, name: 1, handle: 1,
+                        avatar: 1, avatarKey: 1, avatarType: 1, isVerified: 1
+                    })
+                        .toArray();
+                    const commentAuthorMap = new Map(commentAuthors.map((u) => [u.id, u]));
+                    post.comments.forEach((c) => {
+                        var _a;
+                        if (((_a = c.author) === null || _a === void 0 ? void 0 : _a.id) && commentAuthorMap.has(c.author.id)) {
+                            const latest = commentAuthorMap.get(c.author.id);
+                            c.author = (0, userUtils_1.transformUser)(latest);
+                        }
+                        else if (c.author) {
+                            c.author = (0, userUtils_1.transformUser)(c.author);
+                        }
+                        if (currentUserId) {
+                            if (c.reactionUsers) {
+                                c.userReactions = Object.keys(c.reactionUsers).filter(emoji => Array.isArray(c.reactionUsers[emoji]) && c.reactionUsers[emoji].includes(currentUserId));
+                            }
+                            else {
+                                c.userReactions = [];
+                            }
+                        }
+                    });
                 }
             }
             res.json({ success: true, data: post });
@@ -522,7 +623,7 @@ exports.postsController = {
             catch (e) {
             }
             if (authorId) {
-                emitAuthorInsightsUpdate(req.app, authorId);
+                (0, exports.emitAuthorInsightsUpdate)(req.app, authorId);
             }
             res.json({ success: true, data: { id, viewCount } });
         }
@@ -604,7 +705,8 @@ exports.postsController = {
             }
             const db = (0, db_1.getDB)();
             // Try to fetch full author from DB
-            const author = yield db.collection(USERS_COLLECTION).findOne({ id: authorId });
+            const authorRaw = yield db.collection(USERS_COLLECTION).findOne({ id: authorId });
+            const author = authorRaw ? (0, userUtils_1.transformUser)(authorRaw) : null;
             const authorEmbed = author ? {
                 id: author.id,
                 firstName: author.firstName,
@@ -660,6 +762,21 @@ exports.postsController = {
                     console.error('Error creating time capsule invite notification:', err);
                 })));
             }
+            // Emit real-time event for new post if it's public and visible
+            const io = req.app.get('io');
+            if (io) {
+                const isPublic = !visibility || visibility === 'public';
+                const isLockedTimeCapsule = isTimeCapsule && unlockDate && new Date(unlockDate) > new Date();
+                if (isPublic && !isLockedTimeCapsule) {
+                    io.emit('new_post', newPost);
+                }
+                else if (visibility === 'acquaintances') {
+                    // TODO: Efficiently emit to acquaintances only
+                    // For now, we don't emit to avoid leaking to public
+                }
+                // Trigger live insights update for the author
+                (0, exports.emitAuthorInsightsUpdate)(req.app, authorEmbed.id);
+            }
             res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
         }
         catch (error) {
@@ -697,6 +814,8 @@ exports.postsController = {
             if (updatedDoc.author) {
                 updatedDoc.author = (0, userUtils_1.transformUser)(updatedDoc.author);
             }
+            // Trigger live insights update for the author
+            (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id);
             res.json({ success: true, data: updatedDoc, message: 'Post updated successfully' });
         }
         catch (error) {
@@ -718,6 +837,8 @@ exports.postsController = {
                 return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can delete this post' });
             }
             yield db.collection(POSTS_COLLECTION).deleteOne({ id });
+            // Trigger live insights update for the author
+            (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id);
             res.json({ success: true, message: 'Post deleted successfully' });
         }
         catch (error) {
@@ -730,7 +851,7 @@ exports.postsController = {
         var _a;
         try {
             const { id } = req.params;
-            const { reaction } = req.body;
+            const { reaction, action: forceAction } = req.body;
             const userId = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id) || req.body.userId; // Prefer authenticated user
             if (!reaction) {
                 return res.status(400).json({ success: false, error: 'Missing reaction' });
@@ -748,20 +869,32 @@ exports.postsController = {
             const usersForEmoji = currentReactionUsers[reaction] || [];
             const hasReacted = usersForEmoji.includes(userId);
             let action = 'added';
-            if (hasReacted) {
-                // Remove reaction
-                action = 'removed';
-                yield db.collection(POSTS_COLLECTION).updateOne({ id }, {
-                    $pull: { [`reactionUsers.${reaction}`]: userId },
-                    $inc: { [`reactions.${reaction}`]: -1 }
-                });
+            let shouldUpdate = true;
+            if (forceAction) {
+                if (forceAction === 'add' && hasReacted)
+                    shouldUpdate = false;
+                if (forceAction === 'remove' && !hasReacted)
+                    shouldUpdate = false;
+                action = forceAction === 'add' ? 'added' : 'removed';
             }
             else {
-                // Add reaction
-                yield db.collection(POSTS_COLLECTION).updateOne({ id }, {
-                    $addToSet: { [`reactionUsers.${reaction}`]: userId },
-                    $inc: { [`reactions.${reaction}`]: 1 }
-                });
+                action = hasReacted ? 'removed' : 'added';
+            }
+            if (shouldUpdate) {
+                if (action === 'removed') {
+                    // Remove reaction
+                    yield db.collection(POSTS_COLLECTION).updateOne({ id }, {
+                        $pull: { [`reactionUsers.${reaction}`]: userId },
+                        $inc: { [`reactions.${reaction}`]: -1 }
+                    });
+                }
+                else {
+                    // Add reaction
+                    yield db.collection(POSTS_COLLECTION).updateOne({ id }, {
+                        $addToSet: { [`reactionUsers.${reaction}`]: userId },
+                        $inc: { [`reactions.${reaction}`]: 1 }
+                    });
+                }
             }
             // Notify author only if adding a reaction and it's not self-reaction
             if (action === 'added' && post.author.id !== userId) {
@@ -780,119 +913,18 @@ exports.postsController = {
                 updatedPost.userReactions = [];
             }
             if (updatedPost.author && updatedPost.author.id) {
-                emitAuthorInsightsUpdate(req.app, updatedPost.author.id);
+                (0, exports.emitAuthorInsightsUpdate)(req.app, updatedPost.author.id);
+            }
+            // Broadcast post update to all connected clients for real-time reactions
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('post_updated', updatedPost);
             }
             res.json({ success: true, data: updatedPost, message: `Reaction ${action} successfully` });
         }
         catch (error) {
             console.error('Error adding reaction:', error);
             res.status(500).json({ success: false, error: 'Failed to add reaction', message: 'Internal server error' });
-        }
-    }),
-    getMyInsights: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g;
-        try {
-            const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!userId) {
-                return res.status(401).json({ success: false, error: 'Unauthorized' });
-            }
-            const db = (0, db_1.getDB)();
-            const [agg] = yield db.collection(POSTS_COLLECTION).aggregate([
-                { $match: { 'author.id': userId } },
-                {
-                    $group: {
-                        _id: null,
-                        totalPosts: { $sum: 1 },
-                        totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
-                        boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
-                        totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
-                    }
-                }
-            ]).toArray();
-            const topPosts = yield db.collection(POSTS_COLLECTION)
-                .find({ 'author.id': userId })
-                .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
-                .sort({ viewCount: -1 })
-                .limit(5)
-                .toArray();
-            const user = yield db.collection(USERS_COLLECTION).findOne({ id: userId }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
-            // Fetch active subscription to determine analytics level
-            const activeSub = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({
-                userId,
-                status: 'active',
-                $or: [
-                    { endDate: { $exists: false } },
-                    { endDate: { $gt: Date.now() } }
-                ]
-            });
-            let analyticsLevel = 'none';
-            if (activeSub) {
-                if (activeSub.packageId === 'pkg-enterprise')
-                    analyticsLevel = 'deep';
-                else if (activeSub.packageId === 'pkg-pro')
-                    analyticsLevel = 'creator';
-                else if (activeSub.packageId === 'pkg-starter')
-                    analyticsLevel = 'basic';
-            }
-            // Base data structure
-            const responseData = {
-                totals: {
-                    totalPosts: (_b = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _b !== void 0 ? _b : 0,
-                    totalViews: (_c = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _c !== void 0 ? _c : 0,
-                    boostedPosts: (_d = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _d !== void 0 ? _d : 0,
-                    totalRadiance: (_e = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _e !== void 0 ? _e : 0
-                },
-                credits: {
-                    balance: (_f = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _f !== void 0 ? _f : 0,
-                    spent: (_g = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _g !== void 0 ? _g : 0
-                },
-                topPosts: topPosts.map((p) => {
-                    var _a, _b;
-                    return ({
-                        id: p.id,
-                        preview: (p.content || '').slice(0, 120),
-                        views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
-                        timestamp: p.timestamp,
-                        isBoosted: !!p.isBoosted,
-                        radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
-                    });
-                })
-            };
-            // Apply gating based on plan
-            if (analyticsLevel === 'creator' || analyticsLevel === 'deep') {
-                // Additional Creator level stats can be added here in the future
-            }
-            if (analyticsLevel === 'deep') {
-                // Add Deep Neural Analytics (Mock data for now as per requirements)
-                responseData.neuralInsights = {
-                    audienceBehavior: {
-                        retention: 'High',
-                        engagementRate: '4.5%',
-                        topLocations: ['US', 'UK', 'CA']
-                    },
-                    timingOptimization: {
-                        bestTimeToPost: 'Wednesday 6:00 PM',
-                        peakActivity: 'Weekends'
-                    },
-                    conversionInsights: {
-                        clickThroughRate: '2.1%',
-                        conversionScore: 85
-                    }
-                };
-            }
-            // If level is 'none' (free user), we might want to hide even basic stats or show them as a teaser.
-            // For now, returning basic stats (posts/views) is fair for free users too, 
-            // but strictly following "Personal Pulse -> basic stats" might imply free users get less.
-            // However, preventing errors on frontend is priority.
-            return res.json({
-                success: true,
-                data: responseData,
-                planLevel: analyticsLevel
-            });
-        }
-        catch (err) {
-            console.error('getMyInsights error', err);
-            return res.status(500).json({ success: false, error: 'Failed to load insights' });
         }
     }),
     // POST /api/posts/:id/boost - Boost post and deduct credits server-side
@@ -957,7 +989,7 @@ exports.postsController = {
                     const appInstance = req.app;
                     const authorId = ((_a = boostedDoc.author) === null || _a === void 0 ? void 0 : _a.id) || post.author.id;
                     if (authorId) {
-                        yield emitAuthorInsightsUpdate(appInstance, authorId);
+                        yield (0, exports.emitAuthorInsightsUpdate)(appInstance, authorId);
                     }
                 }
                 catch (e) {
@@ -1058,16 +1090,42 @@ exports.postsController = {
         try {
             const { limit = 10, hours = 24 } = req.query;
             const db = (0, db_1.getDB)();
-            const since = Date.now() - (parseInt(String(hours), 10) || 24) * 60 * 60 * 1000;
-            const pipeline = [
+            const limitNum = Math.min(parseInt(String(limit), 10) || 10, 100);
+            const getPipeline = (since) => [
                 { $match: { timestamp: { $gte: since } } },
                 { $unwind: '$hashtags' },
                 { $group: { _id: { $toLower: '$hashtags' }, count: { $sum: 1 } } },
                 { $sort: { count: -1 } },
-                { $limit: Math.min(parseInt(String(limit), 10) || 10, 100) }
+                { $limit: limitNum }
             ];
-            const tags = yield db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
-            res.json({ success: true, data: tags, message: 'Trending hashtags retrieved successfully' });
+            // 1. Try requested time window (default 24h)
+            let since = Date.now() - (parseInt(String(hours), 10) || 24) * 60 * 60 * 1000;
+            let tags = yield db.collection(POSTS_COLLECTION).aggregate(getPipeline(since)).toArray();
+            let windowUsed = '24h';
+            // 2. If empty, try 7 days
+            if (tags.length === 0) {
+                since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+                tags = yield db.collection(POSTS_COLLECTION).aggregate(getPipeline(since)).toArray();
+                windowUsed = '7d';
+            }
+            // 3. If still empty, try 30 days
+            if (tags.length === 0) {
+                since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+                tags = yield db.collection(POSTS_COLLECTION).aggregate(getPipeline(since)).toArray();
+                windowUsed = '30d';
+            }
+            // 4. If still empty, try All Time
+            if (tags.length === 0) {
+                since = 0; // Beginning of time
+                tags = yield db.collection(POSTS_COLLECTION).aggregate(getPipeline(since)).toArray();
+                windowUsed = 'all_time';
+            }
+            res.json({
+                success: true,
+                data: tags,
+                message: 'Trending hashtags retrieved successfully',
+                meta: { windowUsed }
+            });
         }
         catch (error) {
             console.error('Error fetching trending hashtags:', error);
@@ -1194,6 +1252,57 @@ exports.postsController = {
         catch (error) {
             console.error('Error fetching post analytics:', error);
             res.status(500).json({ success: false, error: 'Failed to fetch analytics' });
+        }
+    }),
+    // GET /api/posts/insights/me - Get personal post insights
+    getMyInsights: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            const db = (0, db_1.getDB)();
+            const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!userId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
+            const posts = yield db.collection(POSTS_COLLECTION)
+                .find({ 'author.id': userId })
+                .toArray();
+            const totalPosts = posts.length;
+            const totalViews = posts.reduce((sum, p) => sum + (p.viewCount || 0), 0);
+            const totalRadiance = posts.reduce((sum, p) => {
+                const reactions = p.reactions || {};
+                const reactionCount = Object.values(reactions).reduce((a, b) => (Number(a) || 0) + (Number(b) || 0), 0);
+                return sum + (p.radiance || reactionCount || 0);
+            }, 0);
+            const boostedPosts = posts.filter((p) => p.isBoosted).length;
+            const topPosts = posts
+                .sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0))
+                .slice(0, 5)
+                .map((p) => ({
+                id: p.id,
+                content: (p.content || '').slice(0, 120),
+                views: p.viewCount || 0,
+                reactions: p.reactions || {}
+            }));
+            return res.json({
+                success: true,
+                data: {
+                    totals: {
+                        totalPosts,
+                        totalViews,
+                        boostedPosts,
+                        totalRadiance
+                    },
+                    credits: {
+                        balance: 0,
+                        spent: 0
+                    },
+                    topPosts
+                }
+            });
+        }
+        catch (err) {
+            console.error("Insights error:", err);
+            return res.status(500).json({ success: false, error: "Failed to fetch insights" });
         }
     })
 };

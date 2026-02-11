@@ -17,6 +17,7 @@ const passport_1 = __importDefault(require("passport"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const crypto_1 = __importDefault(require("crypto"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const axios_1 = __importDefault(require("axios"));
 const db_1 = require("../db");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const jwtUtils_1 = require("../utils/jwtUtils");
@@ -159,28 +160,28 @@ router.get('/google/callback', (req, res, next) => {
             const db = (0, db_1.getDB)();
             const userData = req.user;
             console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
-            // FIX: Check by EMAIL to link accounts
+            // Identify-First: Check by EMAIL
             const existingUser = yield db.collection('users').findOne({
                 email: userData.email
             });
             let userToReturn;
             if (existingUser) {
-                console.log('✓ Found existing user:', existingUser.id);
-                // PRESERVE existing handle - NEVER change it
+                console.log('✓ Found existing user by email:', existingUser.email);
                 const updates = {
-                    firstName: userData.firstName,
-                    lastName: userData.lastName,
-                    name: userData.name,
-                    email: userData.email,
-                    avatar: userData.avatar,
-                    avatarType: userData.avatarType,
-                    googleId: userData.googleId,
                     lastLogin: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
+                    updatedAt: new Date().toISOString(),
+                    // Always link the ID of the current provider
+                    googleId: userData.googleId || existingUser.googleId,
                 };
-                updates.handle = existingUser.handle; // CRITICAL: Keep original handle
+                // DO NOT update these if they already exist
+                // This keeps the user's chosen identity intact
+                if (!existingUser.handle)
+                    updates.handle = userData.handle;
+                if (!existingUser.firstName)
+                    updates.firstName = userData.firstName;
+                if (!existingUser.avatar)
+                    updates.avatar = userData.avatar;
                 yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
-                console.log('✓ Updated existing user after OAuth:', existingUser.id, '| Handle preserved:', existingUser.handle);
                 userToReturn = Object.assign(Object.assign({}, existingUser), updates);
             }
             else {
@@ -199,7 +200,7 @@ router.get('/google/callback', (req, res, next) => {
             });
             (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
             const frontendUrl = process.env.VITE_FRONTEND_URL ||
-                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraso.vercel.app');
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
             console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
             res.redirect(`${frontendUrl}/feed`);
         }
@@ -207,6 +208,335 @@ router.get('/google/callback', (req, res, next) => {
     catch (error) {
         console.error('Error in OAuth callback:', error);
         res.redirect('/login?error=oauth_failed');
+    }
+}));
+// ============ GITHUB OAUTH ============
+router.get('/github', (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+        return res.status(503).json({
+            success: false,
+            message: 'GitHub login is not configured on the server.'
+        });
+    }
+    next();
+}, passport_1.default.authenticate('github', { scope: ['user:email'] }));
+router.get('/github/callback', (req, res, next) => {
+    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+        return res.redirect('/login?error=github_not_configured');
+    }
+    next();
+}, passport_1.default.authenticate('github', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        if (req.user) {
+            const db = (0, db_1.getDB)();
+            const userData = req.user;
+            console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
+            // Identify-First: Check by EMAIL
+            const existingUser = yield db.collection('users').findOne({
+                email: userData.email
+            });
+            let userToReturn;
+            if (existingUser) {
+                console.log('✓ Found existing user by email:', existingUser.email);
+                const updates = {
+                    lastLogin: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    // Always link the ID of the current provider
+                    githubId: userData.githubId || existingUser.githubId,
+                };
+                // DO NOT update these if they already exist
+                if (!existingUser.firstName)
+                    updates.firstName = userData.firstName;
+                if (!existingUser.avatar)
+                    updates.avatar = userData.avatar;
+                yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
+                userToReturn = Object.assign(Object.assign({}, existingUser), updates);
+            }
+            else {
+                console.log('➕ New user from GitHub OAuth');
+                // NEW USER: Generate unique handle
+                const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
+                const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
+                yield db.collection('users').insertOne(newUser);
+                console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
+                userToReturn = newUser;
+            }
+            const accessToken = (0, jwtUtils_1.generateAccessToken)(userToReturn);
+            const refreshToken = (0, jwtUtils_1.generateRefreshToken)(userToReturn);
+            yield db.collection('users').updateOne({ id: userToReturn.id }, {
+                $push: { refreshTokens: refreshToken }
+            });
+            (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
+            const frontendUrl = process.env.VITE_FRONTEND_URL ||
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+            console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
+            res.redirect(`${frontendUrl}/feed`);
+        }
+    }
+    catch (error) {
+        console.error('Error in OAuth callback:', error);
+        res.redirect('/login?error=oauth_failed');
+    }
+}));
+// ============ LINKEDIN OAUTH ============
+router.get('/linkedin', (req, res) => {
+    if (!process.env.LINKEDIN_CLIENT_ID || !process.env.LINKEDIN_CLIENT_SECRET) {
+        return res.status(503).json({
+            success: false,
+            message: 'LinkedIn login is not configured on the server.'
+        });
+    }
+    // 1. Generate a secure random state
+    const state = crypto_1.default.randomBytes(16).toString('hex');
+    // 2. Store state in a secure, httpOnly cookie (valid for 5 mins)
+    res.cookie('linkedin_auth_state', state, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production', // secure in prod
+        sameSite: 'lax', // allows redirect from external site
+        maxAge: 5 * 60 * 1000 // 5 minutes
+    });
+    // 3. Construct the authorization URL
+    const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
+    const clientId = process.env.LINKEDIN_CLIENT_ID;
+    const scope = 'openid profile email';
+    const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(scope)}`;
+    // 4. Redirect user to LinkedIn
+    res.redirect(authUrl);
+});
+router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const { code, state, error } = req.query;
+    // Handle LinkedIn errors
+    if (error) {
+        console.error('LinkedIn OAuth Error:', error);
+        return res.redirect('/login?error=linkedin_auth_failed');
+    }
+    if (!code) {
+        return res.redirect('/login?error=no_code');
+    }
+    // 1. Validate State
+    const storedState = req.cookies.linkedin_auth_state;
+    if (!state || !storedState || state !== storedState) {
+        console.error('LinkedIn OAuth State Mismatch:', { received: state, stored: storedState });
+        return res.redirect('/login?error=state_mismatch');
+    }
+    // Clear the state cookie once used
+    res.clearCookie('linkedin_auth_state');
+    try {
+        const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
+        // 2. Exchange code for access token
+        const tokenResponse = yield axios_1.default.post('https://www.linkedin.com/oauth/v2/accessToken', null, {
+            params: {
+                grant_type: 'authorization_code',
+                code,
+                redirect_uri: redirectUri,
+                client_id: process.env.LINKEDIN_CLIENT_ID,
+                client_secret: process.env.LINKEDIN_CLIENT_SECRET
+            },
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+        });
+        const accessToken = tokenResponse.data.access_token;
+        // 3. Fetch user info
+        const profileResponse = yield axios_1.default.get('https://api.linkedin.com/v2/userinfo', {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`
+            }
+        });
+        const profile = profileResponse.data;
+        // LinkedIn profile structure: { sub, name, given_name, family_name, picture, email, ... }
+        if (!profile.email_verified) {
+            return res.redirect('/login?error=linkedin_email_not_verified');
+        }
+        const db = (0, db_1.getDB)();
+        // 4. Find or Create User
+        // Identify-First: Check by EMAIL
+        const existingUser = yield db.collection('users').findOne({ email: profile.email });
+        let userToReturn;
+        if (existingUser) {
+            console.log('✓ Found existing user by email:', existingUser.email);
+            // 2. Account exists (could be from Google, Magic Link, or Password)
+            // Simply "link" this LinkedIn sub ID to the existing account if not already there
+            const updates = {
+                lastLogin: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                // Always link the ID of the current provider
+                linkedinId: profile.sub || existingUser.linkedinId,
+            };
+            // 3. DO NOT overwrite firstName, lastName, or handle if they already exist
+            // Only fill them in if the existing record is missing them
+            if (!existingUser.firstName)
+                updates.firstName = profile.given_name;
+            if (!existingUser.avatar)
+                updates.avatar = profile.picture;
+            // Also preserve handle
+            if (!existingUser.handle) {
+                // Generate one if really needed, though usually we won't need to do this here 
+                // as we don't have userData.handle from LinkedIn usually.
+                // But for consistency with the request:
+                // LinkedIn profile doesn't always have a handle concept, so we skip unless we want to generate one.
+            }
+            yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
+            userToReturn = Object.assign(Object.assign({}, existingUser), updates);
+        }
+        else {
+            console.log('➕ New user from LinkedIn OAuth');
+            const uniqueHandle = yield generateUniqueHandle(profile.given_name || 'User', profile.family_name || '');
+            const newUser = {
+                id: crypto_1.default.randomUUID(),
+                linkedinId: profile.sub,
+                firstName: profile.given_name || 'User',
+                lastName: profile.family_name || '',
+                name: profile.name || 'User',
+                email: profile.email || '',
+                avatar: profile.picture || `https://ui-avatars.com/api/?name=${profile.name}&background=random`,
+                avatarType: 'url',
+                handle: uniqueHandle,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                lastLogin: new Date().toISOString(),
+                auraCredits: 100,
+                trustScore: 10,
+                activeGlow: 'none',
+                acquaintances: [],
+                blockedUsers: [],
+                refreshTokens: []
+            };
+            yield db.collection('users').insertOne(newUser);
+            userToReturn = newUser;
+        }
+        // 5. Session Management
+        const newAccessToken = (0, jwtUtils_1.generateAccessToken)(userToReturn);
+        const refreshToken = (0, jwtUtils_1.generateRefreshToken)(userToReturn);
+        yield db.collection('users').updateOne({ id: userToReturn.id }, {
+            $push: { refreshTokens: refreshToken }
+        });
+        (0, jwtUtils_1.setTokenCookies)(res, newAccessToken, refreshToken);
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+        console.log('[OAuth:LinkedIn] Redirecting to:', `${frontendUrl}/dashboard`);
+        res.redirect(`${frontendUrl}/dashboard`);
+    }
+    catch (error) {
+        console.error('LinkedIn OAuth callback error:', ((_a = error === null || error === void 0 ? void 0 : error.response) === null || _a === void 0 ? void 0 : _a.data) || error.message);
+        res.redirect('/login?error=linkedin_callback_error');
+    }
+}));
+// ============ DISCORD OAUTH ============
+router.get('/discord', (req, res) => {
+    if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
+        return res.status(503).json({
+            success: false,
+            message: 'Discord login is not configured on the server.'
+        });
+    }
+    const state = crypto_1.default.randomBytes(16).toString('hex');
+    const redirectUri = process.env.DISCORD_CALLBACK_URL ||
+        `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/discord/callback`;
+    const authUrl = `https://discord.com/oauth2/authorize` +
+        `?client_id=${process.env.DISCORD_CLIENT_ID}` +
+        `&response_type=code` +
+        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+        `&scope=${encodeURIComponent('identify email')}` +
+        `&state=${state}`;
+    return res.redirect(authUrl);
+});
+router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const { code, error } = req.query;
+    if (error)
+        return res.redirect('/login?error=discord_auth_failed');
+    if (!code)
+        return res.redirect('/login?error=discord_no_code');
+    try {
+        const redirectUri = process.env.DISCORD_CALLBACK_URL ||
+            `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/discord/callback`;
+        // Exchange code for token
+        const body = new URLSearchParams({
+            client_id: process.env.DISCORD_CLIENT_ID,
+            client_secret: process.env.DISCORD_CLIENT_SECRET,
+            grant_type: 'authorization_code',
+            code: String(code),
+            redirect_uri: redirectUri,
+        });
+        const tokenRes = yield axios_1.default.post('https://discord.com/api/oauth2/token', body.toString(), {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        });
+        const accessToken = tokenRes.data.access_token;
+        // Fetch user
+        const userRes = yield axios_1.default.get('https://discord.com/api/users/@me', {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const discord = userRes.data;
+        const email = (discord.email || '').trim().toLowerCase();
+        if (!email)
+            return res.redirect('/login?error=discord_no_email');
+        if (discord.verified === false)
+            return res.redirect('/login?error=discord_email_not_verified');
+        const db = (0, db_1.getDB)();
+        const existingUser = yield db.collection('users').findOne({ email });
+        // Build Discord avatar URL (optional)
+        const discordAvatar = discord.avatar
+            ? `https://cdn.discordapp.com/avatars/${discord.id}/${discord.avatar}.png?size=256`
+            : null;
+        let userToReturn;
+        if (existingUser) {
+            // ✅ Do NOT overwrite profile fields; only link provider + lastLogin
+            const updates = {
+                discordId: discord.id,
+                lastLogin: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+            };
+            // Only fill missing profile fields (optional, safe)
+            if (!existingUser.name)
+                updates.name = discord.global_name || discord.username;
+            if (!existingUser.firstName)
+                updates.firstName = (discord.global_name || discord.username || 'User').split(' ')[0];
+            if (!existingUser.avatar && discordAvatar) {
+                updates.avatar = discordAvatar;
+                updates.avatarType = 'url';
+            }
+            yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
+            userToReturn = Object.assign(Object.assign({}, existingUser), updates);
+        }
+        else {
+            const displayName = discord.global_name || discord.username || 'User';
+            const uniqueHandle = yield generateUniqueHandle(displayName, '');
+            const newUser = {
+                id: crypto_1.default.randomUUID(),
+                discordId: discord.id,
+                firstName: displayName.split(' ')[0] || 'User',
+                lastName: '',
+                name: displayName,
+                email,
+                avatar: discordAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}`,
+                avatarType: 'url',
+                handle: uniqueHandle,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                lastLogin: new Date().toISOString(),
+                auraCredits: 100,
+                trustScore: 10,
+                activeGlow: 'none',
+                acquaintances: [],
+                blockedUsers: [],
+                refreshTokens: []
+            };
+            yield db.collection('users').insertOne(newUser);
+            userToReturn = newUser;
+        }
+        const newAccessToken = (0, jwtUtils_1.generateAccessToken)(userToReturn);
+        const newRefreshToken = (0, jwtUtils_1.generateRefreshToken)(userToReturn);
+        yield db.collection('users').updateOne({ id: userToReturn.id }, { $push: { refreshTokens: newRefreshToken } });
+        (0, jwtUtils_1.setTokenCookies)(res, newAccessToken, newRefreshToken);
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+        return res.redirect(`${frontendUrl}/feed`);
+    }
+    catch (e) {
+        console.error('Discord OAuth callback error:', ((_a = e === null || e === void 0 ? void 0 : e.response) === null || _a === void 0 ? void 0 : _a.data) || e.message);
+        return res.redirect('/login?error=discord_callback_error');
     }
 }));
 // ============ MAGIC LINK ============
@@ -263,7 +593,7 @@ router.post("/magic-link", (req, res) => __awaiter(void 0, void 0, void 0, funct
                 updatedAt: new Date().toISOString(),
             },
         });
-        const frontendUrl = process.env.VITE_FRONTEND_URL || (process.env.NODE_ENV === "development" ? "http://localhost:5173" : "https://auraso.vercel.app");
+        const frontendUrl = process.env.VITE_FRONTEND_URL || (process.env.NODE_ENV === "development" ? "http://localhost:5173" : "https://www.aura.net.za");
         const magicLink = `${frontendUrl}/magic-login?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
         console.log('📧 Attempting to send magic link email to:', normalizedEmail);
         yield (0, emailService_1.sendMagicLinkEmail)(normalizedEmail, magicLink);
@@ -299,7 +629,10 @@ router.post("/magic-link/verify", (req, res) => __awaiter(void 0, void 0, void 0
             return res.status(401).json({ success: false, message: "Invalid or expired link" });
         }
         // one-time use
-        yield db.collection("users").updateOne({ id: user.id }, { $unset: { magicLinkTokenHash: "", magicLinkExpiresAt: "" } });
+        yield db.collection("users").updateOne({ id: user.id }, {
+            $unset: { magicLinkTokenHash: "", magicLinkExpiresAt: "" },
+            $set: { lastLogin: new Date().toISOString() }
+        });
         const accessToken = (0, jwtUtils_1.generateAccessToken)(user);
         const refreshToken = (0, jwtUtils_1.generateRefreshToken)(user);
         yield db.collection("users").updateOne({ id: user.id }, { $push: { refreshTokens: refreshToken } });
@@ -427,28 +760,28 @@ router.get('/github/callback', (req, res, next) => {
             const db = (0, db_1.getDB)();
             const userData = req.user;
             console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
-            // FIX: Check by EMAIL to link accounts
+            // Identify-First: Check by EMAIL
             const existingUser = yield db.collection('users').findOne({
                 email: userData.email
             });
             let userToReturn;
             if (existingUser) {
-                console.log('✓ Found existing user:', existingUser.id);
-                // PRESERVE existing handle - NEVER change it
+                console.log('✓ Found existing user by email:', existingUser.email);
                 const updates = {
-                    firstName: userData.firstName,
-                    lastName: userData.lastName,
-                    name: userData.name,
-                    email: userData.email,
-                    avatar: userData.avatar,
-                    avatarType: userData.avatarType,
-                    githubId: userData.githubId,
                     lastLogin: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
+                    updatedAt: new Date().toISOString(),
+                    // Always link the ID of the current provider
+                    githubId: userData.githubId || existingUser.githubId,
                 };
-                updates.handle = existingUser.handle; // CRITICAL: Keep original handle
+                // DO NOT update these if they already exist
+                // This keeps the user's chosen identity intact
+                if (!existingUser.handle)
+                    updates.handle = userData.handle;
+                if (!existingUser.firstName)
+                    updates.firstName = userData.firstName;
+                if (!existingUser.avatar)
+                    updates.avatar = userData.avatar;
                 yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
-                console.log('✓ Updated existing user after GitHub OAuth:', existingUser.id, '| Handle preserved:', existingUser.handle);
                 userToReturn = Object.assign(Object.assign({}, existingUser), updates);
             }
             else {
@@ -467,7 +800,7 @@ router.get('/github/callback', (req, res, next) => {
             });
             (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
             const frontendUrl = process.env.VITE_FRONTEND_URL ||
-                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://auraso.vercel.app');
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
             console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}/feed`);
             res.redirect(`${frontendUrl}/feed`);
         }
@@ -495,14 +828,27 @@ router.get('/user', authMiddleware_1.requireAuth, (req, res) => {
     });
 });
 // ============ LOGOUT ============
-router.post('/logout', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post('/logout', authMiddleware_1.attachUser, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const refreshToken = req.cookies.refreshToken;
+        const user = req.user;
         if (refreshToken) {
             const db = (0, db_1.getDB)();
-            const decoded = (0, jwtUtils_1.verifyRefreshToken)(refreshToken);
-            if (decoded) {
-                yield db.collection('users').updateOne({ id: decoded.id }, { $pull: { refreshTokens: refreshToken } });
+            // Try to find user ID from token or request
+            let userId = user === null || user === void 0 ? void 0 : user.id;
+            if (!userId) {
+                const decoded = (0, jwtUtils_1.verifyRefreshToken)(refreshToken);
+                if (decoded) {
+                    userId = decoded.id;
+                }
+            }
+            if (userId) {
+                yield db.collection('users').updateOne({ id: userId }, {
+                    $set: {
+                        refreshTokens: [],
+                        lastActive: new Date().toISOString()
+                    }
+                });
             }
         }
         (0, jwtUtils_1.clearTokenCookies)(res);

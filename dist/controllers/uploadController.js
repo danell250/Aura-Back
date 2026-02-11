@@ -41,9 +41,9 @@ if (hasCloudinaryConfig) {
         api_secret: process.env.CLOUDINARY_SECRET
     });
 }
-const uploadImageToCloudinary = (buffer, folder) => __awaiter(void 0, void 0, void 0, function* () {
+const uploadToCloudinary = (buffer_1, folder_1, ...args_1) => __awaiter(void 0, [buffer_1, folder_1, ...args_1], void 0, function* (buffer, folder, resourceType = 'auto') {
     return new Promise((resolve, reject) => {
-        const stream = cloudinary_1.v2.uploader.upload_stream({ folder }, (error, result) => {
+        const stream = cloudinary_1.v2.uploader.upload_stream({ folder, resource_type: resourceType }, (error, result) => {
             if (error || !result) {
                 return reject(error || new Error('Cloudinary upload failed'));
             }
@@ -66,10 +66,12 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
         return res.status(400).json({ error: 'Invalid file type' });
     }
     const isImage = req.file.mimetype.startsWith('image/');
-    if (hasCloudinaryConfig && isImage) {
+    const isVideo = req.file.mimetype.startsWith('video/');
+    if (hasCloudinaryConfig && (isImage || isVideo)) {
         try {
             const folder = process.env.CLOUDINARY_FOLDER || 'aura-uploads';
-            const secureUrl = yield uploadImageToCloudinary(req.file.buffer, folder);
+            const resourceType = isVideo ? 'video' : 'image';
+            const secureUrl = yield uploadToCloudinary(req.file.buffer, folder, resourceType);
             const db = (0, db_1.getDB)();
             yield db.collection('mediaFiles').insertOne({
                 storageProvider: 'cloudinary',
@@ -89,7 +91,7 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
             });
         }
         catch (error) {
-            console.error('Failed to upload image to Cloudinary, falling back to bucket/local:', error);
+            console.error('Failed to upload to Cloudinary, falling back to bucket/local:', error);
         }
     }
     const fileExtension = req.file.originalname.includes('.')

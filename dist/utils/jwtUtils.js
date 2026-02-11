@@ -73,39 +73,39 @@ const verifyRefreshToken = (token) => {
     }
 };
 exports.verifyRefreshToken = verifyRefreshToken;
+// Shared Cookie Options
+const getCookieOptions = (isProduction) => {
+    const options = {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: isProduction ? 'none' : 'lax',
+        path: '/'
+    };
+    // Only set domain if explicitly configured
+    if (process.env.COOKIE_DOMAIN) {
+        options.domain = process.env.COOKIE_DOMAIN;
+    }
+    return options;
+};
 // Set Token Cookies
 const setTokenCookies = (res, accessToken, refreshToken) => {
     // Treat as production if NODE_ENV is production OR if running on Render
     const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
+    const options = getCookieOptions(isProduction);
     // Access Token Cookie
-    res.cookie('accessToken', accessToken, {
-        httpOnly: true,
-        secure: isProduction, // Secure is required for SameSite=None
-        sameSite: isProduction ? 'none' : 'lax',
-        maxAge: 15 * 60 * 1000 // 15 minutes
-    });
+    res.cookie('accessToken', accessToken, Object.assign(Object.assign({}, options), { maxAge: 15 * 60 * 1000 // 15 minutes
+     }));
     // Refresh Token Cookie
-    res.cookie('refreshToken', refreshToken, {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
-    });
+    res.cookie('refreshToken', refreshToken, Object.assign(Object.assign({}, options), { maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+     }));
 };
 exports.setTokenCookies = setTokenCookies;
 // Clear Token Cookies
 const clearTokenCookies = (res) => {
     const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
-    res.clearCookie('accessToken', {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax'
-    });
-    res.clearCookie('refreshToken', {
-        httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax'
-    });
+    const options = getCookieOptions(isProduction);
+    res.clearCookie('accessToken', options);
+    res.clearCookie('refreshToken', options);
 };
 exports.clearTokenCookies = clearTokenCookies;
 // Middleware to protect routes with JWT (Updated to check cookies)

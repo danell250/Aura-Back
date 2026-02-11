@@ -65,32 +65,34 @@ function getCurrentBillingWindow(subscriptionStart) {
     return { start, end };
 }
 const BILLING_MS = 30 * 24 * 60 * 60 * 1000;
-function ensureCurrentPeriod(db, sub) {
+function ensureCurrentPeriod(db, subscription) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d;
         const now = Date.now();
-        let periodStart = (_b = (_a = sub.periodStart) !== null && _a !== void 0 ? _a : sub.startDate) !== null && _b !== void 0 ? _b : now;
-        let periodEnd = (_d = (_c = sub.periodEnd) !== null && _c !== void 0 ? _c : sub.nextBillingDate) !== null && _d !== void 0 ? _d : (periodStart + BILLING_MS);
-        // catch up if multiple months passed
-        while (now >= periodEnd) {
-            periodStart = periodEnd;
-            periodEnd = periodEnd + BILLING_MS;
+        const oneDayMs = 24 * 60 * 60 * 1000;
+        // If still in current period, return as-is
+        if (subscription.periodEnd && now < subscription.periodEnd) {
+            return subscription;
         }
-        // if period moved, reset adsUsed and impressionsUsed
-        const changed = periodStart !== sub.periodStart || periodEnd !== sub.periodEnd;
-        if (changed) {
-            yield db.collection('adSubscriptions').updateOne({ id: sub.id }, {
-                $set: {
-                    periodStart,
-                    periodEnd,
-                    adsUsed: 0,
-                    impressionsUsed: 0,
-                    updatedAt: now
-                }
-            });
-            return Object.assign(Object.assign({}, sub), { periodStart, periodEnd, adsUsed: 0, impressionsUsed: 0 });
-        }
-        return sub;
+        // Calculate new period bounds
+        const durationDays = subscription.durationDays || 30;
+        const periodStart = now;
+        const periodEnd = now + (durationDays * oneDayMs);
+        // Use findOneAndUpdate for atomicity - only update if period hasn't been reset by another request
+        const updated = yield db.collection('adSubscriptions').findOneAndUpdate({
+            id: subscription.id,
+            // Conditional check to prevent race conditions
+            periodEnd: subscription.periodEnd
+        }, {
+            $set: {
+                adsUsed: 0,
+                impressionsUsed: 0,
+                periodStart,
+                periodEnd,
+                updatedAt: now
+            }
+        }, { returnDocument: 'after' });
+        // Return updated document or original if no update occurred
+        return updated.value || subscription;
     });
 }
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
@@ -215,19 +217,22 @@ exports.adSubscriptionsController = {
             if (!subscription) {
                 return res.status(404).json({
                     success: false,
-                    error: 'Subscription not found'
+                    error: 'Subscription not found',
+                    message: 'The requested subscription could not be found.'
                 });
             }
             if (subscription.status !== 'active') {
                 return res.status(400).json({
                     success: false,
-                    error: 'Subscription is not active'
+                    error: 'Subscription is not active',
+                    message: 'This subscription is not currently active.'
                 });
             }
             if (subscription.adsUsed >= subscription.adLimit) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Ad limit reached for this subscription'
+                    error: 'Ad limit reached for this subscription',
+                    message: 'You have reached the maximum number of ads allowed for this subscription.'
                 });
             }
             // Check if subscription has expired

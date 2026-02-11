@@ -31,20 +31,29 @@ exports.shareController = {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
             const post = yield db.collection('posts').findOne({ id });
+            const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://www.aura.net.za';
             if (!post) {
                 // Fallback to generic metadata if post not found
-                const url = 'https://auraso.vercel.app';
-                return res.redirect(url);
+                return res.redirect(frontendUrl);
             }
             // Construct metadata
             const authorName = ((_a = post.author) === null || _a === void 0 ? void 0 : _a.name) || 'Aura User';
             const authorHandle = ((_b = post.author) === null || _b === void 0 ? void 0 : _b.handle) || '';
             const trustScore = ((_c = post.author) === null || _c === void 0 ? void 0 : _c.trustScore) || 0;
             const postContent = post.content || '';
-            const title = escapeHtml(`Post by ${authorName} on Aura`);
-            const description = escapeHtml(truncateContent(postContent, 200));
-            const image = post.mediaUrl || 'https://auraso.vercel.app/og-image.jpg?v=2';
-            const url = `https://auraso.vercel.app/p/${id}`;
+            // Title: Post title (if time capsule) or first line of content
+            const firstLine = postContent.split('\n').find((line) => line.trim().length > 0) || 'Post on Aura';
+            const titleText = post.timeCapsuleTitle || (firstLine.length > 80 ? firstLine.substring(0, 80) + '...' : firstLine);
+            const title = escapeHtml(titleText);
+            // Description: First 2-3 meaningful sentences
+            // Split by sentence delimiters (., !, ?) keeping the delimiter
+            const sentences = postContent.match(/[^.!?]+[.!?]+/g) || [postContent];
+            // Take first 3 sentences or up to 300 chars
+            const descriptionText = sentences.slice(0, 3).join(' ').trim();
+            const description = escapeHtml(truncateContent(descriptionText, 300));
+            const image = post.mediaUrl || `${frontendUrl}/og-image.jpg?v=2`;
+            // Use the canonical frontend URL as requested
+            const url = `${frontendUrl}/post/${id}`;
             const structuredData = {
                 "@context": "https://schema.org",
                 "@type": "BlogPosting",
@@ -54,7 +63,7 @@ exports.shareController = {
                 author: {
                     "@type": "Person",
                     name: authorName,
-                    url: `https://auraso.vercel.app/@${authorHandle}`
+                    url: `${frontendUrl}/@${authorHandle}`
                 },
                 datePublished: post.timestamp || new Date().toISOString(),
                 url,
@@ -63,7 +72,7 @@ exports.shareController = {
                     name: "Aura",
                     logo: {
                         "@type": "ImageObject",
-                        url: "https://auraso.vercel.app/logo.png"
+                        url: `${frontendUrl}/logo.png`
                     }
                 }
             };
@@ -138,17 +147,14 @@ exports.shareController = {
   </style>
 
   <script>
-    // Redirect to the actual app
     setTimeout(function() {
       window.location.href = "${url}";
     }, 100);
   </script>
 </head>
 <body>
-  <div class="loader">
-    <div class="spinner"></div>
+  <div style="display: flex; justify-content: center; align-items: center; height: 100vh; font-family: system-ui, -apple-system, sans-serif;">
     <p>Redirecting to Aura...</p>
-    <p><small><a href="${url}">Click here if not redirected</a></small></p>
   </div>
 </body>
 </html>

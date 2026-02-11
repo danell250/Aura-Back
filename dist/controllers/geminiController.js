@@ -70,7 +70,7 @@ const generatePostInspiration = (req, res) => __awaiter(void 0, void 0, void 0, 
     }
     catch (error) {
         console.error("Inspiration Error:", error);
-        res.status(500).json({ error: "The aura is currently shifting. Try again later!" });
+        res.status(500).json({ error: "The Aura is currently shifting. Try again later!" });
     }
 });
 exports.generatePostInspiration = generatePostInspiration;
@@ -106,7 +106,7 @@ const analyzeDataAura = (req, res) => __awaiter(void 0, void 0, void 0, function
     }
     catch (error) {
         console.error("Analysis Error:", error);
-        res.status(500).json({ error: "Unable to calibrate neural aura at this time." });
+        res.status(500).json({ error: "Unable to calibrate neural Aura at this time." });
     }
 });
 exports.analyzeDataAura = analyzeDataAura;

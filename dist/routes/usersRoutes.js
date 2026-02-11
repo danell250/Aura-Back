@@ -8,6 +8,8 @@ const router = (0, express_1.Router)();
 console.log('Users routes loaded successfully');
 // GET /api/users - Get all users (public)
 router.get('/', usersController_1.usersController.getAllUsers);
+// GET /api/users/me/dashboard - Get creator dashboard data
+router.get('/me/dashboard', authMiddleware_1.requireAuth, usersController_1.usersController.getMyDashboard);
 // GET /api/users/search - Search users (public)
 router.get('/search', usersController_1.usersController.searchUsers);
 // POST /api/users/me/images - Upload profile/cover images

@@ -29,6 +29,7 @@ const db_1 = require("../db");
 const s3Upload_1 = require("../utils/s3Upload");
 const userUtils_1 = require("../utils/userUtils");
 const trustService_1 = require("../services/trustService");
+const postsController_1 = require("./postsController");
 const securityLogger_1 = require("../utils/securityLogger");
 const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
@@ -95,6 +96,105 @@ const CREDIT_BUNDLE_CONFIG = {
     'Universal Core': { credits: 5000, price: 349.99 }
 };
 exports.usersController = {
+    // GET /api/users/me/dashboard - Get creator dashboard data
+    getMyDashboard: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f;
+        try {
+            const db = (0, db_1.getDB)();
+            const currentUser = req.user;
+            if (!(currentUser === null || currentUser === void 0 ? void 0 : currentUser.id)) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
+            const authorId = currentUser.id;
+            const [agg] = yield db.collection('posts').aggregate([
+                { $match: { 'author.id': authorId } },
+                {
+                    $group: {
+                        _id: null,
+                        totalPosts: { $sum: 1 },
+                        totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
+                        boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
+                        totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
+                    }
+                }
+            ]).toArray();
+            const topPosts = yield db.collection('posts')
+                .find({ 'author.id': authorId })
+                .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
+                .sort({ viewCount: -1 })
+                .limit(5)
+                .toArray();
+            const user = yield db.collection('users').findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
+            // Fetch active subscription to determine analytics level
+            const activeSub = yield db.collection('adSubscriptions').findOne({
+                userId: authorId,
+                status: 'active',
+                $or: [
+                    { endDate: { $exists: false } },
+                    { endDate: { $gt: Date.now() } }
+                ]
+            });
+            let analyticsLevel = 'none';
+            if (activeSub) {
+                if (activeSub.packageId === 'pkg-enterprise')
+                    analyticsLevel = 'deep';
+                else if (activeSub.packageId === 'pkg-pro')
+                    analyticsLevel = 'creator';
+                else if (activeSub.packageId === 'pkg-starter')
+                    analyticsLevel = 'basic';
+            }
+            const dashboardData = {
+                totals: {
+                    totalPosts: (_a = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _a !== void 0 ? _a : 0,
+                    totalViews: (_b = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _b !== void 0 ? _b : 0,
+                    boostedPosts: (_c = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _c !== void 0 ? _c : 0,
+                    totalRadiance: (_d = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _d !== void 0 ? _d : 0
+                },
+                credits: {
+                    balance: (_e = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _e !== void 0 ? _e : 0,
+                    spent: (_f = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _f !== void 0 ? _f : 0
+                },
+                topPosts: topPosts.map((p) => {
+                    var _a, _b;
+                    return ({
+                        id: p.id,
+                        preview: (p.content || '').slice(0, 120),
+                        views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
+                        timestamp: p.timestamp,
+                        isBoosted: !!p.isBoosted,
+                        radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
+                    });
+                })
+            };
+            // Add plan-specific insights
+            if (analyticsLevel === 'deep') {
+                dashboardData.neuralInsights = {
+                    audienceBehavior: {
+                        retention: 'High',
+                        engagementRate: '4.5%',
+                        topLocations: ['US', 'UK', 'CA']
+                    },
+                    timingOptimization: {
+                        bestTimeToPost: 'Wednesday 6:00 PM',
+                        peakActivity: 'Weekends'
+                    },
+                    conversionInsights: {
+                        clickThroughRate: '2.1%',
+                        conversionScore: 85
+                    }
+                };
+            }
+            res.json({
+                success: true,
+                data: dashboardData,
+                planLevel: analyticsLevel
+            });
+        }
+        catch (error) {
+            console.error('getMyDashboard error', error);
+            res.status(500).json({ success: false, error: 'Failed to fetch dashboard data' });
+        }
+    }),
     // GET /api/users - Get all users (respects showInSearch privacy setting)
     getAllUsers: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
@@ -337,11 +437,41 @@ exports.usersController = {
                     message: `User with ID ${id} does not exist`
                 });
             }
+            // Propagate activeGlow changes to related collections
+            if (mutableUpdates.activeGlow) {
+                try {
+                    // 1. Update Posts
+                    yield db.collection('posts').updateMany({ "author.id": id }, { $set: { "author.activeGlow": mutableUpdates.activeGlow } });
+                    // 2. Update Comments
+                    yield db.collection('comments').updateMany({ "author.id": id }, { $set: { "author.activeGlow": mutableUpdates.activeGlow } });
+                    // 3. Update Notifications
+                    yield db.collection('users').updateMany({ "notifications.fromUser.id": id }, {
+                        $set: {
+                            "notifications.$[elem].fromUser.activeGlow": mutableUpdates.activeGlow
+                        }
+                    }, {
+                        arrayFilters: [{ "elem.fromUser.id": id }]
+                    });
+                    // 4. Update Ads
+                    yield db.collection('ads').updateMany({ "ownerId": id }, { $set: { "ownerActiveGlow": mutableUpdates.activeGlow } });
+                    console.log(`Propagated activeGlow update for user ${id} to posts, comments, notifications, and ads.`);
+                }
+                catch (propError) {
+                    console.error('Error propagating activeGlow updates:', propError);
+                    // Don't fail the request, just log the error
+                }
+            }
             // Get updated user
             const updatedUser = yield db.collection('users').findOne({ id });
+            const transformedUser = (0, userUtils_1.transformUser)(updatedUser);
+            // Broadcast update to all clients via Socket.IO
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('user_updated', transformedUser);
+            }
             res.json({
                 success: true,
-                data: (0, userUtils_1.transformUser)(updatedUser),
+                data: transformedUser,
                 message: 'User updated successfully'
             });
         }
@@ -450,7 +580,13 @@ exports.usersController = {
                 }
             }
             const updatedUser = yield db.collection('users').findOne({ id: userId });
-            res.json({ success: true, user: updatedUser });
+            const transformedUser = (0, userUtils_1.transformUser)(updatedUser);
+            // Broadcast update to all clients via Socket.IO
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('user_updated', transformedUser);
+            }
+            res.json({ success: true, user: transformedUser });
         }
         catch (e) {
             console.error('Upload failed:', e);
@@ -742,7 +878,7 @@ exports.usersController = {
                 status: 'open'
             };
             yield db.collection('reports').insertOne(reportDoc);
-            const toEmail = 'danelloosthuizen3@gmail.com';
+            const toEmail = process.env.ADMIN_EMAIL || 'danelloosthuizen3@gmail.com';
             const subject = `Aura User Report: ${target.name || target.handle || targetUserId}`;
             const body = [
                 `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,
@@ -1041,6 +1177,8 @@ exports.usersController = {
                 paymentMethod,
                 timestamp: new Date().toISOString()
             });
+            // Trigger real-time insights update
+            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id);
             res.json({
                 success: true,
                 data: {
@@ -1124,6 +1262,8 @@ exports.usersController = {
                 newCredits,
                 timestamp: new Date().toISOString()
             });
+            // Trigger real-time insights update
+            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id);
             res.json({
                 success: true,
                 data: {

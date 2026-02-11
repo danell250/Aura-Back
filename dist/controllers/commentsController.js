@@ -13,6 +13,7 @@ exports.commentsController = void 0;
 const db_1 = require("../db");
 const notificationsController_1 = require("./notificationsController");
 const userUtils_1 = require("../utils/userUtils");
+const postsController_1 = require("./postsController");
 const COMMENTS_COLLECTION = 'comments';
 const USERS_COLLECTION = 'users';
 exports.commentsController = {
@@ -34,9 +35,26 @@ exports.commentsController = {
                 .skip((pageNum - 1) * limitNum)
                 .limit(limitNum)
                 .toArray();
-            // Post-process to add userReactions for the current user
+            // Extract unique author IDs to fetch latest profile data
+            const authorIds = [...new Set(data.map((c) => { var _a; return (_a = c.author) === null || _a === void 0 ? void 0 : _a.id; }).filter(Boolean))];
+            // Fetch latest user details to ensure avatars/names are up-to-date
+            const authors = yield db.collection(USERS_COLLECTION)
+                .find({ id: { $in: authorIds } })
+                .project({
+                id: 1, firstName: 1, lastName: 1, name: 1, handle: 1,
+                avatar: 1, avatarKey: 1, avatarType: 1, isVerified: 1
+            })
+                .toArray();
+            const authorMap = new Map(authors.map((u) => [u.id, u]));
+            // Post-process to update author info and add userReactions
             data.forEach((comment) => {
-                if (comment.author) {
+                var _a;
+                // Update author with latest data if available
+                if (((_a = comment.author) === null || _a === void 0 ? void 0 : _a.id) && authorMap.has(comment.author.id)) {
+                    const latestAuthor = authorMap.get(comment.author.id);
+                    comment.author = (0, userUtils_1.transformUser)(latestAuthor);
+                }
+                else if (comment.author) {
                     comment.author = (0, userUtils_1.transformUser)(comment.author);
                 }
             });
@@ -68,12 +86,23 @@ exports.commentsController = {
     }),
     // GET /api/comments/:id - Get comment by ID
     getCommentById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
             const comment = yield db.collection(COMMENTS_COLLECTION).findOne({ id });
             if (!comment) {
                 return res.status(404).json({ success: false, error: 'Comment not found', message: `Comment with ID ${id} does not exist` });
+            }
+            // Fetch latest author info
+            if ((_a = comment.author) === null || _a === void 0 ? void 0 : _a.id) {
+                const latestAuthor = yield db.collection(USERS_COLLECTION).findOne({ id: comment.author.id });
+                if (latestAuthor) {
+                    comment.author = (0, userUtils_1.transformUser)(latestAuthor);
+                }
+                else {
+                    comment.author = (0, userUtils_1.transformUser)(comment.author);
+                }
             }
             res.json({ success: true, data: comment });
         }
@@ -83,10 +112,9 @@ exports.commentsController = {
         }
     }),
     createComment: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f;
         try {
             const { postId } = req.params;
-            const { text, authorId, parentId, taggedUserIds } = req.body;
+            const { text, authorId, parentId, taggedUserIds, tempId } = req.body;
             if (!text || !authorId) {
                 return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text and authorId are required' });
             }
@@ -100,7 +128,8 @@ exports.commentsController = {
                 handle: author.handle,
                 avatar: author.avatar,
                 avatarKey: author.avatarKey,
-                avatarType: author.avatarType || 'image'
+                avatarType: author.avatarType || 'image',
+                activeGlow: author.activeGlow
             } : {
                 id: authorId,
                 firstName: 'User',
@@ -108,7 +137,8 @@ exports.commentsController = {
                 name: 'User',
                 handle: '@user',
                 avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`,
-                avatarType: 'image'
+                avatarType: 'image',
+                activeGlow: undefined
             };
             const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
             const newComment = {
@@ -136,61 +166,7 @@ exports.commentsController = {
                     })));
                 }
                 if (post && post.author && post.author.id) {
-                    try {
-                        const authorIdForAnalytics = post.author.id;
-                        const [agg] = yield db.collection('posts').aggregate([
-                            { $match: { 'author.id': authorIdForAnalytics } },
-                            {
-                                $group: {
-                                    _id: null,
-                                    totalPosts: { $sum: 1 },
-                                    totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
-                                    boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
-                                    totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
-                                }
-                            }
-                        ]).toArray();
-                        const topPosts = yield db.collection('posts')
-                            .find({ 'author.id': authorIdForAnalytics })
-                            .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
-                            .sort({ viewCount: -1 })
-                            .limit(5)
-                            .toArray();
-                        const user = yield db.collection(USERS_COLLECTION).findOne({ id: authorIdForAnalytics }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
-                        const appInstance = req.app;
-                        const io = (appInstance === null || appInstance === void 0 ? void 0 : appInstance.get) && appInstance.get('io');
-                        if (io && typeof io.to === 'function') {
-                            io.to(`user:${authorIdForAnalytics}`).emit('analytics_update', {
-                                userId: authorIdForAnalytics,
-                                stats: {
-                                    totals: {
-                                        totalPosts: (_a = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _a !== void 0 ? _a : 0,
-                                        totalViews: (_b = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _b !== void 0 ? _b : 0,
-                                        boostedPosts: (_c = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _c !== void 0 ? _c : 0,
-                                        totalRadiance: (_d = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _d !== void 0 ? _d : 0
-                                    },
-                                    credits: {
-                                        balance: (_e = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _e !== void 0 ? _e : 0,
-                                        spent: (_f = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _f !== void 0 ? _f : 0
-                                    },
-                                    topPosts: topPosts.map((p) => {
-                                        var _a, _b;
-                                        return ({
-                                            id: p.id,
-                                            preview: (p.content || '').slice(0, 120),
-                                            views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
-                                            timestamp: p.timestamp,
-                                            isBoosted: !!p.isBoosted,
-                                            radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
-                                        });
-                                    })
-                                }
-                            });
-                        }
-                    }
-                    catch (err) {
-                        console.error('Error emitting analytics update for comment:', err);
-                    }
+                    (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id);
                 }
             }
             catch (e) {
@@ -198,6 +174,19 @@ exports.commentsController = {
             }
             if (newComment.author) {
                 newComment.author = (0, userUtils_1.transformUser)(newComment.author);
+            }
+            // Emit real-time event for new comment
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('comment_added', {
+                    postId,
+                    comment: newComment,
+                    tempId // Pass back the temporary ID for optimistic update reconciliation
+                });
+                // Also emit post update to ensure counts are synced
+                // We don't send the whole post, just the ID and updated count/metadata if needed
+                // But since we have comment_added, frontend can increment count locally.
+                // However, let's also emit a lightweight post_updated for safety if we want
             }
             res.status(201).json({ success: true, data: newComment, message: 'Comment created successfully' });
         }
@@ -226,6 +215,13 @@ exports.commentsController = {
             updates.updatedAt = new Date().toISOString();
             yield db.collection(COMMENTS_COLLECTION).updateOne({ id }, { $set: updates });
             const updated = yield db.collection(COMMENTS_COLLECTION).findOne({ id });
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('comment_updated', {
+                    postId: existing.postId,
+                    comment: updated
+                });
+            }
             res.json({ success: true, data: updated, message: 'Comment updated successfully' });
         }
         catch (error) {
@@ -247,6 +243,23 @@ exports.commentsController = {
                 return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can delete this comment' });
             }
             yield db.collection(COMMENTS_COLLECTION).deleteOne({ id });
+            // Trigger live insights update for the post author
+            try {
+                const post = yield db.collection('posts').findOne({ id: existing.postId });
+                if (post && post.author && post.author.id) {
+                    (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id);
+                }
+            }
+            catch (e) {
+                console.error('Error triggering insights update on comment delete:', e);
+            }
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('comment_deleted', {
+                    commentId: id,
+                    postId: existing.postId
+                });
+            }
             res.json({ success: true, message: 'Comment deleted successfully' });
         }
         catch (error) {
@@ -259,7 +272,7 @@ exports.commentsController = {
         var _a;
         try {
             const { id } = req.params;
-            const { reaction } = req.body;
+            const { reaction, action: forceAction } = req.body;
             const userId = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id) || req.body.userId; // Prefer authenticated user
             if (!reaction) {
                 return res.status(400).json({ success: false, error: 'Missing reaction' });
@@ -277,20 +290,32 @@ exports.commentsController = {
             const usersForEmoji = currentReactionUsers[reaction] || [];
             const hasReacted = usersForEmoji.includes(userId);
             let action = 'added';
-            if (hasReacted) {
-                // Remove reaction
-                action = 'removed';
-                yield db.collection(COMMENTS_COLLECTION).updateOne({ id }, {
-                    $pull: { [`reactionUsers.${reaction}`]: userId },
-                    $inc: { [`reactions.${reaction}`]: -1 }
-                });
+            let shouldUpdate = true;
+            if (forceAction) {
+                if (forceAction === 'add' && hasReacted)
+                    shouldUpdate = false;
+                if (forceAction === 'remove' && !hasReacted)
+                    shouldUpdate = false;
+                action = forceAction === 'add' ? 'added' : 'removed';
             }
             else {
-                // Add reaction
-                yield db.collection(COMMENTS_COLLECTION).updateOne({ id }, {
-                    $addToSet: { [`reactionUsers.${reaction}`]: userId },
-                    $inc: { [`reactions.${reaction}`]: 1 }
-                });
+                action = hasReacted ? 'removed' : 'added';
+            }
+            if (shouldUpdate) {
+                if (action === 'removed') {
+                    // Remove reaction
+                    yield db.collection(COMMENTS_COLLECTION).updateOne({ id }, {
+                        $pull: { [`reactionUsers.${reaction}`]: userId },
+                        $inc: { [`reactions.${reaction}`]: -1 }
+                    });
+                }
+                else {
+                    // Add reaction
+                    yield db.collection(COMMENTS_COLLECTION).updateOne({ id }, {
+                        $addToSet: { [`reactionUsers.${reaction}`]: userId },
+                        $inc: { [`reactions.${reaction}`]: 1 }
+                    });
+                }
             }
             // Fetch updated comment to return consistent state
             const updatedCommentDoc = yield db.collection(COMMENTS_COLLECTION).findOne({ id });
@@ -306,6 +331,25 @@ exports.commentsController = {
             }
             else {
                 updatedComment.userReactions = [];
+            }
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('comment_reaction_updated', {
+                    commentId: id,
+                    postId: updatedComment.postId,
+                    reactions: updatedComment.reactions,
+                    reactionUsers: updatedComment.reactionUsers
+                });
+                // Trigger live insights update for the post author
+                try {
+                    const post = yield db.collection('posts').findOne({ id: updatedComment.postId });
+                    if (post && post.author && post.author.id) {
+                        (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id);
+                    }
+                }
+                catch (e) {
+                    console.error('Error triggering insights update on comment reaction:', e);
+                }
             }
             res.json({ success: true, data: updatedComment, message: `Reaction ${action} successfully` });
         }
