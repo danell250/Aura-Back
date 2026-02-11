@@ -59,29 +59,36 @@ export const emitAuthorInsightsUpdate = async (app: any, authorId: string) => {
       { projection: { auraCredits: 1, auraCreditsSpent: 1 } }
     );
 
-    io.to(authorId).emit('analytics_update', {
-      userId: authorId,
-      stats: {
-        totals: {
-          totalPosts: agg?.totalPosts ?? 0,
-          totalViews: agg?.totalViews ?? 0,
-          boostedPosts: agg?.boostedPosts ?? 0,
-          totalRadiance: agg?.totalRadiance ?? 0
-        },
-        credits: {
-          balance: user?.auraCredits ?? 0,
-          spent: user?.auraCreditsSpent ?? 0
-        },
-        topPosts: topPosts.map((p: any) => ({
-          id: p.id,
-          preview: (p.content || '').slice(0, 120),
-          views: p.viewCount ?? 0,
-          timestamp: p.timestamp,
-          isBoosted: !!p.isBoosted,
-          radiance: p.radiance ?? 0
-        }))
-      }
-    });
+    // If we have access to the app and it has an 'io' instance, emit the update
+    const io = app?.get ? app.get('io') : null;
+    if (io) {
+      console.log(`📡 Emitting live analytics update to user: ${authorId}`);
+      io.to(authorId).emit('analytics_update', {
+        userId: authorId,
+        stats: {
+          totals: {
+            totalPosts: agg?.totalPosts ?? 0,
+            totalViews: agg?.totalViews ?? 0,
+            boostedPosts: agg?.boostedPosts ?? 0,
+            totalRadiance: agg?.totalRadiance ?? 0
+          },
+          credits: {
+            balance: user?.auraCredits ?? 0,
+            spent: user?.auraCreditsSpent ?? 0
+          },
+          topPosts: topPosts.map((p: any) => ({
+            id: p.id,
+            preview: (p.content || '').slice(0, 120),
+            views: p.viewCount ?? 0,
+            timestamp: p.timestamp,
+            isBoosted: !!p.isBoosted,
+            radiance: p.radiance ?? 0
+          }))
+        }
+      });
+    } else {
+      console.warn('⚠️ Cannot emit analytics update: Socket.IO (io) not found on app');
+    }
   } catch (err) {
     console.error('emitAuthorInsightsUpdate error', err);
   }

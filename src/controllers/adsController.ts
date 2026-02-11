@@ -25,7 +25,10 @@ export const emitAdAnalyticsUpdate = async (app: any, adId: string, ownerId: str
     const analytics = await db.collection('adAnalytics').findOne({ adId });
     if (!analytics) return;
 
-    io.to(ownerId).emit('analytics_update', {
+    const io = app?.get ? app.get('io') : null;
+    if (io) {
+      console.log(`📡 Emitting live ad analytics update to user: ${ownerId}`);
+      io.to(ownerId).emit('analytics_update', {
       userId: ownerId,
       stats: {
         adMetrics: {
@@ -41,6 +44,9 @@ export const emitAdAnalyticsUpdate = async (app: any, adId: string, ownerId: str
         }
       }
     });
+    } else {
+      console.warn('⚠️ Cannot emit ad analytics update: Socket.IO (io) not found on app');
+    }
   } catch (err) {
     console.error('emitAdAnalyticsUpdate error', err);
   }
