@@ -63,8 +63,9 @@ export const emitAuthorInsightsUpdate = async (app: any, authorId: string) => {
     );
 
     // If we have access to the app and it has an 'io' instance, emit the update
-    console.log(`📡 Emitting live analytics update to user: ${authorId}`);
-    io.to(authorId).emit('analytics_update', {
+    console.log(`📡 Emitting live analytics update to user: ${authorId} (Total views: ${agg?.totalViews ?? 0})`);
+    
+    const result = io.to(authorId).emit('analytics_update', {
       userId: authorId,
       stats: {
         totals: {
@@ -87,6 +88,10 @@ export const emitAuthorInsightsUpdate = async (app: any, authorId: string) => {
         }))
       }
     });
+
+    if (!result) {
+      console.warn(`⚠️ Socket emission to room ${authorId} returned false`);
+    }
   } catch (err) {
     console.error('emitAuthorInsightsUpdate error', err);
   }
@@ -670,26 +675,31 @@ export const postsController = {
       const db = getDB();
       const viewerId = (req as any).user?.id;
 
-      const query: any = { id };
-      if (viewerId) {
-        query['author.id'] = { $ne: viewerId };
-      }
-
-      const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
-        query,
-        {
-          $inc: { viewCount: 1 },
-          $setOnInsert: { viewCount: 1 }
-        },
-        { returnDocument: 'after' }
-      );
-
-      if (!result || !result.value) {
+      // Find the post first to check the author
+      const post = await db.collection(POSTS_COLLECTION).findOne({ id });
+      if (!post) {
         return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
       }
 
-      const viewCount = result.value.viewCount || 0;
-      const authorId = (result.value as any).author?.id;
+      const authorId = post.author?.id;
+      let updatedPost = post;
+
+      // Only increment if viewer is NOT the author
+      if (!viewerId || viewerId !== authorId) {
+        const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
+          { id },
+          { 
+            $inc: { viewCount: 1 },
+            $setOnInsert: { viewCount: 1 } 
+          },
+          { returnDocument: 'after' }
+        );
+        if (result && result.value) {
+          updatedPost = result.value;
+        }
+      }
+
+      const viewCount = updatedPost.viewCount || 0;
       broadcastPostViewUpdate({ postId: id, viewCount });
 
       try {
@@ -701,11 +711,15 @@ export const postsController = {
       }
 
       if (authorId) {
-        emitAuthorInsightsUpdate(req.app, authorId);
+        // Trigger live insights update for the author (asynchronously)
+        emitAuthorInsightsUpdate(req.app, authorId).catch(err => {
+          console.error('Failed to emit insights update in incrementPostViews:', err);
+        });
       }
 
       res.json({ success: true, data: { id, viewCount } });
     } catch (error) {
+      console.error('Error in incrementPostViews:', error);
       res.json({ success: true, data: { id: (req.params as any).id, viewCount: 0 } });
     }
   },

@@ -925,7 +925,7 @@ async function startServer() {
         credentials: true,
         methods: ["GET", "POST"]
       },
-      transports: ['polling', 'websocket'],
+      transports: ['websocket'],
       path: '/socket.io/',
       pingInterval: 25000,
       pingTimeout: 20000,
@@ -935,7 +935,18 @@ async function startServer() {
 
     // Socket authentication middleware
     io.use((socket, next) => {
-      const token = socket.handshake.auth?.token;
+      let token = socket.handshake.auth?.token;
+      
+      // Fallback to cookie if token missing from auth object (for session-based logins)
+      if (!token && socket.handshake.headers.cookie) {
+        const cookies = socket.handshake.headers.cookie.split(';').reduce((acc: any, cookie) => {
+          const [key, value] = cookie.trim().split('=');
+          acc[key] = value;
+          return acc;
+        }, {});
+        token = cookies.accessToken;
+      }
+
       if (!token) {
         return next(new Error('Authentication error: Token missing'));
       }
