@@ -55,7 +55,7 @@ export const adsController = {
       ];
       
       // Fetch ads with aggregation for sorting and metrics
-      const now = Date.now(); 
+      const skip = (Number(page) - 1) * Number(limit);
       const ads = await db.collection('ads').aggregate([ 
         { $match: query }, 
       
@@ -896,6 +896,10 @@ export const adsController = {
 
       // Ensure subscription period is current (resets usage if new month)
       subscription = await ensureCurrentPeriod(db, subscription);
+
+      if (!subscription) {
+        return res.status(200).json({ success: true, message: 'Subscription check failed, impression not tracked.' });
+      }
 
       const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
       if (!plan) {
