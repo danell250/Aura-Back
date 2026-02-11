@@ -35,6 +35,7 @@ router.get('/plans/:planId', (req, res) => {
 });
 
 // Analytics routes (specific paths before :id)
+router.get('/mine', requireAuth, adsController.getMyAds);
 router.get('/analytics/campaign/:userId', requireAuth, adsController.getCampaignPerformance);
 router.get('/analytics/user/:userId', requireAuth, adsController.getUserAdPerformance);
 

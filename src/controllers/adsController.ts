@@ -17,26 +17,69 @@ function fingerprint(req: Request) {
 
 
 export const adsController = {
+  // GET /api/ads/me - Get ads for the current user
+  getMyAds: async (req: Request, res: Response) => {
+    try {
+      const db = getDB();
+      const currentUser = (req as any).user;
+      if (!currentUser?.id) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const limit = Math.min(Number(req.query.limit || 50), 200);
+      const skip = Math.max(Number(req.query.skip || 0), 0);
+
+      const ads = await db.collection('ads')
+        .find({ ownerId: currentUser.id })
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(limit)
+        .toArray();
+
+      res.json({ success: true, data: ads });
+    } catch (e) {
+      console.error('getMyAds error', e);
+      res.status(500).json({ success: false, error: 'Failed to load ads' });
+    }
+  },
+
   // GET /api/ads - Get all ads
   getAllAds: async (req: Request, res: Response) => {
     try {
-      const { page = 1, limit = 10, placement, status, ownerId, hashtags } = req.query;
-      const currentUserId = (req as any).user?.id;
+      const { page = 1, limit = 10, placement, status, hashtags } = req.query;
+      let { ownerId } = req.query;
+      
+      const currentUser = (req as any).user;
+      const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
+
+      // Security hardening: Only admins can filter by arbitrary ownerId
+      if (ownerId && !isAdmin) {
+        ownerId = undefined;
+      }
+
+      const currentUserId = currentUser?.id;
       const db = getDB();
       
       const query: any = {};
+      
+      // Default behavior for public feed: show active ads only
+      if (!status) {
+        query.status = 'active';
+      } else {
+        query.status = status;
+      }
+
+      // Hide own ads from public feed for logged-in users
+      if (currentUserId && !ownerId && !isAdmin) {
+        query.ownerId = { $ne: currentUserId };
+      }
       
       // Filter by placement if specified
       if (placement) {
         query.placement = placement;
       }
       
-      // Filter by status if specified
-      if (status) {
-        query.status = status;
-      }
-      
-      // Filter by owner if specified
+      // Filter by owner if specified (Admins only, enforced above)
       if (ownerId) {
         query.ownerId = ownerId;
       }
