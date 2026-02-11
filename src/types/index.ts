@@ -21,6 +21,7 @@ export interface User {
   blockedBy?: string[];
   profileViews?: string[];
   isPrivate?: boolean;
+  userMode?: 'creator' | 'business' | 'hybrid';
   trustScore: number; 
   auraCredits: number;
   activeGlow?: 'emerald' | 'cyan' | 'amber' | 'gold' | 'silver' | 'bronze' | 'none';
