@@ -10,6 +10,9 @@ console.log('Users routes loaded successfully');
 // GET /api/users - Get all users (public)
 router.get('/', usersController.getAllUsers);
 
+// GET /api/users/me/dashboard - Get creator dashboard data
+router.get('/me/dashboard', requireAuth, usersController.getMyDashboard);
+
 // GET /api/users/search - Search users (public)
 router.get('/search', usersController.searchUsers);
 

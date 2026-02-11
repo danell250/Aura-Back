@@ -31,6 +31,7 @@ import { connectDB, checkDBHealth, isDBConnected, getDB } from './db';
 import { recalculateAllTrustScores } from './services/trustService';
 import { Server as SocketIOServer } from 'socket.io';
 import { transformUser } from './utils/userUtils';
+import { verifyAccessToken } from './utils/jwtUtils';
 
 dotenv.config();
 
@@ -932,18 +933,39 @@ async function startServer() {
 
     app.set('io', io);
 
+    // Socket authentication middleware
+    io.use((socket, next) => {
+      const token = socket.handshake.auth?.token;
+      if (!token) {
+        return next(new Error('Authentication error: Token missing'));
+      }
+
+      const decoded = verifyAccessToken(token);
+      if (!decoded) {
+        return next(new Error('Authentication error: Invalid token'));
+      }
+
+      (socket as any).user = decoded;
+      next();
+    });
+
     io.on('connection', socket => {
-      console.log('🔌 Socket.IO client connected', socket.id);
+      const user = (socket as any).user;
+      console.log(`🔌 Socket.IO client connected: ${socket.id} (User: ${user?.id})`);
 
       socket.on('join_user_room', (userId: string) => {
-        if (typeof userId === 'string' && userId.trim()) {
-          socket.join(`user:${userId}`);
+        // Security: Only allow users to join their own room
+        if (user && user.id === userId) {
+          socket.join(userId);
+          console.log(`🏠 User ${user.id} joined their private room`);
+        } else {
+          console.warn(`⚠️ User ${user?.id} tried to join room for ${userId}`);
         }
       });
 
       socket.on('leave_user_room', (userId: string) => {
         if (typeof userId === 'string' && userId.trim()) {
-          socket.leave(`user:${userId}`);
+          socket.leave(userId);
         }
       });
 

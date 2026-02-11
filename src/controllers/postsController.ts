@@ -26,7 +26,7 @@ const broadcastPostViewUpdate = (payload: { postId: string; viewCount: number })
   }
 };
 
-const emitAuthorInsightsUpdate = async (app: any, authorId: string) => {
+export const emitAuthorInsightsUpdate = async (app: any, authorId: string) => {
   try {
     if (!authorId) return;
     const io = app?.get && app.get('io');
@@ -59,7 +59,7 @@ const emitAuthorInsightsUpdate = async (app: any, authorId: string) => {
       { projection: { auraCredits: 1, auraCreditsSpent: 1 } }
     );
 
-    io.to(`user:${authorId}`).emit('analytics_update', {
+    io.to(authorId).emit('analytics_update', {
       userId: authorId,
       stats: {
         totals: {
@@ -531,6 +531,23 @@ export const postsController = {
         return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
       }
 
+      // Increment view count if not the author
+      if (currentUserId !== post.author.id) {
+        await db.collection(POSTS_COLLECTION).updateOne(
+          { id },
+          { 
+            $inc: { viewCount: 1 },
+            $setOnInsert: { viewCount: 1 }
+          }
+        );
+        post.viewCount = (post.viewCount || 0) + 1;
+        
+        // Trigger insights update for author
+        if (post.author.id) {
+          emitAuthorInsightsUpdate(req.app, post.author.id);
+        }
+      }
+
       // Check privacy settings
       const authorDetails = post.authorDetails?.[0];
       if (authorDetails?.isPrivate && currentUserId !== post.author.id) {
@@ -924,6 +941,9 @@ export const postsController = {
           // TODO: Efficiently emit to acquaintances only
           // For now, we don't emit to avoid leaking to public
         }
+
+        // Trigger live insights update for the author
+        emitAuthorInsightsUpdate(req.app, authorEmbed.id);
       }
 
       res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
@@ -972,6 +992,9 @@ export const postsController = {
         updatedDoc.author = transformUser(updatedDoc.author);
       }
 
+      // Trigger live insights update for the author
+      emitAuthorInsightsUpdate(req.app, post.author.id);
+
       res.json({ success: true, data: updatedDoc, message: 'Post updated successfully' });
     } catch (error) {
       console.error('Error updating post:', error);
@@ -996,6 +1019,10 @@ export const postsController = {
       }
 
       await db.collection(POSTS_COLLECTION).deleteOne({ id });
+      
+      // Trigger live insights update for the author
+      emitAuthorInsightsUpdate(req.app, post.author.id);
+
       res.json({ success: true, message: 'Post deleted successfully' });
     } catch (error) {
       console.error('Error deleting post:', error);
@@ -1099,119 +1126,6 @@ export const postsController = {
     } catch (error) {
       console.error('Error adding reaction:', error);
       res.status(500).json({ success: false, error: 'Failed to add reaction', message: 'Internal server error' });
-    }
-  },
-
-  getMyInsights: async (req: Request, res: Response) => {
-    try {
-      const userId = (req as any).user?.id;
-      if (!userId) {
-        return res.status(401).json({ success: false, error: 'Unauthorized' });
-      }
-
-      const db = getDB();
-
-      const [agg] = await db.collection(POSTS_COLLECTION).aggregate([
-        { $match: { 'author.id': userId } },
-        {
-          $group: {
-            _id: null,
-            totalPosts: { $sum: 1 },
-            totalViews: { $sum: { $ifNull: ['$viewCount', 0] } },
-            boostedPosts: { $sum: { $cond: [{ $eq: ['$isBoosted', true] }, 1, 0] } },
-            totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
-          }
-        }
-      ]).toArray();
-
-      const topPosts = await db.collection(POSTS_COLLECTION)
-        .find({ 'author.id': userId })
-        .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
-        .sort({ viewCount: -1 })
-        .limit(5)
-        .toArray();
-
-      const user = await db.collection(USERS_COLLECTION).findOne(
-        { id: userId },
-        { projection: { auraCredits: 1, auraCreditsSpent: 1 } }
-      );
-
-      // Fetch active subscription to determine analytics level
-      const activeSub = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({
-        userId,
-        status: 'active',
-        $or: [
-          { endDate: { $exists: false } },
-          { endDate: { $gt: Date.now() } }
-        ]
-      });
-
-      let analyticsLevel = 'none';
-      if (activeSub) {
-        if (activeSub.packageId === 'pkg-enterprise') analyticsLevel = 'deep';
-        else if (activeSub.packageId === 'pkg-pro') analyticsLevel = 'creator';
-        else if (activeSub.packageId === 'pkg-starter') analyticsLevel = 'basic';
-      }
-
-      // Base data structure
-      const responseData: any = {
-        totals: {
-          totalPosts: agg?.totalPosts ?? 0,
-          totalViews: agg?.totalViews ?? 0,
-          boostedPosts: agg?.boostedPosts ?? 0,
-          totalRadiance: agg?.totalRadiance ?? 0
-        },
-        credits: {
-          balance: user?.auraCredits ?? 0,
-          spent: user?.auraCreditsSpent ?? 0
-        },
-        topPosts: topPosts.map((p: any) => ({
-          id: p.id,
-          preview: (p.content || '').slice(0, 120),
-          views: p.viewCount ?? 0,
-          timestamp: p.timestamp,
-          isBoosted: !!p.isBoosted,
-          radiance: p.radiance ?? 0
-        }))
-      };
-
-      // Apply gating based on plan
-      if (analyticsLevel === 'creator' || analyticsLevel === 'deep') {
-        // Additional Creator level stats can be added here in the future
-      }
-
-      if (analyticsLevel === 'deep') {
-        // Add Deep Neural Analytics (Mock data for now as per requirements)
-        responseData.neuralInsights = {
-          audienceBehavior: {
-            retention: 'High',
-            engagementRate: '4.5%',
-            topLocations: ['US', 'UK', 'CA']
-          },
-          timingOptimization: {
-            bestTimeToPost: 'Wednesday 6:00 PM',
-            peakActivity: 'Weekends'
-          },
-          conversionInsights: {
-            clickThroughRate: '2.1%',
-            conversionScore: 85
-          }
-        };
-      }
-      
-      // If level is 'none' (free user), we might want to hide even basic stats or show them as a teaser.
-      // For now, returning basic stats (posts/views) is fair for free users too, 
-      // but strictly following "Personal Pulse -> basic stats" might imply free users get less.
-      // However, preventing errors on frontend is priority.
-
-      return res.json({
-        success: true,
-        data: responseData,
-        planLevel: analyticsLevel
-      });
-    } catch (err) {
-      console.error('getMyInsights error', err);
-      return res.status(500).json({ success: false, error: 'Failed to load insights' });
     }
   },
 
@@ -1600,6 +1514,63 @@ export const postsController = {
     } catch (error) {
       console.error('Error fetching post analytics:', error);
       res.status(500).json({ success: false, error: 'Failed to fetch analytics' });
+    }
+  },
+
+  // GET /api/posts/insights/me - Get personal post insights
+  getMyInsights: async (req: Request, res: Response) => {
+    try {
+      const db = getDB();
+      const userId = (req as any).user?.id;
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const posts = await db.collection(POSTS_COLLECTION)
+        .find({ 'author.id': userId })
+        .toArray();
+
+      const totalPosts = posts.length;
+
+      const totalViews = posts.reduce((sum, p) => sum + (p.viewCount || 0), 0);
+
+      const totalRadiance = posts.reduce((sum, p) => {
+        const reactions = p.reactions || {};
+        return sum + Object.values(reactions).reduce((a: any, b: any) => (Number(a) || 0) + (Number(b) || 0), 0);
+      }, 0);
+
+      const boostedPosts = posts.filter(p => p.isBoosted).length;
+
+      const topPosts = posts
+        .sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0))
+        .slice(0, 5)
+        .map(p => ({
+          id: p.id,
+          content: (p.content || '').slice(0, 120),
+          views: p.viewCount || 0,
+          reactions: p.reactions || {}
+        }));
+
+      return res.json({
+        success: true,
+        data: {
+          totals: {
+            totalPosts,
+            totalViews,
+            boostedPosts,
+            totalRadiance
+          },
+          credits: {
+            balance: 0,
+            spent: 0
+          },
+          topPosts
+        }
+      });
+
+    } catch (err) {
+      console.error("Insights error:", err);
+      return res.status(500).json({ success: false, error: "Failed to fetch insights" });
     }
   }
 };

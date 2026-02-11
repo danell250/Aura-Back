@@ -37,9 +37,6 @@ router.get('/health', postsController.health);
 // GET /api/posts/search - Search posts
 router.get('/search', optionalAuth, postsController.searchPosts);
 
-// GET /api/posts/insights/me - Get insights for current user
-router.get('/insights/me', requireAuth, postsController.getMyInsights);
-
 // GET /api/posts - Get all posts
 router.get('/', optionalAuth, postsController.getAllPosts);
 
@@ -48,6 +45,9 @@ router.get('/stream', optionalAuth, postsController.streamEvents);
 
 // GET /api/posts/hashtags/trending - Get trending hashtags
 router.get('/hashtags/trending', postsController.getTrendingHashtags);
+
+// GET /api/posts/insights/me - Get personal post insights
+router.get('/insights/me', requireAuth, postsController.getMyInsights);
 
 // GET /api/posts/:id/analytics - Get post analytics
 router.get('/:id/analytics', requireAuth, postsController.getPostAnalytics);

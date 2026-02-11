@@ -15,6 +15,37 @@ function fingerprint(req: Request) {
   return crypto.createHash('sha256').update(`${ip}|${ua}`).digest('hex');
 }
 
+export const emitAdAnalyticsUpdate = async (app: any, adId: string, ownerId: string) => {
+  try {
+    if (!adId || !ownerId) return;
+    const io = app?.get && app.get('io');
+    if (!io || typeof io.to !== 'function') return;
+
+    const db = getDB();
+    const analytics = await db.collection('adAnalytics').findOne({ adId });
+    if (!analytics) return;
+
+    io.to(ownerId).emit('analytics_update', {
+      userId: ownerId,
+      stats: {
+        adMetrics: {
+          adId: analytics.adId,
+          impressions: analytics.impressions || 0,
+          clicks: analytics.clicks || 0,
+          ctr: analytics.ctr || 0,
+          reach: analytics.reach || 0,
+          engagement: analytics.engagement || 0,
+          conversions: analytics.conversions || 0,
+          spend: analytics.spend || 0,
+          lastUpdated: analytics.lastUpdated || Date.now()
+        }
+      }
+    });
+  } catch (err) {
+    console.error('emitAdAnalyticsUpdate error', err);
+  }
+};
+
 
 export const adsController = {
   // GET /api/ads/me - Get ads for the current user
@@ -555,6 +586,9 @@ export const adsController = {
         { $set: { status } },
         { returnDocument: 'after' }
       );
+
+      // Emit real-time update
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
       
       res.json({ success: true, data: result });
     } catch (error) {
@@ -1033,6 +1067,9 @@ export const adsController = {
         );
       }
 
+      // Emit real-time update
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
+
       res.json({ success: true, message: 'Impression tracked successfully.' });
     } catch (error) {
       console.error('Error tracking impression:', error);
@@ -1085,6 +1122,9 @@ export const adsController = {
         { upsert: true }
       );
 
+      // Emit real-time update
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
+
       res.json({ success: true });
     } catch (error) {
       console.error('Error tracking click:', error);
@@ -1131,6 +1171,9 @@ export const adsController = {
         { upsert: true }
       );
 
+      // Emit real-time update
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
+
       res.json({ success: true });
     } catch (error) {
       console.error('Error tracking engagement:', error);
@@ -1172,6 +1215,9 @@ export const adsController = {
         { $inc: { conversions: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } },
         { upsert: true }
       );
+
+      // Emit real-time update
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
 
       res.json({ success: true });
     } catch (error) {
