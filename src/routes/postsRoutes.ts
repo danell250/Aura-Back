@@ -63,6 +63,6 @@ router.post('/:id/boost', postsWriteRateLimiter, requireAuth, postsController.bo
 router.post('/:id/share', postsWriteRateLimiter, requireAuth, postsController.sharePost);
 router.post('/:id/report', postsWriteRateLimiter, requireAuth, postsController.reportPost);
 router.post('/:id/view', optionalAuth, postsController.incrementPostViews);
-router.post('/:id/media/:mediaId(*)/metrics', optionalAuth, postsController.updateMediaMetrics);
+router.post('/:id/media/:mediaId+/metrics', optionalAuth, postsController.updateMediaMetrics);
 
 export default router;

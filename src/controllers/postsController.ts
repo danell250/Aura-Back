@@ -1405,7 +1405,12 @@ export const postsController = {
   // POST /api/posts/:id/media/:mediaId/metrics - Update media item metrics
   updateMediaMetrics: async (req: Request, res: Response) => {
     try {
-      const { id, mediaId } = req.params;
+      const { id } = req.params;
+      let { mediaId } = req.params;
+      
+      // Handle wildcard parameter which might be an array in Express 5
+      const normalizedMediaId = Array.isArray(mediaId) ? mediaId.join('/') : mediaId;
+      
       const { metric, value } = req.body; // metric: 'views' | 'clicks' | 'saves' | 'dwellMs'
       
       if (!['views', 'clicks', 'saves', 'dwellMs'].includes(metric)) {
@@ -1439,7 +1444,7 @@ export const postsController = {
       const result = await db.collection(POSTS_COLLECTION).updateOne(
         { id },
         updateDoc,
-        { arrayFilters: [{ "elem.id": mediaId }] }
+        { arrayFilters: [{ "elem.id": normalizedMediaId }] }
       );
 
       if (result.matchedCount === 0) {
