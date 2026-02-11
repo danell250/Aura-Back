@@ -59,36 +59,41 @@ export function getCurrentBillingWindow(subscriptionStart: Date) {
 
 const BILLING_MS = 30 * 24 * 60 * 60 * 1000;
 
-export async function ensureCurrentPeriod(db: any, sub: any) {
+export async function ensureCurrentPeriod(db: any, subscription: any) {
   const now = Date.now();
-  let periodStart = sub.periodStart ?? sub.startDate ?? now;
-  let periodEnd = sub.periodEnd ?? sub.nextBillingDate ?? (periodStart + BILLING_MS);
+  const oneDayMs = 24 * 60 * 60 * 1000;
 
-  // catch up if multiple months passed
-  while (now >= periodEnd) {
-    periodStart = periodEnd;
-    periodEnd = periodEnd + BILLING_MS;
+  // If still in current period, return as-is
+  if (subscription.periodEnd && now < subscription.periodEnd) {
+    return subscription;
   }
 
-  // if period moved, reset adsUsed and impressionsUsed
-  const changed = periodStart !== sub.periodStart || periodEnd !== sub.periodEnd;
-  if (changed) {
-    await db.collection('adSubscriptions').updateOne(
-      { id: sub.id },
-      {
-        $set: {
-          periodStart,
-          periodEnd,
-          adsUsed: 0,
-          impressionsUsed: 0,
-          updatedAt: now
-        }
-      }
-    );
-    return { ...sub, periodStart, periodEnd, adsUsed: 0, impressionsUsed: 0 };
-  }
+  // Calculate new period bounds
+  const durationDays = subscription.durationDays || 30;
+  const periodStart = now;
+  const periodEnd = now + (durationDays * oneDayMs);
 
-  return sub;
+  // Use findOneAndUpdate for atomicity - only update if period hasn't been reset by another request
+  const updated = await db.collection('adSubscriptions').findOneAndUpdate(
+    { 
+      id: subscription.id,
+      // Conditional check to prevent race conditions
+      periodEnd: subscription.periodEnd 
+    },
+    { 
+      $set: { 
+        adsUsed: 0, 
+        impressionsUsed: 0,
+        periodStart, 
+        periodEnd, 
+        updatedAt: now 
+      } 
+    },
+    { returnDocument: 'after' }
+  );
+
+  // Return updated document or original if no update occurred
+  return updated.value || subscription;
 }
 
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
@@ -237,21 +242,24 @@ export const adSubscriptionsController = {
       if (!subscription) {
         return res.status(404).json({
           success: false,
-          error: 'Subscription not found'
+          error: 'Subscription not found',
+          message: 'The requested subscription could not be found.'
         });
       }
 
       if (subscription.status !== 'active') {
         return res.status(400).json({
           success: false,
-          error: 'Subscription is not active'
+          error: 'Subscription is not active',
+          message: 'This subscription is not currently active.'
         });
       }
 
       if (subscription.adsUsed >= subscription.adLimit) {
         return res.status(400).json({
           success: false,
-          error: 'Ad limit reached for this subscription'
+          error: 'Ad limit reached for this subscription',
+          message: 'You have reached the maximum number of ads allowed for this subscription.'
         });
       }
 

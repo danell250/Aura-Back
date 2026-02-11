@@ -112,14 +112,18 @@ export const adsController = {
 
       // Ensure required fields
       if (!adData.headline) {
-        return res.status(400).json({ success: false, error: 'Missing required fields' });
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Missing required fields',
+          message: 'Ad headline is required to create an ad.'
+        });
       }
 
       if (adData.ownerId && adData.ownerId !== userId) {
         return res.status(403).json({
           success: false,
           error: 'Owner mismatch',
-          message: 'ownerId must match the authenticated user'
+          message: 'You can only create ads for your own account.'
         });
       }
 
@@ -149,7 +153,8 @@ export const adsController = {
         if (!subscription) {
            return res.status(403).json({
              success: false,
-             error: 'No active ad plan found. Please purchase a plan to create signals.'
+             error: 'No active ad plan',
+             message: 'No active ad plan found. Please purchase a plan to create ads.'
            });
         }
 
@@ -166,8 +171,8 @@ export const adsController = {
            return res.status(409).json({
              success: false,
              code: 'AD_LIMIT_REACHED',
-             error: 'AD_LIMIT_REACHED',
-             message: `You’ve used all ${subscription.adLimit} ads for this month.`,
+             error: 'Monthly ad limit reached',
+             message: `You've used all ${subscription.adLimit} ads for this month. Your limit resets on ${resetDate}.`,
              adLimit: subscription.adLimit,
              adsUsed: subscription.adsUsed,
              periodEnd: subscription.periodEnd
@@ -804,10 +809,16 @@ export const adsController = {
           const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
           if (plan && plan.impressionLimit > 0) {
               cpi = plan.numericPrice / plan.impressionLimit;
+              console.log(`📊 CPI calculated for ad ${id}: $${cpi.toFixed(6)} (plan: ${plan.name})`);
+          } else {
+              console.warn(`⚠️ Invalid plan configuration for subscription ${subscription.id}`);
           }
+      } else {
+          console.log(`ℹ️ No active subscription found for ad ${id}, CPI = $0`);
       }
 
-      await db.collection('adAnalytics').updateOne(
+      // Track impression and cost atomically
+      const result = await db.collection('adAnalytics').updateOne(
         { adId: id },
         { 
           $inc: { 
@@ -820,6 +831,7 @@ export const adsController = {
         { upsert: true }
       );
       
+      console.log(`📈 Tracked impression for ad ${id}: CPI=$${cpi.toFixed(6)}, Total spend now=$${((result.upsertedId ? 0 : (await db.collection('adAnalytics').findOne({ adId: id }))?.spend || 0) + cpi).toFixed(6)}`);
       res.json({ success: true });
     } catch (error) {
       console.error('Error tracking impression:', error);
