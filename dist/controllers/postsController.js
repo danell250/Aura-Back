@@ -33,8 +33,10 @@ const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, vo
         if (!authorId)
             return;
         const io = (app === null || app === void 0 ? void 0 : app.get) && app.get('io');
-        if (!io || typeof io.to !== 'function')
+        if (!io || typeof io.to !== 'function') {
+            console.warn('⚠️ Cannot emit analytics update: Socket.IO (io) not found on app');
             return;
+        }
         const db = (0, db_1.getDB)();
         const [agg] = yield db.collection(POSTS_COLLECTION).aggregate([
             { $match: { 'author.id': authorId } },
@@ -55,6 +57,8 @@ const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, vo
             .limit(5)
             .toArray();
         const user = yield db.collection(USERS_COLLECTION).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
+        // If we have access to the app and it has an 'io' instance, emit the update
+        console.log(`📡 Emitting live analytics update to user: ${authorId}`);
         io.to(authorId).emit('analytics_update', {
             userId: authorId,
             stats: {

@@ -32,12 +32,15 @@ const emitAdAnalyticsUpdate = (app, adId, ownerId) => __awaiter(void 0, void 0, 
         if (!adId || !ownerId)
             return;
         const io = (app === null || app === void 0 ? void 0 : app.get) && app.get('io');
-        if (!io || typeof io.to !== 'function')
+        if (!io || typeof io.to !== 'function') {
+            console.warn('⚠️ Cannot emit ad analytics update: Socket.IO (io) not found on app');
             return;
+        }
         const db = (0, db_1.getDB)();
         const analytics = yield db.collection('adAnalytics').findOne({ adId });
         if (!analytics)
             return;
+        console.log(`📡 Emitting live ad analytics update to user: ${ownerId}`);
         io.to(ownerId).emit('analytics_update', {
             userId: ownerId,
             stats: {
