@@ -2,6 +2,8 @@ import { MongoClient, Db } from "mongodb";
 import dotenv from "dotenv";
 import { initializeMessageCollection } from "./models/Message";
 import { initializeUserCollection } from "./models/User";
+import { initializeAdAnalyticsDailyCollection } from "./models/AdAnalyticsDaily";
+import { initializeAdEventDedupesCollection } from "./models/AdEventDedupe";
 
 dotenv.config();
 
@@ -65,7 +67,12 @@ export async function connectDB(): Promise<Db | null> {
       console.log("✅ Message collection initialized");
       
       await initializeUserCollection(db);
-      // User collection log is inside the function
+      
+      await initializeAdAnalyticsDailyCollection(db);
+      console.log("✅ AdAnalyticsDaily collection initialized");
+      
+      await initializeAdEventDedupesCollection(db);
+      console.log("✅ AdEventDedupes collection initialized");
     } catch (error) {
       console.warn("⚠️  Warning: Could not initialize collections:", error);
     }

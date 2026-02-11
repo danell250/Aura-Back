@@ -3,8 +3,17 @@ import { getDB } from '../db';
 import { getHashtagsFromText, filterByHashtags } from '../utils/hashtagUtils';
 import { AD_PLANS } from '../constants/adPlans';
 import { ensureCurrentPeriod } from './adSubscriptionsController';
+import crypto from 'crypto';
 
+function dateKeyUTC(ts = Date.now()) {
+  return new Date(ts).toISOString().slice(0, 10); // YYYY-MM-DD
+}
 
+function fingerprint(req: Request) {
+  const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '';
+  const ua = String(req.headers['user-agent'] || '');
+  return crypto.createHash('sha256').update(`${ip}|${ua}`).digest('hex');
+}
 
 
 export const adsController = {
@@ -45,25 +54,88 @@ export const adsController = {
         { expiryDate: { $gt: now } }
       ];
       
-      const skip = (Number(page) - 1) * Number(limit);
-      const ads = await db.collection('ads').aggregate([
-        { $match: query },
-        {
-          $addFields: {
-            totalReactions: {
-              $sum: {
-                $map: {
-                  input: { $objectToArray: { $ifNull: ['$reactions', {}] } },
-                  as: 'r',
-                  in: '$$r.v'
-                }
-              }
-            }
-          }
-        },
-        { $sort: { totalReactions: -1, timestamp: -1 } },
-        { $skip: skip },
-        { $limit: Number(limit) }
+      // Fetch ads with aggregation for sorting and metrics
+      const now = Date.now(); 
+      const ads = await db.collection('ads').aggregate([ 
+        { $match: query }, 
+      
+        // attach owner's active subscription (if any) 
+        { 
+          $lookup: { 
+            from: 'adSubscriptions', 
+            let: { ownerId: '$ownerId' }, 
+            pipeline: [ 
+              { 
+                $match: { 
+                  $expr: { 
+                    $and: [ 
+                      { $eq: ['$userId', '$$ownerId'] }, 
+                      { $eq: ['$status', 'active'] }, 
+                      { 
+                        $or: [ 
+                          { $not: ['$endDate'] }, 
+                          { $gt: ['$endDate', now] } 
+                        ] 
+                      } 
+                    ] 
+                  } 
+                } 
+              }, 
+              { $sort: { createdAt: -1 } }, 
+              { $limit: 1 } 
+            ], 
+            as: 'sub' 
+          } 
+        }, 
+        { $addFields: { sub: { $arrayElemAt: ['$sub', 0] } } }, 
+      
+        // compute tierWeight 
+        { 
+          $addFields: { 
+            tierWeight: { 
+              $switch: { 
+                branches: [ 
+                  { case: { $eq: ['$sub.packageId', 'pkg-enterprise'] }, then: 3 }, 
+                  { case: { $eq: ['$sub.packageId', 'pkg-pro'] }, then: 2 }, 
+                  { case: { $eq: ['$sub.packageId', 'pkg-starter'] }, then: 1 } 
+                ], 
+                default: 0 
+              } 
+            } 
+          } 
+        }, 
+      
+        // your existing reaction sum 
+        { 
+          $addFields: { 
+            totalReactions: { 
+              $sum: { 
+                $map: { 
+                  input: { $objectToArray: { $ifNull: ['$reactions', {}] } }, 
+                  as: 'r', 
+                  in: '$$r.v' 
+                } 
+              } 
+            } 
+          } 
+        }, 
+      
+        // score: tier first, then engagement, then recency 
+        { 
+          $addFields: { 
+            signalScore: { 
+              $add: [ 
+                { $multiply: ['$tierWeight', 1000000] }, 
+                { $multiply: ['$totalReactions', 1000] }, 
+                '$timestamp' 
+              ] 
+            } 
+          } 
+        }, 
+      
+        { $sort: { signalScore: -1 } }, 
+        { $skip: skip }, 
+        { $limit: Number(limit) } 
       ]).toArray();
       
       // Add userReactions for current user
@@ -157,28 +229,6 @@ export const adsController = {
              message: 'No active ad plan found. Please purchase a plan to create ads.'
            });
         }
-
-        // --- NEW LOGIC START ---
-        // Ensure subscription period is up to date (resets adsUsed if new month)
-        subscription = await ensureCurrentPeriod(db, subscription);
-        
-        // Hard monthly limit
-        if (subscription.adsUsed >= subscription.adLimit) {
-           const resetDate = subscription.periodEnd 
-             ? new Date(subscription.periodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-             : 'next billing cycle';
-
-           return res.status(409).json({
-             success: false,
-             code: 'AD_LIMIT_REACHED',
-             error: 'Monthly ad limit reached',
-             message: `You've used all ${subscription.adLimit} ads for this month. Your limit resets on ${resetDate}.`,
-             adLimit: subscription.adLimit,
-             adsUsed: subscription.adsUsed,
-             periodEnd: subscription.periodEnd
-           });
-        }
-        // --- NEW LOGIC END ---
       }
 
       const newAd = {
@@ -194,14 +244,6 @@ export const adsController = {
 
       try {
         await db.collection('ads').insertOne(newAd);
-
-        // Increment usage (atomic)
-        if (!isSpecialUser && subscription) {
-          await db.collection('adSubscriptions').updateOne(
-            { id: subscription.id },
-            { $inc: { adsUsed: 1 }, $set: { updatedAt: Date.now() } }
-          );
-        }
 
         await db.collection('adAnalytics').insertOne({
         adId: newAd.id,
@@ -237,7 +279,10 @@ export const adsController = {
   reactToAd: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { reaction, userId } = req.body;
+      const { reaction } = req.body;
+      const currentUser = (req as any).user;
+      if (!currentUser?.id) return res.status(401).json({ success: false, error: 'Authentication required' });
+      const userId = currentUser.id;
       const db = getDB();
 
       const ad = await db.collection('ads').findOne({ id });
@@ -427,8 +472,29 @@ export const adsController = {
            subscription = await ensureCurrentPeriod(db, subscription);
         }
 
-        // Note: Ad limit is enforced at creation time (Monthly Quota).
-        // We do NOT check simultaneous active ads here.
+        // Enforce active ads limit
+        if (subscription) {
+          const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
+          const activeAdsLimit = plan ? plan.activeAdsLimit : 0; // Default to 0 if plan not found or limit not defined
+
+          if (activeAdsLimit > 0) {
+            const activeAdsCount = await db.collection('ads').countDocuments({
+              ownerId: currentUser.id,
+              status: 'active'
+            });
+
+            if (activeAdsCount >= activeAdsLimit) {
+              return res.status(403).json({
+                success: false,
+                code: 'ACTIVE_AD_LIMIT_REACHED',
+                error: 'Active ad limit reached',
+                message: `You have reached your limit of ${activeAdsLimit} active ads for your current plan. Please deactivate an existing ad or upgrade your plan.`,
+                limit: activeAdsLimit,
+                current: activeAdsCount
+              });
+            }
+          }
+        }
 
         // Check impression limit
         if (subscription && subscription.impressionsUsed >= subscription.impressionLimit) {
@@ -494,9 +560,28 @@ export const adsController = {
       const engagement = analytics?.engagement ?? 0;
       const conversions = analytics?.conversions ?? 0;
       const spend = analytics?.spend ?? 0;
-      const reach = analytics?.reach ?? impressions;
-      const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
       const lastUpdated = analytics?.lastUpdated ?? Date.now();
+
+      // Calculate unique reach for the last 7 days
+      const days = 7;
+      const startDate = new Date();
+      startDate.setUTCHours(0, 0, 0, 0);
+      startDate.setUTCDate(startDate.getUTCDate() - (days - 1));
+
+      const dateKeys: string[] = [];
+      for (let i = 0; i < days; i++) {
+        const d = new Date(startDate);
+        d.setUTCDate(startDate.getUTCDate() + i);
+        dateKeys.push(d.toISOString().slice(0, 10));
+      }
+
+      const dailyReachDocs = await db.collection('adAnalyticsDaily')
+        .find({ adId: id, dateKey: { $in: dateKeys } })
+        .toArray();
+
+      const reach = dailyReachDocs.reduce((sum, doc) => sum + (doc.uniqueReach || 0), 0);
+
+      const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
 
       const data: any = {
         adId: id,
@@ -516,11 +601,8 @@ export const adsController = {
       }
 
       if (isEnterprise) {
-        // Mock deep analytics for now
-        data.audience = {
-          sentiment: 'positive',
-          demographics: { '18-24': 30, '25-34': 45 }
-        };
+        data.audience = null; // coming soon
+        data.audienceStatus = 'coming_soon';
       }
 
       res.json({
@@ -715,19 +797,27 @@ export const adsController = {
         ? Math.ceil((subscription.endDate - now) / (1000 * 60 * 60 * 24))
         : null;
 
-      const build7DayTrend = (analyticsDocs: any[]) => {
+      const build7DayTrend = async (ownerId: string) => {
         const days = 7;
         const start = new Date();
-        start.setHours(0, 0, 0, 0);
-        start.setDate(start.getDate() - (days - 1));
+        start.setUTCHours(0, 0, 0, 0);
+        start.setUTCDate(start.getUTCDate() - (days - 1));
 
-        const buckets = new Map<string, { date: string; impressions: number; clicks: number; engagement: number; spend: number }>();
-
+        const keys: string[] = [];
         for (let i = 0; i < days; i++) {
           const d = new Date(start);
-          d.setDate(start.getDate() + i);
-          const key = d.toISOString().slice(0, 10);
-          buckets.set(key, {
+          d.setUTCDate(start.getUTCDate() + i);
+          keys.push(d.toISOString().slice(0, 10));
+        }
+
+        const docs = await db.collection('adAnalyticsDaily')
+          .find({ ownerId, dateKey: { $in: keys } })
+          .toArray();
+
+        const map = new Map<string, any>();
+        for (const k of keys) {
+          const d = new Date(`${k}T00:00:00.000Z`);
+          map.set(k, {
             date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
             impressions: 0,
             clicks: 0,
@@ -736,26 +826,19 @@ export const adsController = {
           });
         }
 
-        for (const doc of analyticsDocs) {
-          const ts = doc.lastUpdated || Date.now();
-          const d = new Date(ts);
-          d.setHours(0, 0, 0, 0);
-          const key = d.toISOString().slice(0, 10);
-          const b = buckets.get(key);
-          if (!b) continue;
-
-          b.impressions += doc.impressions || 0;
-          b.clicks += doc.clicks || 0;
-          
-          // Include all metrics regardless of plan
-          b.engagement += doc.engagement || 0;
-          b.spend += doc.spend || 0;
+        for (const doc of docs) {
+          const row = map.get(doc.dateKey);
+          if (!row) continue;
+          row.impressions += doc.impressions || 0;
+          row.clicks += doc.clicks || 0;
+          row.engagement += doc.engagement || 0;
+          row.spend += doc.spend || 0;
         }
 
-        return Array.from(buckets.values());
+        return Array.from(map.values());
       };
 
-      const trendData = build7DayTrend(analyticsDocs);
+      const trendData = await build7DayTrend(userId);
 
       const data: any = {
         totalImpressions,
@@ -785,54 +868,125 @@ export const adsController = {
     try {
       const { id } = req.params;
       const db = getDB();
-      
-      // 1. Get Ad to find owner
+      const now = Date.now();
+      const todayKey = dateKeyUTC(now);
+      const userFingerprint = fingerprint(req);
+
+      // 1. Get Ad to find owner and current status
       const ad = await db.collection('ads').findOne({ id });
       if (!ad) {
-          // If ad missing, we can't attribute cost, but we should still track impression?
-          // No, if ad is gone, we shouldn't be serving it.
-          return res.status(404).json({ success: false, error: 'Ad not found' });
+        return res.status(404).json({ success: false, error: 'Ad not found' });
       }
 
-      // 2. Determine Cost Per Impression (CPI)
-      let cpi = 0;
-      
-      // Look up active subscription for the ad owner
-      const now = Date.now();
-      const subscription = await db.collection('adSubscriptions').findOne({
-          userId: ad.ownerId,
-          status: 'active',
-          $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
+      // Only track impressions for active ads
+      if (ad.status !== 'active') {
+        return res.status(200).json({ success: true, message: 'Ad not active, impression not tracked.' });
+      }
+
+      // 2. Get Ad Owner's Subscription
+      let subscription = await db.collection('adSubscriptions').findOne({
+        userId: ad.ownerId,
+        status: 'active',
+        $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
       });
 
-      if (subscription && subscription.packageId) {
-          const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
-          if (plan && plan.impressionLimit > 0) {
-              cpi = plan.numericPrice / plan.impressionLimit;
-              console.log(`📊 CPI calculated for ad ${id}: $${cpi.toFixed(6)} (plan: ${plan.name})`);
-          } else {
-              console.warn(`⚠️ Invalid plan configuration for subscription ${subscription.id}`);
-          }
-      } else {
-          console.log(`ℹ️ No active subscription found for ad ${id}, CPI = $0`);
+      if (!subscription) {
+        return res.status(200).json({ success: true, message: 'No active subscription for ad owner, impression not tracked.' });
       }
 
-      // Track impression and cost atomically
-      const result = await db.collection('adAnalytics').updateOne(
-        { adId: id },
-        { 
-          $inc: { 
-            impressions: 1, 
-            reach: 1, 
-            spend: cpi 
-          }, 
-          $set: { lastUpdated: Date.now() } 
-        }, 
+      // Ensure subscription period is current (resets usage if new month)
+      subscription = await ensureCurrentPeriod(db, subscription);
+
+      const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
+      if (!plan) {
+        console.warn(`⚠️ Ad plan not found for packageId: ${subscription.packageId}`);
+        return res.status(200).json({ success: true, message: 'Ad plan not found, impression not tracked.' });
+      }
+
+      // 3. Check Impression Limit (overall)
+      if (subscription.impressionsUsed >= plan.impressionLimit) {
+        return res.status(403).json({
+          success: false,
+          code: 'IMPRESSION_LIMIT_REACHED',
+          error: `Monthly impression limit reached (${plan.impressionLimit}). Upgrade or wait for renewal.`,
+          limit: plan.impressionLimit,
+          current: subscription.impressionsUsed
+        });
+      }
+
+      // 4. Deduplicate Impressions (per day, per user fingerprint)
+      const dedupKey = `${id}-${todayKey}-${userFingerprint}`;
+      const existingDedupe = await db.collection('adEventDedupes').findOne({ key: dedupKey });
+
+      if (existingDedupe) {
+        return res.status(200).json({ success: true, message: 'Duplicate impression, not tracked.' });
+      }
+
+      // Record deduplication key
+      await db.collection('adEventDedupes').insertOne({
+        key: dedupKey,
+        adId: id,
+        dateKey: todayKey,
+        fingerprint: userFingerprint,
+        timestamp: now,
+        expiresAt: new Date(now + 24 * 60 * 60 * 1000) // Expires in 24 hours
+      });
+
+      // Increment uniqueReach in adAnalyticsDaily
+      await db.collection('adAnalyticsDaily').updateOne(
+        { adId: id, ownerId: ad.ownerId, dateKey: todayKey },
+        { $inc: { uniqueReach: 1 } },
         { upsert: true }
       );
-      
-      console.log(`📈 Tracked impression for ad ${id}: CPI=$${cpi.toFixed(6)}, Total spend now=$${((result.upsertedId ? 0 : (await db.collection('adAnalytics').findOne({ adId: id }))?.spend || 0) + cpi).toFixed(6)}`);
-      res.json({ success: true });
+
+      // 5. Determine Cost Per Impression (CPI)
+      let cpi = 0;
+      if (plan.impressionLimit > 0 && plan.numericPrice) {
+        cpi = plan.numericPrice / plan.impressionLimit;
+      }
+
+      // 6. Atomically Update Ad Analytics and Subscription Usage
+      // Update adAnalytics
+      await db.collection('adAnalytics').updateOne(
+        { adId: id },
+        {
+          $inc: {
+            impressions: 1,
+            spend: cpi
+          },
+          $set: { lastUpdated: now }
+        },
+        { upsert: true }
+      );
+
+      // Update adSubscription impressionsUsed
+      await db.collection('adSubscriptions').updateOne(
+        { _id: subscription._id }, // Use _id for direct document update
+        { $inc: { impressionsUsed: 1 }, $set: { updatedAt: now } }
+      );
+
+      // 7. Update Daily Rollup (for trends and accurate CTR calculation)
+      await db.collection('adDailyRollups').updateOne(
+        { adId: id, dateKey: todayKey },
+        {
+          $inc: { impressions: 1 },
+          $set: { lastUpdated: now }
+        },
+        { upsert: true }
+      );
+
+      // 8. Recalculate CTR (optional, can be done in a separate job or on analytics fetch)
+      // For now, we'll update it directly here for immediate accuracy
+      const updatedAnalytics = await db.collection('adAnalytics').findOne({ adId: id });
+      if (updatedAnalytics && updatedAnalytics.impressions > 0) {
+        const newCtr = (updatedAnalytics.clicks / updatedAnalytics.impressions) * 100;
+        await db.collection('adAnalytics').updateOne(
+          { adId: id },
+          { $set: { ctr: newCtr, lastUpdated: now } }
+        );
+      }
+
+      res.json({ success: true, message: 'Impression tracked successfully.' });
     } catch (error) {
       console.error('Error tracking impression:', error);
       res.status(500).json({ success: false, error: 'Failed to track impression' });
@@ -843,23 +997,47 @@ export const adsController = {
     try {
       const { id } = req.params;
       const db = getDB();
-      
-      const analytics = await db.collection('adAnalytics').findOne({ adId: id });
-      const impressions = analytics?.impressions || 1; // Prevent div/0
-      const currentClicks = analytics?.clicks || 0;
-      
-      await db.collection('adAnalytics').updateOne(
-        { adId: id },
-        { 
-          $inc: { clicks: 1 }, 
-          $set: { 
-            lastUpdated: Date.now(), 
-            ctr: ((currentClicks + 1) / impressions) * 100 
-          } 
-        }, 
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) return res.status(404).json({ success: false, error: 'Ad not found' });
+
+      const now = Date.now();
+      const dKey = dateKeyUTC(now);
+      const fp = fingerprint(req);
+
+      const dedupe = await db.collection('adEventDedupes').updateOne(
+        { adId: id, eventType: 'click', fingerprint: fp, dateKey: dKey },
+        { $setOnInsert: { adId: id, ownerId: ad.ownerId, eventType: 'click', fingerprint: fp, dateKey: dKey, createdAt: now } },
         { upsert: true }
       );
-      
+
+      if (dedupe.upsertedCount === 0) return res.json({ success: true, deduped: true });
+
+      await db.collection('adAnalytics').updateOne(
+        { adId: id },
+        [
+          { $set: { clicks: { $add: [{ $ifNull: ['$clicks', 0] }, 1] }, lastUpdated: now } },
+          {
+            $set: {
+              ctr: {
+                $cond: [
+                  { $gt: ['$impressions', 0] },
+                  { $multiply: [{ $divide: ['$clicks', '$impressions'] }, 100] },
+                  0
+                ]
+              }
+            }
+          }
+        ],
+        { upsert: true }
+      );
+
+      await db.collection('adAnalyticsDaily').updateOne(
+        { adId: id, ownerId: ad.ownerId, dateKey: dKey },
+        { $inc: { clicks: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } },
+        { upsert: true }
+      );
+
       res.json({ success: true });
     } catch (error) {
       console.error('Error tracking click:', error);
@@ -870,17 +1048,42 @@ export const adsController = {
   trackEngagement: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const { engagementType } = req.body as { engagementType?: 'like' | 'comment' | 'share' };
       const db = getDB();
-      
-      await db.collection('adAnalytics').updateOne(
-        { adId: id },
-        { 
-          $inc: { engagement: 1 }, 
-          $set: { lastUpdated: Date.now() } 
-        }, 
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) return res.status(404).json({ success: false, error: 'Ad not found' });
+
+      const now = Date.now();
+      const dKey = dateKeyUTC(now);
+      const fp = fingerprint(req);
+
+      // dedupe engagement per day per type
+      const dedupe = await db.collection('adEventDedupes').updateOne(
+        { adId: id, eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey },
+        { $setOnInsert: { adId: id, ownerId: ad.ownerId, eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey, createdAt: now } },
         { upsert: true }
       );
-      
+
+      if (dedupe.upsertedCount === 0) {
+        return res.json({ success: true, deduped: true });
+      }
+
+      const inc: any = { engagement: 1 };
+      if (engagementType) inc[`engagementByType.${engagementType}`] = 1;
+
+      await db.collection('adAnalytics').updateOne(
+        { adId: id },
+        { $inc: inc, $set: { lastUpdated: now } },
+        { upsert: true }
+      );
+
+      await db.collection('adAnalyticsDaily').updateOne(
+        { adId: id, ownerId: ad.ownerId, dateKey: dKey },
+        { $inc: { engagement: 1, ...(engagementType ? { [`engagementByType.${engagementType}`]: 1 } : {}) }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } },
+        { upsert: true }
+      );
+
       res.json({ success: true });
     } catch (error) {
       console.error('Error tracking engagement:', error);
@@ -892,18 +1095,37 @@ export const adsController = {
     try {
       const { id } = req.params;
       const db = getDB();
-      
-      // A conversion is a high-value action. We might want to track metadata (e.g. value, type)
-      // For now, we just increment the counter.
-      await db.collection('adAnalytics').updateOne(
-        { adId: id },
-        { 
-          $inc: { conversions: 1 }, 
-          $set: { lastUpdated: Date.now() } 
-        }, 
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) return res.status(404).json({ success: false, error: 'Ad not found' });
+
+      const now = Date.now();
+      const dKey = dateKeyUTC(now);
+      const fp = fingerprint(req);
+
+      const dedupe = await db.collection('adEventDedupes').updateOne(
+        { adId: id, eventType: 'conversion', fingerprint: fp, dateKey: dKey },
+        { $setOnInsert: { adId: id, ownerId: ad.ownerId, eventType: 'conversion', fingerprint: fp, dateKey: dKey, createdAt: now } },
         { upsert: true }
       );
-      
+
+      if (dedupe.upsertedCount === 0) return res.json({ success: true, deduped: true });
+
+      await db.collection('adAnalytics').updateOne(
+        { adId: id },
+        {
+          $inc: { conversions: 1 },
+          $set: { lastUpdated: now }
+        },
+        { upsert: true }
+      );
+
+      await db.collection('adAnalyticsDaily').updateOne(
+        { adId: id, ownerId: ad.ownerId, dateKey: dKey },
+        { $inc: { conversions: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } },
+        { upsert: true }
+      );
+
       res.json({ success: true });
     } catch (error) {
       console.error('Error tracking conversion:', error);

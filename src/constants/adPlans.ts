@@ -7,10 +7,11 @@ export const AD_PLANS = {
     price: '$39 • 14 days (one-time)',
     numericPrice: 39,
     adLimit: 1,
+    activeAdsLimit: 1,
     impressionLimit: 5000,
     idealFor: 'First-time users, testing ideas, announcements',
     features: [
-      '1 Active Signal',
+      'Up to 1 Active Signal',
       '14-Day Signal Visibility Window',
       'Standard Feed Distribution',
       'Signal View & Click Tracking',
@@ -27,6 +28,7 @@ export const AD_PLANS = {
     price: '$199 / month',
     numericPrice: 199,
     adLimit: 5,
+    activeAdsLimit: 5,
     impressionLimit: 50000,
     idealFor: 'Creators, side hustles, early brands',
     features: [
@@ -34,7 +36,6 @@ export const AD_PLANS = {
       'Priority Distribution (relative to free & entry users)',
       'Smart CTA Button (click tracking)',
       'Creator Analytics Dashboard',
-      'Monthly Signal Refresh',
       'Cancel anytime'
     ],
     gradient: 'from-emerald-500 to-emerald-700',
@@ -49,6 +50,7 @@ export const AD_PLANS = {
     price: '$699 / month',
     numericPrice: 699,
     adLimit: 20,
+    activeAdsLimit: 20,
     impressionLimit: 250000,
     idealFor: 'Brands, agencies, power users',
     features: [
