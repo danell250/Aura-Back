@@ -47,7 +47,7 @@ router.get('/me', requireAuth, async (req, res) => {
       }
     }
 
-    const companies = await db.collection('companies').find({ id: { $in: companyIds } }).toArray() as unknown as Company[];
+    const companies: any[] = await db.collection('companies').find({ id: { $in: companyIds } }).toArray();
     
     // Fallback for legacy companies not in 'companies' collection yet
     const legacyIds = companyIds.filter(id => !companies.some(c => c.id === id));
@@ -64,7 +64,7 @@ router.get('/me', requireAuth, async (req, res) => {
           ownerId: u.id,
           createdAt: u.createdAt || new Date(),
           updatedAt: u.updatedAt || new Date()
-        });
+        } as any);
       }
     }
     
@@ -203,7 +203,7 @@ router.get('/:companyId', requireAuth, async (req, res) => {
     const { companyId } = req.params;
     const db = getDB();
 
-    let company = await db.collection('companies').findOne({ id: companyId }) as unknown as Company | null;
+    let company: any = await db.collection('companies').findOne({ id: companyId });
     
     if (!company) {
       // Check legacy
@@ -219,7 +219,7 @@ router.get('/:companyId', requireAuth, async (req, res) => {
           ownerId: u.id,
           createdAt: u.createdAt || new Date(),
           updatedAt: u.updatedAt || new Date()
-        };
+        } as any;
       }
     }
 

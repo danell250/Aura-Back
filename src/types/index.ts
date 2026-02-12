@@ -21,6 +21,7 @@ export interface User {
   blockedBy?: string[];
   profileViews?: string[];
   isPrivate?: boolean;
+  isVerified?: boolean;
   userMode?: 'creator' | 'business' | 'hybrid';
   trustScore: number; 
   auraCredits: number;
@@ -51,6 +52,7 @@ export interface User {
 }
 
 export interface Company {
+  _id?: any;
   id: string;
   name: string;
   handle?: string;
