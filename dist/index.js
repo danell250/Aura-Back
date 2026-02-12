@@ -218,7 +218,7 @@ const corsOptions = {
 };
 // Apply CORS before ANY other middleware
 app.use((0, cors_1.default)(corsOptions));
-app.options('(.*)', (0, cors_1.default)(corsOptions));
+app.options(/.*/, (0, cors_1.default)(corsOptions));
 app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
 // Security & Optimization Middleware
