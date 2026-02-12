@@ -297,7 +297,43 @@ exports.usersController = {
             });
         }
         catch (error) {
-            console.error('Error fetching user:', error);
+            console.error('Error fetching user by ID:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to fetch user',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // GET /api/users/handle/:handle - Get user by handle
+    getUserByHandle: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            let { handle } = req.params;
+            if (!handle) {
+                return res.status(400).json({ success: false, error: 'Handle is required' });
+            }
+            // Ensure handle starts with @
+            if (!handle.startsWith('@')) {
+                handle = `@${handle}`;
+            }
+            const db = (0, db_1.getDB)();
+            const user = yield db.collection('users').findOne({
+                handle: { $regex: new RegExp(`^${handle}$`, 'i') }
+            });
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found',
+                    message: `User with handle ${handle} does not exist`
+                });
+            }
+            res.json({
+                success: true,
+                data: (0, userUtils_1.transformUser)(user)
+            });
+        }
+        catch (error) {
+            console.error('Error fetching user by handle:', error);
             res.status(500).json({
                 success: false,
                 error: 'Failed to fetch user',

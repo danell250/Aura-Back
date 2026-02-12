@@ -44,6 +44,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
+var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
@@ -71,6 +72,7 @@ const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const privacyRoutes_1 = __importDefault(require("./routes/privacyRoutes"));
 const shareRoutes_1 = __importDefault(require("./routes/shareRoutes"));
 const mediaRoutes_1 = __importDefault(require("./routes/mediaRoutes"));
+const companyRoutes_1 = __importDefault(require("./routes/companyRoutes"));
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -169,6 +171,55 @@ passport_1.default.deserializeUser((id, done) => __awaiter(void 0, void 0, void 
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
 // Security & Optimization Middleware
+// Ensure uploads directory exists
+const uploadsDir = path_1.default.join(process.cwd(), 'uploads');
+if (!fs_1.default.existsSync(uploadsDir)) {
+    fs_1.default.mkdirSync(uploadsDir, { recursive: true });
+}
+// Enable trust proxy for secure cookies behind load balancers (like Render/Heroku)
+app.set("trust proxy", 1);
+// CORS Configuration
+const allowedOrigins = [
+    "https://www.aura.net.za",
+    "https://aura.net.za",
+    "https://auraso.vercel.app",
+    "https://www.auraso.vercel.app",
+    "https://auraradiance.vercel.app",
+    "https://www.auraradiance.vercel.app",
+    "https://aura-front-s1bw.onrender.com",
+    "http://localhost:5173",
+    "http://localhost:5003",
+    (_a = process.env.VITE_FRONTEND_URL) === null || _a === void 0 ? void 0 : _a.replace(/\/$/, '')
+].filter(Boolean);
+const corsOptions = {
+    origin: (origin, cb) => {
+        // allow non-browser tools (no origin) and allow your frontends
+        if (!origin)
+            return cb(null, true);
+        // Normalize origin by removing trailing slash
+        const normalizedOrigin = origin.replace(/\/$/, '');
+        // Check for allowed origins or vercel deployments
+        if (allowedOrigins.includes(normalizedOrigin) ||
+            normalizedOrigin.endsWith('.vercel.app') ||
+            normalizedOrigin.includes('aura-socialr') ||
+            normalizedOrigin.includes('aura-front') ||
+            normalizedOrigin.includes('onrender.com')) {
+            return cb(null, true);
+        }
+        console.error("❌ Blocked by CORS:", origin);
+        // Important: call with null, false instead of Error to avoid breaking pre-flight
+        return cb(null, false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+    exposedHeaders: ["Set-Cookie"],
+    optionsSuccessStatus: 204
+};
+// Apply CORS before ANY other middleware
+app.use((0, cors_1.default)(corsOptions));
+app.options('*', (0, cors_1.default)(corsOptions));
+// Security & Optimization Middleware
 app.use((0, helmet_1.default)({
     contentSecurityPolicy: false, // Disabled to avoid breaking external resources (images, scripts)
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -183,46 +234,7 @@ const limiter = (0, express_rate_limit_1.default)({
     legacyHeaders: false,
 });
 app.use('/api', limiter);
-// Ensure uploads directory exists
-const uploadsDir = path_1.default.join(process.cwd(), 'uploads');
-if (!fs_1.default.existsSync(uploadsDir)) {
-    fs_1.default.mkdirSync(uploadsDir, { recursive: true });
-}
-// Enable trust proxy for secure cookies behind load balancers (like Render/Heroku)
-app.set("trust proxy", 1);
 app.use((0, cookie_parser_1.default)());
-const allowedOrigins = [
-    "https://www.aura.net.za",
-    "https://aura.net.za",
-    "https://auraso.vercel.app",
-    "https://www.auraso.vercel.app",
-    "https://auraradiance.vercel.app",
-    "https://www.auraradiance.vercel.app",
-    "https://aura-front-s1bw.onrender.com",
-    "http://localhost:5173",
-    "http://localhost:5003",
-    process.env.VITE_FRONTEND_URL
-].filter(Boolean);
-const corsOptions = {
-    origin: (origin, cb) => {
-        // allow non-browser tools (no origin) and allow your frontends
-        if (!origin)
-            return cb(null, true);
-        // Check for allowed origins or vercel deployments
-        if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
-            return cb(null, true);
-        }
-        console.error("❌ Blocked by CORS:", origin);
-        // For now, in development/debugging, let's allow it but log it
-        // return cb(null, true); 
-        return cb(new Error(`CORS blocked origin: ${origin}`));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
-};
-app.use((0, cors_1.default)(corsOptions));
-app.options(/.*/, (0, cors_1.default)(corsOptions)); // Enable pre-flight for all routes
 // Passport GitHub OAuth Strategy Configuration
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
     passport_1.default.use(new passport_github2_1.Strategy({
@@ -436,6 +448,7 @@ app.use('/api/messages', messagesRoutes_1.default);
 app.use('/api/subscriptions', subscriptionsRoutes_1.default);
 app.use('/api/ad-subscriptions', adSubscriptionsRoutes_1.default);
 app.use('/api', mediaRoutes_1.default);
+app.use('/api/companies', companyRoutes_1.default);
 app.get('/payment-success', (req, res) => {
     const pkg = typeof req.query.pkg === 'string' ? req.query.pkg : undefined;
     const pkgParam = pkg ? `&pkg=${encodeURIComponent(pkg)}` : '';
@@ -897,7 +910,7 @@ function startServer() {
                     credentials: true,
                     methods: ["GET", "POST"]
                 },
-                transports: ['polling', 'websocket'],
+                transports: ['websocket'],
                 path: '/socket.io/',
                 pingInterval: 25000,
                 pingTimeout: 20000,
@@ -906,7 +919,16 @@ function startServer() {
             // Socket authentication middleware
             io.use((socket, next) => {
                 var _a;
-                const token = (_a = socket.handshake.auth) === null || _a === void 0 ? void 0 : _a.token;
+                let token = (_a = socket.handshake.auth) === null || _a === void 0 ? void 0 : _a.token;
+                // Fallback to cookie if token missing from auth object (for session-based logins)
+                if (!token && socket.handshake.headers.cookie) {
+                    const cookies = socket.handshake.headers.cookie.split(';').reduce((acc, cookie) => {
+                        const [key, value] = cookie.trim().split('=');
+                        acc[key] = value;
+                        return acc;
+                    }, {});
+                    token = cookies.accessToken;
+                }
                 if (!token) {
                     return next(new Error('Authentication error: Token missing'));
                 }

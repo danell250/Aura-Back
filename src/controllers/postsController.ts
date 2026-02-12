@@ -115,6 +115,7 @@ export const postsController = {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable buffering for Nginx/Render
     (res as any).flushHeaders?.();
 
     const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;

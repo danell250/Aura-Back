@@ -13,7 +13,7 @@ exports.shareController = void 0;
 const db_1 = require("../db");
 exports.shareController = {
     getPostShare: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         try {
             const escapeHtml = (unsafe) => {
                 return unsafe
@@ -31,7 +31,8 @@ exports.shareController = {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
             const post = yield db.collection('posts').findOne({ id });
-            const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://www.aura.net.za';
+            const frontendUrl = process.env.VITE_FRONTEND_URL ||
+                (req.headers.origin ? req.headers.origin.toString() : 'https://www.aura.net.za');
             if (!post) {
                 // Fallback to generic metadata if post not found
                 return res.redirect(frontendUrl);
@@ -63,7 +64,9 @@ exports.shareController = {
                 author: {
                     "@type": "Person",
                     name: authorName,
-                    url: `${frontendUrl}/@${authorHandle}`
+                    url: authorHandle
+                        ? `${frontendUrl}/${authorHandle.startsWith('@') ? authorHandle : `@${authorHandle}`}`
+                        : `${frontendUrl}/profile/${(_d = post.author) === null || _d === void 0 ? void 0 : _d.id}`
                 },
                 datePublished: post.timestamp || new Date().toISOString(),
                 url,

@@ -130,6 +130,64 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Security & Optimization Middleware
+// Ensure uploads directory exists
+const uploadsDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Enable trust proxy for secure cookies behind load balancers (like Render/Heroku)
+app.set("trust proxy", 1);
+
+// CORS Configuration
+const allowedOrigins = [
+  "https://www.aura.net.za",
+  "https://aura.net.za",
+  "https://auraso.vercel.app",
+  "https://www.auraso.vercel.app",
+  "https://auraradiance.vercel.app",
+  "https://www.auraradiance.vercel.app",
+  "https://aura-front-s1bw.onrender.com",
+  "http://localhost:5173",
+  "http://localhost:5003",
+  process.env.VITE_FRONTEND_URL?.replace(/\/$/, '')
+].filter(Boolean) as string[];
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, cb) => {
+    // allow non-browser tools (no origin) and allow your frontends
+    if (!origin) return cb(null, true);
+    
+    // Normalize origin by removing trailing slash
+    const normalizedOrigin = origin.replace(/\/$/, '');
+    
+    // Check for allowed origins or vercel deployments
+    if (
+      allowedOrigins.includes(normalizedOrigin) || 
+      normalizedOrigin.endsWith('.vercel.app') || 
+      normalizedOrigin.includes('aura-socialr') ||
+      normalizedOrigin.includes('aura-front') ||
+      normalizedOrigin.includes('onrender.com')
+    ) {
+      return cb(null, true);
+    }
+    
+    console.error("❌ Blocked by CORS:", origin);
+    // Important: call with null, false instead of Error to avoid breaking pre-flight
+    return cb(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+  exposedHeaders: ["Set-Cookie"],
+  optionsSuccessStatus: 204
+};
+
+// Apply CORS before ANY other middleware
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+// Security & Optimization Middleware
 app.use(helmet({
   contentSecurityPolicy: false, // Disabled to avoid breaking external resources (images, scripts)
   crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -146,51 +204,7 @@ const limiter = rateLimit({
 });
 app.use('/api', limiter);
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Enable trust proxy for secure cookies behind load balancers (like Render/Heroku)
-app.set("trust proxy", 1);
 app.use(cookieParser());
-
-const allowedOrigins = [
-  "https://www.aura.net.za",
-  "https://aura.net.za",
-  "https://auraso.vercel.app",
-  "https://www.auraso.vercel.app",
-  "https://auraradiance.vercel.app",
-  "https://www.auraradiance.vercel.app",
-  "https://aura-front-s1bw.onrender.com",
-  "http://localhost:5173",
-  "http://localhost:5003",
-  process.env.VITE_FRONTEND_URL
-].filter(Boolean) as string[];
-
-const corsOptions: cors.CorsOptions = {
-  origin: (origin, cb) => {
-    // allow non-browser tools (no origin) and allow your frontends
-    if (!origin) return cb(null, true);
-    
-    // Check for allowed origins or vercel deployments
-    if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
-      return cb(null, true);
-    }
-    
-    console.error("❌ Blocked by CORS:", origin);
-    // For now, in development/debugging, let's allow it but log it
-    // return cb(null, true); 
-    return cb(new Error(`CORS blocked origin: ${origin}`));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
-};
-
-app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions)); // Enable pre-flight for all routes
 
 // Passport GitHub OAuth Strategy Configuration
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {

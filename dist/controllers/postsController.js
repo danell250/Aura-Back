@@ -28,7 +28,7 @@ const broadcastPostViewUpdate = (payload) => {
     }
 };
 const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     try {
         if (!authorId)
             return;
@@ -58,19 +58,19 @@ const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, vo
             .toArray();
         const user = yield db.collection(USERS_COLLECTION).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
         // If we have access to the app and it has an 'io' instance, emit the update
-        console.log(`📡 Emitting live analytics update to user: ${authorId}`);
-        io.to(authorId).emit('analytics_update', {
+        console.log(`📡 Emitting live analytics update to user: ${authorId} (Total views: ${(_a = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _a !== void 0 ? _a : 0})`);
+        const result = io.to(authorId).emit('analytics_update', {
             userId: authorId,
             stats: {
                 totals: {
-                    totalPosts: (_a = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _a !== void 0 ? _a : 0,
-                    totalViews: (_b = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _b !== void 0 ? _b : 0,
-                    boostedPosts: (_c = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _c !== void 0 ? _c : 0,
-                    totalRadiance: (_d = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _d !== void 0 ? _d : 0
+                    totalPosts: (_b = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _b !== void 0 ? _b : 0,
+                    totalViews: (_c = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _c !== void 0 ? _c : 0,
+                    boostedPosts: (_d = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _d !== void 0 ? _d : 0,
+                    totalRadiance: (_e = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _e !== void 0 ? _e : 0
                 },
                 credits: {
-                    balance: (_e = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _e !== void 0 ? _e : 0,
-                    spent: (_f = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _f !== void 0 ? _f : 0
+                    balance: (_f = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _f !== void 0 ? _f : 0,
+                    spent: (_g = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _g !== void 0 ? _g : 0
                 },
                 topPosts: topPosts.map((p) => {
                     var _a, _b;
@@ -85,6 +85,9 @@ const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, vo
                 })
             }
         });
+        if (!result) {
+            console.warn(`⚠️ Socket emission to room ${authorId} returned false`);
+        }
     }
     catch (err) {
         console.error('emitAuthorInsightsUpdate error', err);
@@ -604,19 +607,24 @@ exports.postsController = {
             }
             const db = (0, db_1.getDB)();
             const viewerId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            const query = { id };
-            if (viewerId) {
-                query['author.id'] = { $ne: viewerId };
-            }
-            const result = yield db.collection(POSTS_COLLECTION).findOneAndUpdate(query, {
-                $inc: { viewCount: 1 },
-                $setOnInsert: { viewCount: 1 }
-            }, { returnDocument: 'after' });
-            if (!result || !result.value) {
+            // Find the post first to check the author
+            const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
+            if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
             }
-            const viewCount = result.value.viewCount || 0;
-            const authorId = (_b = result.value.author) === null || _b === void 0 ? void 0 : _b.id;
+            const authorId = (_b = post.author) === null || _b === void 0 ? void 0 : _b.id;
+            let updatedPost = post;
+            // Only increment if viewer is NOT the author
+            if (!viewerId || viewerId !== authorId) {
+                const result = yield db.collection(POSTS_COLLECTION).findOneAndUpdate({ id }, {
+                    $inc: { viewCount: 1 },
+                    $setOnInsert: { viewCount: 1 }
+                }, { returnDocument: 'after' });
+                if (result && result.value) {
+                    updatedPost = result.value;
+                }
+            }
+            const viewCount = updatedPost.viewCount || 0;
             broadcastPostViewUpdate({ postId: id, viewCount });
             try {
                 const io = req.app.get('io');
@@ -627,11 +635,15 @@ exports.postsController = {
             catch (e) {
             }
             if (authorId) {
-                (0, exports.emitAuthorInsightsUpdate)(req.app, authorId);
+                // Trigger live insights update for the author (asynchronously)
+                (0, exports.emitAuthorInsightsUpdate)(req.app, authorId).catch(err => {
+                    console.error('Failed to emit insights update in incrementPostViews:', err);
+                });
             }
             res.json({ success: true, data: { id, viewCount } });
         }
         catch (error) {
+            console.error('Error in incrementPostViews:', error);
             res.json({ success: true, data: { id: req.params.id, viewCount: 0 } });
         }
     }),
@@ -1139,7 +1151,10 @@ exports.postsController = {
     // POST /api/posts/:id/media/:mediaId/metrics - Update media item metrics
     updateMediaMetrics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { id, mediaId } = req.params;
+            const { id } = req.params;
+            let { mediaId } = req.params;
+            // Handle wildcard parameter which might be an array in Express 5
+            const normalizedMediaId = Array.isArray(mediaId) ? mediaId.join('/') : mediaId;
             const { metric, value } = req.body; // metric: 'views' | 'clicks' | 'saves' | 'dwellMs'
             if (!['views', 'clicks', 'saves', 'dwellMs'].includes(metric)) {
                 return res.status(400).json({ success: false, error: 'Invalid metric' });
@@ -1168,7 +1183,7 @@ exports.postsController = {
             else if (metric === 'dwellMs') {
                 updateDoc.$inc['metrics.totalDwellMs'] = incrementValue;
             }
-            const result = yield db.collection(POSTS_COLLECTION).updateOne({ id }, updateDoc, { arrayFilters: [{ "elem.id": mediaId }] });
+            const result = yield db.collection(POSTS_COLLECTION).updateOne({ id }, updateDoc, { arrayFilters: [{ "elem.id": normalizedMediaId }] });
             if (result.matchedCount === 0) {
                 return res.status(404).json({ success: false, error: 'Post or media item not found' });
             }

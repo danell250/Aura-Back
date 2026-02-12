@@ -12,6 +12,8 @@ router.get('/', usersController_1.usersController.getAllUsers);
 router.get('/me/dashboard', authMiddleware_1.requireAuth, usersController_1.usersController.getMyDashboard);
 // GET /api/users/search - Search users (public)
 router.get('/search', usersController_1.usersController.searchUsers);
+// GET /api/users/handle/:handle - Get user by handle (public)
+router.get('/handle/:handle', usersController_1.usersController.getUserByHandle);
 // POST /api/users/me/images - Upload profile/cover images
 router.post('/me/images', authMiddleware_1.requireAuth, uploadMiddleware_1.upload.fields([
     { name: 'profile', maxCount: 1 },

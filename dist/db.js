@@ -81,6 +81,16 @@ function connectDB() {
                 console.log("✅ AdAnalyticsDaily collection initialized");
                 yield (0, AdEventDedupe_1.initializeAdEventDedupesCollection)(db);
                 console.log("✅ AdEventDedupes collection initialized");
+                // Initialize Post collection indexes
+                try {
+                    yield db.collection('posts').createIndex({ 'author.id': 1 });
+                    yield db.collection('posts').createIndex({ id: 1 }, { unique: true });
+                    yield db.collection('posts').createIndex({ timestamp: -1 });
+                    console.log("✅ Post collection indexes initialized");
+                }
+                catch (postIndexError) {
+                    console.warn("⚠️  Warning: Could not initialize post indexes:", postIndexError);
+                }
             }
             catch (error) {
                 console.warn("⚠️  Warning: Could not initialize collections:", error);

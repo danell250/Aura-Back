@@ -200,7 +200,8 @@ router.get('/google/callback', (req, res, next) => {
             });
             (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
             const frontendUrl = process.env.VITE_FRONTEND_URL ||
-                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+                (req.headers.origin ? req.headers.origin.toString() :
+                    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
             console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
             res.redirect(`${frontendUrl}/feed`);
         }
@@ -268,7 +269,8 @@ router.get('/github/callback', (req, res, next) => {
             });
             (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
             const frontendUrl = process.env.VITE_FRONTEND_URL ||
-                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+                (req.headers.origin ? req.headers.origin.toString() :
+                    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
             console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
             res.redirect(`${frontendUrl}/feed`);
         }
@@ -414,7 +416,8 @@ router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0,
         });
         (0, jwtUtils_1.setTokenCookies)(res, newAccessToken, refreshToken);
         const frontendUrl = process.env.VITE_FRONTEND_URL ||
-            (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+            (req.headers.origin ? req.headers.origin.toString() :
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
         console.log('[OAuth:LinkedIn] Redirecting to:', `${frontendUrl}/dashboard`);
         res.redirect(`${frontendUrl}/dashboard`);
     }
@@ -543,7 +546,7 @@ router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, 
 router.post("/magic-link", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     console.log('🔹 POST /magic-link hit with body:', req.body);
     try {
-        const { email } = req.body || {};
+        const { email, inviteToken } = req.body || {};
         if (!email) {
             console.log('❌ Email missing in request body');
             return res.status(400).json({ success: false, message: "Email is required" });
@@ -586,14 +589,19 @@ router.post("/magic-link", (req, res) => __awaiter(void 0, void 0, void 0, funct
         const token = (0, tokenUtils_1.generateMagicToken)();
         const tokenHash = (0, tokenUtils_1.hashToken)(token);
         const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
-        yield db.collection("users").updateOne({ id: user.id }, {
-            $set: {
-                magicLinkTokenHash: tokenHash,
-                magicLinkExpiresAt: expiresAt.toISOString(),
-                updatedAt: new Date().toISOString(),
-            },
-        });
-        const frontendUrl = process.env.VITE_FRONTEND_URL || (process.env.NODE_ENV === "development" ? "http://localhost:5173" : "https://www.aura.net.za");
+        const updates = {
+            magicLinkTokenHash: tokenHash,
+            magicLinkExpiresAt: expiresAt.toISOString(),
+            updatedAt: new Date().toISOString(),
+        };
+        // Store invite token if provided so it can be processed on verify
+        if (inviteToken) {
+            updates.pendingInviteToken = inviteToken;
+        }
+        yield db.collection("users").updateOne({ id: user.id }, { $set: updates });
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (req.headers.origin ? req.headers.origin.toString() :
+                (process.env.NODE_ENV === "development" ? "http://localhost:5173" : "https://www.aura.net.za"));
         const magicLink = `${frontendUrl}/magic-login?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
         console.log('📧 Attempting to send magic link email to:', normalizedEmail);
         yield (0, emailService_1.sendMagicLinkEmail)(normalizedEmail, magicLink);
@@ -629,10 +637,42 @@ router.post("/magic-link/verify", (req, res) => __awaiter(void 0, void 0, void 0
             return res.status(401).json({ success: false, message: "Invalid or expired link" });
         }
         // one-time use
+        const unsetFields = { magicLinkTokenHash: "", magicLinkExpiresAt: "" };
+        if (user.pendingInviteToken) {
+            unsetFields.pendingInviteToken = "";
+        }
         yield db.collection("users").updateOne({ id: user.id }, {
-            $unset: { magicLinkTokenHash: "", magicLinkExpiresAt: "" },
+            $unset: unsetFields,
             $set: { lastLogin: new Date().toISOString() }
         });
+        // If there was a pending invite, automatically accept it
+        if (user.pendingInviteToken) {
+            console.log(`🔗 Processing pending invite ${user.pendingInviteToken} for user ${user.id}`);
+            try {
+                const invite = yield db.collection('company_invites').findOne({
+                    token: user.pendingInviteToken,
+                    expiresAt: { $gt: new Date() },
+                    acceptedAt: { $exists: false }
+                });
+                if (invite) {
+                    // Add to members
+                    yield db.collection('company_members').updateOne({ companyId: invite.companyId, userId: user.id }, {
+                        $set: {
+                            companyId: invite.companyId,
+                            userId: user.id,
+                            role: invite.role,
+                            joinedAt: new Date()
+                        }
+                    }, { upsert: true });
+                    // Mark invite as accepted
+                    yield db.collection('company_invites').updateOne({ _id: invite._id }, { $set: { acceptedAt: new Date(), acceptedByUserId: user.id } });
+                    console.log(`✅ Automatically accepted invite for user ${user.id}`);
+                }
+            }
+            catch (inviteErr) {
+                console.error('Error auto-accepting invite:', inviteErr);
+            }
+        }
         const accessToken = (0, jwtUtils_1.generateAccessToken)(user);
         const refreshToken = (0, jwtUtils_1.generateRefreshToken)(user);
         yield db.collection("users").updateOne({ id: user.id }, { $push: { refreshTokens: refreshToken } });
@@ -800,7 +840,8 @@ router.get('/github/callback', (req, res, next) => {
             });
             (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
             const frontendUrl = process.env.VITE_FRONTEND_URL ||
-                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+                (req.headers.origin ? req.headers.origin.toString() :
+                    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
             console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}/feed`);
             res.redirect(`${frontendUrl}/feed`);
         }
