@@ -500,6 +500,27 @@ export const usersController = {
 
       updateData.updatedAt = new Date().toISOString();
 
+      // If becoming a company, ensure they are owner in company_members
+      if (updateData.isCompany === true) {
+        try {
+          await db.collection('company_members').updateOne(
+            { companyId: id, userId: id },
+            {
+              $set: {
+                companyId: id,
+                userId: id,
+                role: 'owner',
+                joinedAt: new Date()
+              }
+            },
+            { upsert: true }
+          );
+          console.log(`✓ Added user ${id} as owner of their own company.`);
+        } catch (companyError) {
+          console.error('Error adding user as company owner:', companyError);
+        }
+      }
+
       const result = await db.collection('users').updateOne(
         { id },
         { $set: updateData }

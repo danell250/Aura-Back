@@ -114,7 +114,18 @@ router.post('/invites/accept', requireAuth, async (req, res) => {
 router.get('/:companyId/members', requireAuth, async (req, res) => {
   try {
     const { companyId } = req.params;
+    const currentUser = (req as any).user;
     const db = getDB();
+
+    // Verify currentUser is a member or the company itself
+    const isMember = await db.collection('company_members').findOne({
+      companyId,
+      userId: currentUser.id
+    });
+
+    if (!isMember && currentUser.id !== companyId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to view members' });
+    }
 
     const members = await db.collection('company_members').aggregate([
       { $match: { companyId } },
@@ -143,6 +154,69 @@ router.get('/:companyId/members', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Get members error:', error);
     res.status(500).json({ success: false, error: 'Failed to get members' });
+  }
+});
+
+// GET /api/companies/:companyId/invites - List pending invites
+router.get('/:companyId/invites', requireAuth, async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const currentUser = (req as any).user;
+    const db = getDB();
+
+    // Verify currentUser is owner/admin
+    const requester = await db.collection('company_members').findOne({
+      companyId,
+      userId: currentUser.id,
+      role: { $in: ['owner', 'admin'] }
+    });
+
+    if (!requester && currentUser.id !== companyId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to view invites' });
+    }
+
+    const invites = await db.collection('company_invites').find({
+      companyId,
+      acceptedAt: { $exists: false },
+      expiresAt: { $gt: new Date() }
+    }).toArray();
+
+    res.json({ success: true, data: invites });
+  } catch (error) {
+    console.error('Get invites error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get invites' });
+  }
+});
+
+// DELETE /api/companies/:companyId/invites/:inviteId - Cancel invite
+router.delete('/:companyId/invites/:inviteId', requireAuth, async (req, res) => {
+  try {
+    const { companyId, inviteId } = req.params;
+    const currentUser = (req as any).user;
+    const { ObjectId } = require('mongodb');
+
+    const db = getDB();
+
+    // Verify currentUser is owner/admin
+    const requester = await db.collection('company_members').findOne({
+      companyId,
+      userId: currentUser.id,
+      role: { $in: ['owner', 'admin'] }
+    });
+
+    if (!requester && currentUser.id !== companyId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized' });
+    }
+
+    await db.collection('company_invites').deleteOne({ 
+      _id: new ObjectId(inviteId),
+      companyId 
+    });
+
+    res.json({ success: true, message: 'Invite cancelled successfully' });
+  } catch (error) {
+    console.error('Cancel invite error:', error);
+    res.status(500).json({ success: false, error: 'Failed to cancel invite' });
   }
 });
 
