@@ -498,6 +498,11 @@ export const usersController = {
         delete updateData.coverImage;
       }
 
+      // Auto-verify company if website is provided
+      if (updateData.companyWebsite && updateData.isCompany) {
+        updateData.isVerified = true;
+      }
+
       updateData.updatedAt = new Date().toISOString();
 
       // If becoming a company, ensure they are owner in company_members
