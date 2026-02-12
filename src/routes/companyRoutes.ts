@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getDB } from '../db';
 import { requireAuth } from '../middleware/authMiddleware';
 import { sendCompanyInviteEmail } from '../services/emailService';
+import { createNotificationInDB } from '../controllers/notificationsController';
 import crypto from 'crypto';
 
 const router = Router();
@@ -50,6 +51,21 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
     // Get company name for the email
     const company = await db.collection('users').findOne({ id: companyId });
     const companyName = company?.name || 'A Company';
+
+    // If the user already exists, send them a notification in the app
+    const invitedUser = await db.collection('users').findOne({ email: email.toLowerCase().trim() });
+    if (invitedUser) {
+      await createNotificationInDB(
+        invitedUser.id,
+        'company_invite',
+        currentUser.id,
+        `invited you to join ${companyName} workspace`,
+        undefined,
+        undefined,
+        { token, companyId, role }
+      );
+      console.log(`🔔 Notification sent to existing user ${invitedUser.id} for company invite`);
+    }
 
     const inviteUrl = `${process.env.FRONTEND_URL || 'https://aura.net.za'}/?invite=${token}`;
     
@@ -101,6 +117,12 @@ router.post('/invites/accept', requireAuth, async (req, res) => {
     await db.collection('company_invites').updateOne(
       { _id: invite._id },
       { $set: { acceptedAt: new Date(), acceptedByUserId: currentUser.id } }
+    );
+
+    // Update the notification to mark it as read/accepted
+    await db.collection('users').updateOne(
+      { id: currentUser.id, 'notifications.type': 'company_invite', 'notifications.meta.token': token },
+      { $set: { 'notifications.$.isRead': true } }
     );
 
     res.json({ success: true, message: 'Invite accepted successfully' });
