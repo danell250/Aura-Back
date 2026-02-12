@@ -30,6 +30,7 @@ import path from 'path';
 import fs from 'fs';
 import { connectDB, checkDBHealth, isDBConnected, getDB } from './db';
 import { recalculateAllTrustScores } from './services/trustService';
+import { migrateLegacyCompanies } from './services/migrationService';
 import { Server as SocketIOServer } from 'socket.io';
 import { transformUser } from './utils/userUtils';
 import { verifyAccessToken } from './utils/jwtUtils';
@@ -1010,6 +1011,9 @@ async function startServer() {
       console.log('✅ Database connection established');
       await seedDummyPostsIfEmpty();
       await seedDummyAdsIfEmpty();
+      
+      // Run legacy company migration
+      await migrateLegacyCompanies();
     } catch (error) {
       console.warn('⚠️  Database connection failed, but server is still running');
       console.warn('⚠️  The application will work with mock data until database is available');
