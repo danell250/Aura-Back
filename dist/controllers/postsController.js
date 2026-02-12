@@ -113,6 +113,7 @@ exports.postsController = {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache, no-transform');
         res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no'); // Disable buffering for Nginx/Render
         (_b = (_a = res).flushHeaders) === null || _b === void 0 ? void 0 : _b.call(_a);
         const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
         postSseClients.push({ id, res });

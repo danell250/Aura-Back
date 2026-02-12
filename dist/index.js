@@ -218,7 +218,9 @@ const corsOptions = {
 };
 // Apply CORS before ANY other middleware
 app.use((0, cors_1.default)(corsOptions));
-app.options('*', (0, cors_1.default)(corsOptions));
+app.options('(.*)', (0, cors_1.default)(corsOptions));
+app.use(express_1.default.json({ limit: '50mb' }));
+app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
 // Security & Optimization Middleware
 app.use((0, helmet_1.default)({
     contentSecurityPolicy: false, // Disabled to avoid breaking external resources (images, scripts)
@@ -321,7 +323,6 @@ app.use((req, res, next) => {
     next();
 });
 // Pre-flight handling is managed by CORS middleware above
-app.use(express_1.default.json({ limit: '50mb' }));
 app.use((0, cookie_parser_1.default)());
 // Debug middleware to log all requests
 app.use((req, res, next) => {

@@ -185,7 +185,10 @@ const corsOptions: cors.CorsOptions = {
 
 // Apply CORS before ANY other middleware
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+app.options('(.*)', cors(corsOptions));
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Security & Optimization Middleware
 app.use(helmet({
@@ -299,7 +302,6 @@ app.use((req, res, next) => {
 });
 
 // Pre-flight handling is managed by CORS middleware above
-app.use(express.json({ limit: '50mb' }));
 app.use(cookieParser());
 
 // Debug middleware to log all requests
