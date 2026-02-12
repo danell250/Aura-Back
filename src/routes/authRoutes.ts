@@ -184,9 +184,13 @@ router.get('/google/callback',
     }
     next();
   },
-  passport.authenticate('google', { failureRedirect: '/login' }),
+  passport.authenticate('google', { failureRedirect: '/login', failureMessage: true }),
   async (req: Request, res: Response) => {
     try {
+      const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        (req.headers.origin ? req.headers.origin.toString() : 
+        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+
       if (req.user) {
         const db = getDB();
         const userData = req.user as any;
@@ -270,7 +274,10 @@ router.get('/google/callback',
       }
     } catch (error) {
       console.error('Error in OAuth callback:', error);
-      res.redirect('/login?error=oauth_failed');
+      const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        (req.headers.origin ? req.headers.origin.toString() : 
+        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+      res.redirect(`${frontendUrl}/login?error=oauth_failed`);
     }
   }
 );
@@ -291,14 +298,20 @@ router.get('/github',
 
 router.get('/github/callback',
   (req, res, next) => {
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+      (req.headers.origin ? req.headers.origin.toString() : 
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-      return res.redirect('/login?error=github_not_configured');
+      return res.redirect(`${frontendUrl}/login?error=github_not_configured`);
     }
     next();
   },
   passport.authenticate('github', { failureRedirect: '/login' }),
   async (req: Request, res: Response) => {
     try {
+      const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        (req.headers.origin ? req.headers.origin.toString() : 
+        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
       if (req.user) {
         const db = getDB();
         const userData = req.user as any;
@@ -380,7 +393,10 @@ router.get('/github/callback',
       }
     } catch (error) {
       console.error('Error in OAuth callback:', error);
-      res.redirect('/login?error=oauth_failed');
+      const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        (req.headers.origin ? req.headers.origin.toString() : 
+        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+      res.redirect(`${frontendUrl}/login?error=oauth_failed`);
     }
   }
 );
@@ -419,21 +435,25 @@ router.get('/linkedin', (req: Request, res: Response) => {
 router.get('/linkedin/callback', async (req: Request, res: Response) => {
   const { code, state, error } = req.query;
 
+  const frontendUrl = process.env.VITE_FRONTEND_URL ||
+    (req.headers.origin ? req.headers.origin.toString() : 
+    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+
   // Handle LinkedIn errors
   if (error) {
     console.error('LinkedIn OAuth Error:', error);
-    return res.redirect('/login?error=linkedin_auth_failed');
+    return res.redirect(`${frontendUrl}/login?error=linkedin_auth_failed`);
   }
 
   if (!code) {
-    return res.redirect('/login?error=no_code');
+    return res.redirect(`${frontendUrl}/login?error=no_code`);
   }
 
   // 1. Validate State
   const storedState = req.cookies.linkedin_auth_state;
   if (!state || !storedState || state !== storedState) {
     console.error('LinkedIn OAuth State Mismatch:', { received: state, stored: storedState });
-    return res.redirect('/login?error=state_mismatch');
+    return res.redirect(`${frontendUrl}/login?error=state_mismatch`);
   }
 
   // Clear the state cookie once used
@@ -563,7 +583,10 @@ router.get('/linkedin/callback', async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('LinkedIn OAuth callback error:', error?.response?.data || error.message);
-    res.redirect('/login?error=linkedin_callback_error');
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+      (req.headers.origin ? req.headers.origin.toString() : 
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+    res.redirect(`${frontendUrl}/login?error=linkedin_callback_error`);
   }
 });
 
@@ -596,8 +619,12 @@ router.get('/discord', (req: Request, res: Response) => {
 router.get('/discord/callback', async (req: Request, res: Response) => {
   const { code, error } = req.query;
 
-  if (error) return res.redirect('/login?error=discord_auth_failed');
-  if (!code) return res.redirect('/login?error=discord_no_code');
+  const frontendUrl =
+    process.env.VITE_FRONTEND_URL ||
+    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+
+  if (error) return res.redirect(`${frontendUrl}/login?error=discord_auth_failed`);
+  if (!code) return res.redirect(`${frontendUrl}/login?error=discord_no_code`);
 
   try {
     const redirectUri =
@@ -634,8 +661,8 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
     };
 
     const email = (discord.email || '').trim().toLowerCase();
-    if (!email) return res.redirect('/login?error=discord_no_email');
-    if (discord.verified === false) return res.redirect('/login?error=discord_email_not_verified');
+    if (!email) return res.redirect(`${frontendUrl}/login?error=discord_no_email`);
+    if (discord.verified === false) return res.redirect(`${frontendUrl}/login?error=discord_email_not_verified`);
 
     const db = getDB();
     const existingUser = await db.collection('users').findOne({ email });
@@ -712,7 +739,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
     return res.redirect(`${frontendUrl}/feed`);
   } catch (e: any) {
     console.error('Discord OAuth callback error:', e?.response?.data || e.message);
-    return res.redirect('/login?error=discord_callback_error');
+    return res.redirect(`${frontendUrl}/login?error=discord_callback_error`);
   }
 });
 
@@ -1045,6 +1072,10 @@ router.get('/github/callback',
   passport.authenticate('github', { failureRedirect: '/login' }),
   async (req: Request, res: Response) => {
     try {
+      const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        (req.headers.origin ? req.headers.origin.toString() : 
+        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+
       if (req.user) {
         const db = getDB();
         const userData = req.user as any;
@@ -1126,11 +1157,17 @@ router.get('/github/callback',
         console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}/feed`);
         res.redirect(`${frontendUrl}/feed`);
       } else {
-        res.redirect('/login');
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+          (req.headers.origin ? req.headers.origin.toString() : 
+          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+        res.redirect(`${frontendUrl}/login`);
       }
     } catch (error) {
       console.error('GitHub OAuth callback error:', error);
-      res.redirect('/login');
+      const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        (req.headers.origin ? req.headers.origin.toString() : 
+        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+      res.redirect(`${frontendUrl}/login`);
     }
   }
 );
