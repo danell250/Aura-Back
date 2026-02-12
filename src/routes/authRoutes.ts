@@ -15,6 +15,7 @@ import {
 } from '../utils/jwtUtils';
 import { generateMagicToken, hashToken } from '../utils/tokenUtils';
 import { sendMagicLinkEmail } from '../services/emailService';
+import { createNotificationInDB } from '../controllers/notificationsController';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { transformUser } from '../utils/userUtils';
 import { User } from '../types';
@@ -825,48 +826,52 @@ router.post("/magic-link/verify", async (req: Request, res: Response) => {
       }
     );
 
-    // If there was a pending invite, automatically accept it
+    // If there was a pending invite, link it to the user and create a notification
     if (user.pendingInviteToken) {
-      console.log(`🔗 Processing pending invite ${user.pendingInviteToken} for user ${user.id}`);
+      console.log(`🔗 Linking pending invite ${user.pendingInviteToken} for user ${user.id}`);
       try {
         const invite = await db.collection('company_invites').findOne({
           token: user.pendingInviteToken,
           expiresAt: { $gt: new Date() },
-          acceptedAt: { $exists: false }
+          status: 'pending'
         });
 
         if (invite) {
-          // Add to members
-          await db.collection('company_members').updateOne(
-            { companyId: invite.companyId, userId: user.id },
-            {
-              $set: {
-                companyId: invite.companyId,
-                userId: user.id,
-                role: invite.role,
-                joinedAt: new Date(),
-                updatedAt: new Date()
-              }
-            },
-            { upsert: true }
-          );
-
-          // Mark invite as accepted
+          // Update invite with targetUserId
           await db.collection('company_invites').updateOne(
             { _id: invite._id },
             { 
               $set: { 
-                status: 'accepted',
-                acceptedAt: new Date(), 
-                acceptedByUserId: user.id,
+                targetUserId: user.id,
                 updatedAt: new Date()
               } 
             }
           );
-          console.log(`✅ Automatically accepted invite for user ${user.id}`);
+
+          // Get company name
+          const company = await db.collection('users').findOne({ id: invite.companyId });
+          const companyName = company?.name || 'A Company';
+
+          // Create notification so user sees it in their bell icon
+          await createNotificationInDB(
+            user.id,
+            'company_invite',
+            invite.invitedByUserId,
+            `invited you to join ${companyName} as ${invite.role}`,
+            undefined,
+            undefined,
+            { 
+              inviteId: invite._id.toString(), 
+              companyId: invite.companyId, 
+              role: invite.role, 
+              token: invite.token 
+            }
+          );
+          
+          console.log(`✅ Linked invite and created notification for new user ${user.id}`);
         }
       } catch (inviteErr) {
-        console.error('Error auto-accepting invite:', inviteErr);
+        console.error('Error processing pending invite for new user:', inviteErr);
       }
     }
 
