@@ -5,7 +5,232 @@ import { sendCompanyInviteEmail } from '../services/emailService';
 import { createNotificationInDB } from '../controllers/notificationsController';
 import crypto from 'crypto';
 
+// Helper to generate unique handle for company
+const generateCompanyHandle = async (name: string): Promise<string> => {
+  const db = getDB();
+  const baseHandle = `@${name.toLowerCase().trim().replace(/[^a-z0-9]/g, '')}`;
+  
+  // Try base handle first
+  const existingUser = await db.collection('users').findOne({ handle: baseHandle });
+  const existingCompany = await db.collection('companies').findOne({ handle: baseHandle });
+  
+  if (!existingUser && !existingCompany) return baseHandle;
+
+  // Append random numbers until unique
+  for (let i = 0; i < 10; i++) {
+    const candidate = `${baseHandle}${Math.floor(Math.random() * 1000)}`;
+    const user = await db.collection('users').findOne({ handle: candidate });
+    const comp = await db.collection('companies').findOne({ handle: candidate });
+    if (!user && !comp) return candidate;
+  }
+
+  return `@comp${Date.now()}`;
+};
+
 const router = Router();
+
+// GET /api/companies/me - Get companies the current user belongs to
+router.get('/me', requireAuth, async (req, res) => {
+  try {
+    const currentUser = (req as any).user;
+    const db = getDB();
+
+    const memberships = await db.collection('company_members').find({ userId: currentUser.id }).toArray();
+    const companyIds = memberships.map(m => m.companyId);
+
+    // Also include the legacy company if it exists (where userId === companyId)
+    if (!companyIds.includes(currentUser.id)) {
+      const user = await db.collection('users').findOne({ id: currentUser.id });
+      if (user?.companyName) {
+        companyIds.push(currentUser.id);
+      }
+    }
+
+    const companies = await db.collection('companies').find({ id: { $in: companyIds } }).toArray();
+    
+    // Fallback for legacy companies not in 'companies' collection yet
+    const legacyIds = companyIds.filter(id => !companies.some(c => c.id === id));
+    for (const lid of legacyIds) {
+      const u = await db.collection('users').findOne({ id: lid });
+      if (u) {
+        companies.push({
+          id: u.id,
+          name: u.companyName || u.name,
+          website: u.companyWebsite,
+          industry: u.industry,
+          bio: u.bio,
+          isVerified: u.isVerified,
+          ownerId: u.id,
+          createdAt: u.createdAt || new Date(),
+          updatedAt: u.updatedAt || new Date()
+        });
+      }
+    }
+    
+    // Merge role into company data
+    const data = companies.map(c => {
+      const membership = memberships.find(m => m.companyId === c.id);
+      return { ...c, role: membership?.role || (c.ownerId === currentUser.id ? 'owner' : 'member') };
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Get my companies error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch your workspaces' });
+  }
+});
+
+// POST /api/companies - Create a new company
+router.post('/', requireAuth, async (req, res) => {
+  try {
+    const currentUser = (req as any).user;
+    const { name, industry, bio, website } = req.body;
+    const db = getDB();
+
+    if (!name) {
+      return res.status(400).json({ success: false, error: 'Workspace name is required' });
+    }
+
+    const companyId = `comp-${crypto.randomBytes(8).toString('hex')}`;
+    const handle = await generateCompanyHandle(name);
+    
+    const newCompany = {
+      id: companyId,
+      name,
+      handle,
+      industry: industry || 'Technology',
+      bio: bio || '',
+      website: website || '',
+      ownerId: currentUser.id,
+      isVerified: !!website,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    await db.collection('companies').insertOne(newCompany);
+
+    // Add creator as owner
+    await db.collection('company_members').updateOne(
+      { companyId, userId: currentUser.id },
+      {
+        $set: {
+          companyId,
+          userId: currentUser.id,
+          role: 'owner',
+          joinedAt: new Date(),
+          updatedAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    res.json({ success: true, data: newCompany });
+  } catch (error) {
+    console.error('Create company error:', error);
+    res.status(500).json({ success: false, error: 'Failed to create workspace' });
+  }
+});
+
+// PATCH /api/companies/:companyId - Update company details
+router.patch('/:companyId', requireAuth, async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const currentUser = (req as any).user;
+    const updates = req.body;
+    const db = getDB();
+
+    // Verify currentUser is owner/admin
+    const membership = await db.collection('company_members').findOne({
+      companyId,
+      userId: currentUser.id,
+      role: { $in: ['owner', 'admin'] }
+    });
+
+    if (!membership && currentUser.id !== companyId) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to update this workspace' });
+    }
+
+    // Auto-verify if website is added
+    if (updates.website) {
+      updates.isVerified = true;
+    }
+
+    // Handle handle updates
+    if (updates.handle) {
+      const normalizedHandle = updates.handle.startsWith('@') ? updates.handle.toLowerCase() : `@${updates.handle.toLowerCase()}`;
+      const existingUser = await db.collection('users').findOne({ handle: normalizedHandle });
+      const existingCompany = await db.collection('companies').findOne({ handle: normalizedHandle, id: { $ne: companyId } });
+      
+      if (existingUser || existingCompany) {
+        return res.status(409).json({ success: false, error: 'Handle already taken' });
+      }
+      updates.handle = normalizedHandle;
+    }
+
+    updates.updatedAt = new Date();
+
+    const result = await db.collection('companies').updateOne(
+      { id: companyId },
+      { $set: updates }
+    );
+
+    // If it was a legacy company in users collection
+    if (result.matchedCount === 0 && companyId === currentUser.id) {
+       await db.collection('users').updateOne(
+         { id: companyId },
+         { $set: {
+           companyName: updates.name,
+           companyWebsite: updates.website,
+           industry: updates.industry,
+           bio: updates.bio,
+           isVerified: updates.isVerified,
+           updatedAt: new Date().toISOString()
+         }}
+       );
+    }
+
+    res.json({ success: true, message: 'Workspace updated successfully' });
+  } catch (error) {
+    console.error('Update company error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update workspace' });
+  }
+});
+
+// GET /api/companies/:companyId - Get single company
+router.get('/:companyId', requireAuth, async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const db = getDB();
+
+    let company = await db.collection('companies').findOne({ id: companyId });
+    
+    if (!company) {
+      // Check legacy
+      const u = await db.collection('users').findOne({ id: companyId });
+      if (u && u.companyName) {
+        company = {
+          id: u.id,
+          name: u.companyName || u.name,
+          website: u.companyWebsite,
+          industry: u.industry,
+          bio: u.bio,
+          isVerified: u.isVerified,
+          ownerId: u.id,
+          createdAt: u.createdAt || new Date(),
+          updatedAt: u.updatedAt || new Date()
+        };
+      }
+    }
+
+    if (!company) {
+      return res.status(404).json({ success: false, error: 'Workspace not found' });
+    }
+
+    res.json({ success: true, data: company });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to fetch workspace' });
+  }
+});
 
 // POST /api/companies/:companyId/invites - Create invite
 router.post('/:companyId/invites', requireAuth, async (req, res) => {
@@ -56,8 +281,15 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
     const inviteId = insertResult.insertedId.toString();
 
     // Get company name for the email/notification
-    const company = await db.collection('users').findOne({ id: companyId });
-    const companyName = company?.name || 'A Company';
+    let companyName = 'A Company';
+    const company = await db.collection('companies').findOne({ id: companyId });
+    if (company) {
+      companyName = company.name;
+    } else {
+      // Fallback for legacy
+      const legacyUser = await db.collection('users').findOne({ id: companyId });
+      companyName = legacyUser?.companyName || legacyUser?.name || 'A Company';
+    }
 
     if (invitedUser) {
       await createNotificationInDB(
@@ -195,8 +427,14 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
     );
 
     // Get company name
-    const company = await db.collection('users').findOne({ id: companyId });
-    const companyName = company?.name || 'A Company';
+    let companyName = 'A Company';
+    const company = await db.collection('companies').findOne({ id: companyId });
+    if (company) {
+      companyName = company.name;
+    } else {
+      const legacyUser = await db.collection('users').findOne({ id: companyId });
+      companyName = legacyUser?.companyName || legacyUser?.name || 'A Company';
+    }
 
     if (invite.targetUserId) {
       await createNotificationInDB(

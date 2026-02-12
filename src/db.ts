@@ -74,6 +74,30 @@ export async function connectDB(): Promise<Db | null> {
       await initializeAdEventDedupesCollection(db);
       console.log("✅ AdEventDedupes collection initialized");
 
+      // Initialize Company and Invite indexes
+      try {
+        await db.collection('companies').createIndex({ id: 1 }, { unique: true });
+        await db.collection('companies').createIndex({ ownerId: 1 });
+        await db.collection('companies').createIndex(
+          { handle: 1 },
+          { 
+            unique: true, 
+            collation: { locale: 'en', strength: 2 },
+            background: true,
+            sparse: true,
+            name: 'company_handle_unique_case_insensitive'
+          }
+        );
+        await db.collection('company_members').createIndex({ companyId: 1, userId: 1 }, { unique: true });
+        await db.collection('company_members').createIndex({ userId: 1 });
+        await db.collection('company_invites').createIndex({ token: 1 }, { unique: true });
+        await db.collection('company_invites').createIndex({ email: 1 });
+        await db.collection('company_invites').createIndex({ companyId: 1 });
+        console.log("✅ Company and Invite indexes initialized");
+      } catch (companyIndexError) {
+        console.warn("⚠️  Warning: Could not initialize company indexes:", companyIndexError);
+      }
+
       // Initialize Post collection indexes
       try {
         await db.collection('posts').createIndex({ 'author.id': 1 });

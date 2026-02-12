@@ -189,7 +189,33 @@ export const postsController = {
             from: USERS_COLLECTION,
             localField: 'author.id',
             foreignField: 'id',
-            as: 'authorDetails'
+            as: 'authorUserDetails'
+          }
+        },
+        {
+          $lookup: {
+            from: 'companies',
+            localField: 'author.id',
+            foreignField: 'id',
+            as: 'authorCompanyDetails'
+          }
+        },
+        {
+          $addFields: {
+            authorDetails: {
+              $cond: {
+                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
+                then: { $arrayElemAt: ['$authorUserDetails', 0] },
+                else: { $arrayElemAt: ['$authorCompanyDetails', 0] }
+              }
+            },
+            authorType: {
+              $cond: {
+                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
+                then: 'user',
+                else: 'company'
+              }
+            }
           }
         },
         {
@@ -200,7 +226,8 @@ export const postsController = {
                 'authorDetails.isPrivate': true,
                 'author.id': { $in: currentUserAcquaintances }
               },
-              { 'author.id': currentUserId }
+              { 'author.id': currentUserId },
+              { authorType: 'company' } // Companies are always public in this context
             ]
           }
         },
@@ -313,7 +340,33 @@ export const postsController = {
             from: USERS_COLLECTION,
             localField: 'author.id',
             foreignField: 'id',
-            as: 'authorDetails'
+            as: 'authorUserDetails'
+          }
+        },
+        {
+          $lookup: {
+            from: 'companies',
+            localField: 'author.id',
+            foreignField: 'id',
+            as: 'authorCompanyDetails'
+          }
+        },
+        {
+          $addFields: {
+            authorDetails: {
+              $cond: {
+                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
+                then: { $arrayElemAt: ['$authorUserDetails', 0] },
+                else: { $arrayElemAt: ['$authorCompanyDetails', 0] }
+              }
+            },
+            authorType: {
+              $cond: {
+                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
+                then: 'user',
+                else: 'company'
+              }
+            }
           }
         },
         {
@@ -324,7 +377,8 @@ export const postsController = {
                 'authorDetails.isPrivate': true,
                 'author.id': { $in: currentUserAcquaintances }
               },
-              { 'author.id': currentUserId }
+              { 'author.id': currentUserId },
+              { authorType: 'company' }
             ]
           }
         },
@@ -835,20 +889,30 @@ export const postsController = {
       }
 
       const db = getDB();
-      // Try to fetch full author from DB
-      const authorRaw = await db.collection(USERS_COLLECTION).findOne({ id: authorId });
+      // Try to fetch full author from DB (could be user or company)
+      let authorRaw = await db.collection(USERS_COLLECTION).findOne({ id: authorId });
+      let authorType: 'user' | 'company' = 'user';
+
+      if (!authorRaw) {
+        authorRaw = await db.collection('companies').findOne({ id: authorId });
+        if (authorRaw) {
+          authorType = 'company';
+        }
+      }
+
       const author = authorRaw ? transformUser(authorRaw) : null;
       
       const authorEmbed = author ? {
         id: author.id,
-        firstName: author.firstName,
-        lastName: author.lastName,
+        firstName: authorType === 'user' ? author.firstName : author.name,
+        lastName: authorType === 'user' ? author.lastName : '',
         name: author.name,
         handle: author.handle,
         avatar: author.avatar,
         avatarKey: author.avatarKey,
         avatarType: author.avatarType || 'image',
-        activeGlow: author.activeGlow
+        activeGlow: author.activeGlow || 'none',
+        type: authorType
       } : {
         id: authorId,
         firstName: 'User',

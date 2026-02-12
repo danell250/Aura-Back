@@ -54,8 +54,9 @@ const generateUniqueHandle = async (firstName: string, lastName: string): Promis
   const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
 
   try {
-    let existingUser = await db.collection('users').findOne({ handle: baseHandle });
-    if (!existingUser) {
+    const existingUser = await db.collection('users').findOne({ handle: baseHandle });
+    const existingCompany = await db.collection('companies').findOne({ handle: baseHandle });
+    if (!existingUser && !existingCompany) {
       console.log('✓ Handle available:', baseHandle);
       return baseHandle;
     }
@@ -69,7 +70,8 @@ const generateUniqueHandle = async (firstName: string, lastName: string): Promis
 
     try {
       const existingUser = await db.collection('users').findOne({ handle: candidateHandle });
-      if (!existingUser) {
+      const existingCompany = await db.collection('companies').findOne({ handle: candidateHandle });
+      if (!existingUser && !existingCompany) {
         console.log('✓ Handle available:', candidateHandle);
         return candidateHandle;
       }
@@ -103,11 +105,25 @@ router.post('/check-handle', async (req: Request, res: Response) => {
     const normalizedHandle = normalizeUserHandle(handle);
     const db = getDB();
 
-    const existingUser = await db.collection('users').findOne({ handle: normalizedHandle });
+    const existingUser = await db.collection('users').findOne({ 
+      handle: { $regex: new RegExp(`^${normalizedHandle}$`, 'i') } 
+    });
+    
+    const existingCompany = await db.collection('companies').findOne({ 
+      handle: { $regex: new RegExp(`^${normalizedHandle}$`, 'i') } 
+    });
+
+    if (existingUser || existingCompany) {
+      return res.json({
+        success: true,
+        available: false,
+        message: 'Handle is already taken'
+      });
+    }
 
     return res.json({
       success: true,
-      available: !existingUser,
+      available: true,
       handle: normalizedHandle
     });
   } catch (error) {

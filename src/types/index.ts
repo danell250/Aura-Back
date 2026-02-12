@@ -28,7 +28,6 @@ export interface User {
   companyName?: string;
   industry?: string;
   employeeCount?: number;
-  isCompany?: boolean;
   // Backend-specific fields
   googleId?: string;
   githubId?: string;

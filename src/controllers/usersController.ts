@@ -16,8 +16,9 @@ const generateUniqueHandle = async (firstName: string, lastName: string): Promis
   const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
 
   try {
-    let existingUser = await db.collection('users').findOne({ handle: baseHandle });
-    if (!existingUser) {
+    const existingUser = await db.collection('users').findOne({ handle: baseHandle });
+    const existingCompany = await db.collection('companies').findOne({ handle: baseHandle });
+    if (!existingUser && !existingCompany) {
       console.log('✓ Handle available:', baseHandle);
       return baseHandle;
     }
@@ -31,7 +32,8 @@ const generateUniqueHandle = async (firstName: string, lastName: string): Promis
 
     try {
       const existingUser = await db.collection('users').findOne({ handle: candidateHandle });
-      if (!existingUser) {
+      const existingCompany = await db.collection('companies').findOne({ handle: candidateHandle });
+      if (!existingUser && !existingCompany) {
         console.log('✓ Handle available:', candidateHandle);
         return candidateHandle;
       }
@@ -284,36 +286,67 @@ export const usersController = {
     }
   },
 
-  // GET /api/users/:id - Get user by ID
+  // GET /api/users/:id - Get user or company by ID
   getUserById: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const db = getDB();
+      
+      // Try to find user first
       const user = await db.collection('users').findOne({ id });
       
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          error: 'User not found',
-          message: `User with ID ${id} does not exist`
+      if (user) {
+        return res.json({
+          success: true,
+          type: 'user',
+          data: transformUser(user)
+        });
+      }
+
+      // Try to find company
+      const company = await db.collection('companies').findOne({ id });
+
+      if (company) {
+        // Map company fields to user-like structure for ProfileView compatibility
+        const profileData = {
+          ...company,
+          name: company.name,
+          companyName: company.name,
+          companyWebsite: company.website,
+          userMode: 'business',
+          isVerified: company.isVerified || false,
+          trustScore: 100,
+          auraCredits: 0,
+          acquaintances: [],
+          sentAcquaintanceRequests: [],
+          notifications: [],
+          blockedUsers: [],
+          profileViews: [],
+        };
+
+        return res.json({
+          success: true,
+          type: 'company',
+          data: transformUser(profileData)
         });
       }
       
-      res.json({
-        success: true,
-        data: transformUser(user)
+      return res.status(404).json({
+        success: false,
+        error: 'Not found',
+        message: `Profile with ID ${id} does not exist`
       });
     } catch (error) {
-      console.error('Error fetching user by ID:', error);
+      console.error('Error fetching by ID:', error);
       res.status(500).json({
         success: false,
-        error: 'Failed to fetch user',
+        error: 'Failed to fetch profile',
         message: 'Internal server error'
       });
     }
   },
 
-  // GET /api/users/handle/:handle - Get user by handle
+  // GET /api/users/handle/:handle - Get user or company by handle
   getUserByHandle: async (req: Request, res: Response) => {
     try {
       let { handle } = req.params;
@@ -327,27 +360,60 @@ export const usersController = {
       }
 
       const db = getDB();
+      
+      // Try to find user first
       const user = await db.collection('users').findOne({ 
         handle: { $regex: new RegExp(`^${handle}$`, 'i') } 
       });
       
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          error: 'User not found',
-          message: `User with handle ${handle} does not exist`
+      if (user) {
+        return res.json({
+          success: true,
+          type: 'user',
+          data: transformUser(user)
+        });
+      }
+
+      // Try to find company
+      const company = await db.collection('companies').findOne({ 
+        handle: { $regex: new RegExp(`^${handle}$`, 'i') } 
+      });
+
+      if (company) {
+        // Map company fields to user-like structure for ProfileView compatibility
+        const profileData = {
+          ...company,
+          name: company.name,
+          companyName: company.name,
+          companyWebsite: company.website,
+          userMode: 'business',
+          isVerified: company.isVerified || false,
+          trustScore: 100, // Default trust score for companies
+          auraCredits: 0,
+          acquaintances: [], // Companies don't have acquaintances in the same way yet
+          sentAcquaintanceRequests: [],
+          notifications: [],
+          blockedUsers: [],
+          profileViews: [],
+        };
+
+        return res.json({
+          success: true,
+          type: 'company',
+          data: transformUser(profileData)
         });
       }
       
-      res.json({
-        success: true,
-        data: transformUser(user)
+      return res.status(404).json({
+        success: false,
+        error: 'Not found',
+        message: `User or company with handle ${handle} does not exist`
       });
     } catch (error) {
-      console.error('Error fetching user by handle:', error);
+      console.error('Error fetching by handle:', error);
       res.status(500).json({
         success: false,
-        error: 'Failed to fetch user',
+        error: 'Failed to fetch profile',
         message: 'Internal server error'
       });
     }
@@ -398,8 +464,6 @@ export const usersController = {
         bio: userData.bio || '',
         phone: userData.phone || '',
         country: userData.country || '',
-        industry: userData.industry || '',
-        companyName: userData.companyName || '',
         acquaintances: userData.acquaintances || [],
         blockedUsers: userData.blockedUsers || [],
         trustScore: userData.trustScore || 10,
@@ -468,7 +532,8 @@ export const usersController = {
 
         if (normalizedHandle !== existingUser.handle) {
           const conflictingUser = await db.collection('users').findOne({ handle: normalizedHandle });
-          if (conflictingUser && conflictingUser.id !== id) {
+          const conflictingCompany = await db.collection('companies').findOne({ handle: normalizedHandle });
+          if ((conflictingUser && conflictingUser.id !== id) || conflictingCompany) {
             return res.status(409).json({
               success: false,
               error: 'Handle taken',
@@ -498,33 +563,7 @@ export const usersController = {
         delete updateData.coverImage;
       }
 
-      // Auto-verify company if website is provided
-      if (updateData.companyWebsite && updateData.isCompany) {
-        updateData.isVerified = true;
-      }
-
       updateData.updatedAt = new Date().toISOString();
-
-      // If becoming a company, ensure they are owner in company_members
-      if (updateData.isCompany === true) {
-        try {
-          await db.collection('company_members').updateOne(
-            { companyId: id, userId: id },
-            {
-              $set: {
-                companyId: id,
-                userId: id,
-                role: 'owner',
-                joinedAt: new Date()
-              }
-            },
-            { upsert: true }
-          );
-          console.log(`✓ Added user ${id} as owner of their own company.`);
-        } catch (companyError) {
-          console.error('Error adding user as company owner:', companyError);
-        }
-      }
 
       const result = await db.collection('users').updateOne(
         { id },
@@ -1147,7 +1186,8 @@ export const usersController = {
       // Create a case-insensitive regex search
       const searchRegex = new RegExp(searchTerm, 'i');
       
-      const searchResults = await db.collection('users').find({
+      // Search users
+      const usersResults = await db.collection('users').find({
         $and: [
           // Privacy filter: only show users who allow being found in search
           {
@@ -1181,8 +1221,41 @@ export const usersController = {
         industry: 1,
         companyName: 1
       })
-      .limit(20) // Limit results to improve performance
+      .limit(10)
       .toArray();
+
+      // Search companies
+      const companiesResults = await db.collection('companies').find({
+        $or: [
+          { name: searchRegex },
+          { handle: searchRegex },
+          { industry: searchRegex },
+          { description: searchRegex }
+        ]
+      })
+      .project({
+        id: 1,
+        name: 1,
+        handle: 1,
+        avatar: 1,
+        avatarType: 1,
+        description: 1,
+        industry: 1,
+        isVerified: 1
+      })
+      .limit(10)
+      .toArray();
+
+      // Transform and combine results
+      const searchResults = [
+        ...usersResults.map(u => ({ ...u, type: 'user' })),
+        ...companiesResults.map(c => ({ 
+          ...c, 
+          type: 'company',
+          bio: c.description, // Map description to bio for consistent UI
+          userMode: 'business'
+        }))
+      ];
 
       res.json({
         success: true,
