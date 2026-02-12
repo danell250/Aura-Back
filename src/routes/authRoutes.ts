@@ -626,6 +626,8 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
   if (error) return res.redirect(`${frontendUrl}/login?error=discord_auth_failed`);
   if (!code) return res.redirect(`${frontendUrl}/login?error=discord_no_code`);
 
+  const db = getDB();
+
   try {
     const redirectUri =
       process.env.DISCORD_CALLBACK_URL ||
@@ -664,7 +666,6 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
     if (!email) return res.redirect(`${frontendUrl}/login?error=discord_no_email`);
     if (discord.verified === false) return res.redirect(`${frontendUrl}/login?error=discord_email_not_verified`);
 
-    const db = getDB();
     const existingUser = await db.collection('users').findOne({ email });
 
     // Build Discord avatar URL (optional)
@@ -732,14 +733,13 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
 
     setTokenCookies(res, newAccessToken, newRefreshToken);
 
-    const frontendUrl =
-      process.env.VITE_FRONTEND_URL ||
-      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
-
     return res.redirect(`${frontendUrl}/feed`);
   } catch (e: any) {
     console.error('Discord OAuth callback error:', e?.response?.data || e.message);
-    return res.redirect(`${frontendUrl}/login?error=discord_callback_error`);
+    const errorFrontendUrl =
+      process.env.VITE_FRONTEND_URL ||
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+    return res.redirect(`${errorFrontendUrl}/login?error=discord_callback_error`);
   }
 });
 
