@@ -844,7 +844,8 @@ router.post("/magic-link/verify", async (req: Request, res: Response) => {
                 companyId: invite.companyId,
                 userId: user.id,
                 role: invite.role,
-                joinedAt: new Date()
+                joinedAt: new Date(),
+                updatedAt: new Date()
               }
             },
             { upsert: true }
@@ -853,7 +854,14 @@ router.post("/magic-link/verify", async (req: Request, res: Response) => {
           // Mark invite as accepted
           await db.collection('company_invites').updateOne(
             { _id: invite._id },
-            { $set: { acceptedAt: new Date(), acceptedByUserId: user.id } }
+            { 
+              $set: { 
+                status: 'accepted',
+                acceptedAt: new Date(), 
+                acceptedByUserId: user.id,
+                updatedAt: new Date()
+              } 
+            }
           );
           console.log(`✅ Automatically accepted invite for user ${user.id}`);
         }

@@ -72,15 +72,20 @@ export const createNotificationInDB = async (
 
   const newNotification = {
     id: `notif-${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    notificationId: `notif-${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     userId,
     type,
     fromUser,
     message,
     timestamp: Date.now(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
     isRead: false,
+    readAt: null,
     postId: postId || '',
     connectionId: connectionId || undefined,
     meta: meta || undefined,
+    data: meta || undefined, // Alias for 'data' as requested
     yearKey: yearKey || undefined
   };
 
@@ -101,6 +106,80 @@ export const createNotificationInDB = async (
 };
 
 export const notificationsController = {
+  // GET /api/notifications - Get notifications for the current user
+  getMyNotifications: async (req: Request, res: Response) => {
+    try {
+      const currentUser = (req as any).user;
+      if (!currentUser) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const { page = 1, limit = 20, unreadOnly } = req.query;
+      
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: [],
+          pagination: {
+            page: Number(page),
+            limit: Number(limit),
+            total: 0,
+            pages: 0
+          },
+          unreadCount: 0
+        });
+      }
+
+      const db = getDB();
+      
+      const user = await db.collection('users').findOne({ id: currentUser.id });
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found'
+        });
+      }
+
+      let notifications = user.notifications || [];
+      
+      // Filter unread only if specified
+      if (unreadOnly === 'true') {
+        notifications = notifications.filter((notif: any) => !notif.isRead);
+      }
+      
+      // Sort by timestamp (newest first)
+      notifications.sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+      
+      // Pagination
+      const startIndex = (Number(page) - 1) * Number(limit);
+      const endIndex = startIndex + Number(limit);
+      const paginatedNotifications = notifications.slice(startIndex, endIndex).map((notification: any) => {
+        if (notification.fromUser) {
+          notification.fromUser = transformUser(notification.fromUser);
+        }
+        return notification;
+      });
+      
+      res.json({
+        success: true,
+        data: paginatedNotifications,
+        pagination: {
+          page: Number(page),
+          limit: Number(limit),
+          total: notifications.length,
+          pages: Math.ceil(notifications.length / Number(limit))
+        },
+        unreadCount: (user.notifications || []).filter((n: any) => !n.isRead).length
+      });
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch notifications'
+      });
+    }
+  },
+
   // GET /api/notifications/user/:userId - Get notifications for a user
   getNotificationsByUser: async (req: Request, res: Response) => {
     try {
@@ -260,7 +339,13 @@ export const notificationsController = {
       // Find user with this notification and update it
       const result = await db.collection('users').updateOne(
         { "notifications.id": id },
-        { $set: { "notifications.$.isRead": true } }
+        { 
+          $set: { 
+            "notifications.$.isRead": true,
+            "notifications.$.readAt": new Date(),
+            "notifications.$.updatedAt": new Date()
+          } 
+        }
       );
 
       if (result.matchedCount === 0) {
