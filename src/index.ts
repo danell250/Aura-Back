@@ -24,6 +24,7 @@ import authRoutes from './routes/authRoutes';
 import privacyRoutes from './routes/privacyRoutes';
 import shareRoutes from './routes/shareRoutes';
 import mediaRoutes from './routes/mediaRoutes';
+import companyRoutes from './routes/companyRoutes';
 import { attachUser } from './middleware/authMiddleware';
 import path from 'path';
 import fs from 'fs';
@@ -428,6 +429,7 @@ app.use('/api/messages', messagesRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
 app.use('/api/ad-subscriptions', adSubscriptionsRoutes);
 app.use('/api', mediaRoutes);
+app.use('/api/companies', companyRoutes);
 
 app.get('/payment-success', (req, res) => {
   const pkg = typeof req.query.pkg === 'string' ? req.query.pkg : undefined;

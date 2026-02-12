@@ -42,3 +42,46 @@ export async function sendMagicLinkEmail(to: string, magicLink: string) {
     throw error;
   }
 }
+
+export async function sendCompanyInviteEmail(to: string, companyName: string, inviteUrl: string) {
+  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+  
+  if (!process.env.SENDGRID_API_KEY) {
+    console.warn('⚠️ SendGrid credentials not found. Company invite will be logged to console only.');
+    console.log('--- COMPANY INVITE ---');
+    console.log(`To: ${to}`);
+    console.log(`Company: ${companyName}`);
+    console.log(`URL: ${inviteUrl}`);
+    console.log('----------------------');
+    return;
+  }
+
+  try {
+    await sgMail.send({
+      to,
+      from,
+      subject: `Invite to join ${companyName} on Aura©`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px;">
+          <h2 style="color: #1e293b; margin-top: 0;">Join ${companyName}</h2>
+          <p style="color: #475569; line-height: 1.6;">You've been invited to join the team for <strong>${companyName}</strong> on Aura©.</p>
+          <p style="margin: 32px 0;">
+            <a href="${inviteUrl}"
+               style="display:inline-block;padding:12px 24px;background:#10b981;color:#fff;border-radius:12px;text-decoration:none;font-weight:bold;text-transform:uppercase;letter-spacing:0.05em;font-size:14px;">
+               Accept Invitation
+            </a>
+          </p>
+          <p style="color: #64748b; font-size: 12px;">This invitation link will expire in 7 days.</p>
+          <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 32px 0;" />
+          <p style="color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; text-align: center;">
+            Aura© &bull; The New Social Standard
+          </p>
+        </div>
+      `,
+    });
+    console.log('✓ Company invite email sent via SendGrid to:', to);
+  } catch (error: any) {
+    console.error('Error sending company invite email:', error);
+    throw error;
+  }
+}
