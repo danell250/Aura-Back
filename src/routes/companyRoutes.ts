@@ -72,7 +72,7 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
       console.log(`🔔 Notification sent to existing user ${invitedUser.id} for company invite`);
     } else {
       // If the user doesn't exist, send them an email invite link
-      const inviteUrl = `${process.env.FRONTEND_URL || 'https://aura.net.za'}/?invite=${token}`;
+      const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${token}`;
       await sendCompanyInviteEmail(invite.email, companyName, inviteUrl);
       console.log(`✉️ Email invite sent to new user ${invite.email}`);
     }
@@ -209,7 +209,7 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
         { inviteId: invite._id.toString(), companyId, role: invite.role, token: invite.token }
       );
     } else {
-      const inviteUrl = `${process.env.FRONTEND_URL || 'https://aura.net.za'}/?invite=${invite.token}`;
+      const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${invite.token}`;
       await sendCompanyInviteEmail(invite.email, companyName, inviteUrl);
     }
 
