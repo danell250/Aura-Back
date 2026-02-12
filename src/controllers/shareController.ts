@@ -60,10 +60,12 @@ export const shareController = {
         description,
         image,
         author: {
-          "@type": "Person",
-          name: authorName,
-          url: `${frontendUrl}/@${authorHandle}`
-        },
+        "@type": "Person",
+        name: authorName,
+        url: authorHandle 
+          ? `${frontendUrl}/${authorHandle.startsWith('@') ? authorHandle : `@${authorHandle}`}`
+          : `${frontendUrl}/profile/${post.author?.id}`
+      },
         datePublished: post.timestamp || new Date().toISOString(),
         url,
         publisher: {

@@ -16,6 +16,9 @@ router.get('/me/dashboard', requireAuth, usersController.getMyDashboard);
 // GET /api/users/search - Search users (public)
 router.get('/search', usersController.searchUsers);
 
+// GET /api/users/handle/:handle - Get user by handle (public)
+router.get('/handle/:handle', usersController.getUserByHandle);
+
 // POST /api/users/me/images - Upload profile/cover images
 router.post(
   '/me/images',

@@ -704,7 +704,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
 router.post("/magic-link", async (req: Request, res: Response) => {
   console.log('🔹 POST /magic-link hit with body:', req.body);
   try {
-    const { email } = req.body || {};
+    const { email, inviteToken } = req.body || {};
     if (!email) {
       console.log('❌ Email missing in request body');
       return res.status(400).json({ success: false, message: "Email is required" });
@@ -751,15 +751,20 @@ router.post("/magic-link", async (req: Request, res: Response) => {
     const tokenHash = hashToken(token);
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
 
+    const updates: any = {
+      magicLinkTokenHash: tokenHash,
+      magicLinkExpiresAt: expiresAt.toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Store invite token if provided so it can be processed on verify
+    if (inviteToken) {
+      updates.pendingInviteToken = inviteToken;
+    }
+
     await db.collection("users").updateOne(
       { id: user!.id },
-      {
-        $set: {
-          magicLinkTokenHash: tokenHash,
-          magicLinkExpiresAt: expiresAt.toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-      }
+      { $set: updates }
     );
 
     const frontendUrl = process.env.VITE_FRONTEND_URL || 
@@ -807,13 +812,55 @@ router.post("/magic-link/verify", async (req: Request, res: Response) => {
     }
 
     // one-time use
+    const unsetFields: any = { magicLinkTokenHash: "", magicLinkExpiresAt: "" };
+    if (user.pendingInviteToken) {
+      unsetFields.pendingInviteToken = "";
+    }
+
     await db.collection("users").updateOne(
       { id: user.id },
       { 
-        $unset: { magicLinkTokenHash: "", magicLinkExpiresAt: "" },
+        $unset: unsetFields,
         $set: { lastLogin: new Date().toISOString() }
       }
     );
+
+    // If there was a pending invite, automatically accept it
+    if (user.pendingInviteToken) {
+      console.log(`🔗 Processing pending invite ${user.pendingInviteToken} for user ${user.id}`);
+      try {
+        const invite = await db.collection('company_invites').findOne({
+          token: user.pendingInviteToken,
+          expiresAt: { $gt: new Date() },
+          acceptedAt: { $exists: false }
+        });
+
+        if (invite) {
+          // Add to members
+          await db.collection('company_members').updateOne(
+            { companyId: invite.companyId, userId: user.id },
+            {
+              $set: {
+                companyId: invite.companyId,
+                userId: user.id,
+                role: invite.role,
+                joinedAt: new Date()
+              }
+            },
+            { upsert: true }
+          );
+
+          // Mark invite as accepted
+          await db.collection('company_invites').updateOne(
+            { _id: invite._id },
+            { $set: { acceptedAt: new Date(), acceptedByUserId: user.id } }
+          );
+          console.log(`✅ Automatically accepted invite for user ${user.id}`);
+        }
+      } catch (inviteErr) {
+        console.error('Error auto-accepting invite:', inviteErr);
+      }
+    }
 
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
