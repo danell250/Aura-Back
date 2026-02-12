@@ -78,6 +78,7 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const db_1 = require("./db");
 const trustService_1 = require("./services/trustService");
+const migrationService_1 = require("./services/migrationService");
 const socket_io_1 = require("socket.io");
 const userUtils_1 = require("./utils/userUtils");
 const jwtUtils_1 = require("./utils/jwtUtils");
@@ -969,6 +970,8 @@ function startServer() {
                 console.log('✅ Database connection established');
                 yield seedDummyPostsIfEmpty();
                 yield seedDummyAdsIfEmpty();
+                // Run legacy company migration
+                yield (0, migrationService_1.migrateLegacyCompanies)();
             }
             catch (error) {
                 console.warn('⚠️  Database connection failed, but server is still running');

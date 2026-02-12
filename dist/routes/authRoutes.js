@@ -23,6 +23,7 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const jwtUtils_1 = require("../utils/jwtUtils");
 const tokenUtils_1 = require("../utils/tokenUtils");
 const emailService_1 = require("../services/emailService");
+const notificationsController_1 = require("../controllers/notificationsController");
 const securityLogger_1 = require("../utils/securityLogger");
 const userUtils_1 = require("../utils/userUtils");
 const router = (0, express_1.Router)();
@@ -54,8 +55,9 @@ const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, 
     const lastNameSafe = (lastName || '').toLowerCase().trim().replace(/\s+/g, '');
     const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
     try {
-        let existingUser = yield db.collection('users').findOne({ handle: baseHandle });
-        if (!existingUser) {
+        const existingUser = yield db.collection('users').findOne({ handle: baseHandle });
+        const existingCompany = yield db.collection('companies').findOne({ handle: baseHandle });
+        if (!existingUser && !existingCompany) {
             console.log('✓ Handle available:', baseHandle);
             return baseHandle;
         }
@@ -68,7 +70,8 @@ const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, 
         const candidateHandle = `${baseHandle}${randomNum}`;
         try {
             const existingUser = yield db.collection('users').findOne({ handle: candidateHandle });
-            if (!existingUser) {
+            const existingCompany = yield db.collection('companies').findOne({ handle: candidateHandle });
+            if (!existingUser && !existingCompany) {
                 console.log('✓ Handle available:', candidateHandle);
                 return candidateHandle;
             }
@@ -98,10 +101,22 @@ router.post('/check-handle', (req, res) => __awaiter(void 0, void 0, void 0, fun
         }
         const normalizedHandle = normalizeUserHandle(handle);
         const db = (0, db_1.getDB)();
-        const existingUser = yield db.collection('users').findOne({ handle: normalizedHandle });
+        const existingUser = yield db.collection('users').findOne({
+            handle: { $regex: new RegExp(`^${normalizedHandle}$`, 'i') }
+        });
+        const existingCompany = yield db.collection('companies').findOne({
+            handle: { $regex: new RegExp(`^${normalizedHandle}$`, 'i') }
+        });
+        if (existingUser || existingCompany) {
+            return res.json({
+                success: true,
+                available: false,
+                message: 'Handle is already taken'
+            });
+        }
         return res.json({
             success: true,
-            available: !existingUser,
+            available: true,
             handle: normalizedHandle
         });
     }
@@ -645,32 +660,38 @@ router.post("/magic-link/verify", (req, res) => __awaiter(void 0, void 0, void 0
             $unset: unsetFields,
             $set: { lastLogin: new Date().toISOString() }
         });
-        // If there was a pending invite, automatically accept it
+        // If there was a pending invite, link it to the user and create a notification
         if (user.pendingInviteToken) {
-            console.log(`🔗 Processing pending invite ${user.pendingInviteToken} for user ${user.id}`);
+            console.log(`🔗 Linking pending invite ${user.pendingInviteToken} for user ${user.id}`);
             try {
                 const invite = yield db.collection('company_invites').findOne({
                     token: user.pendingInviteToken,
                     expiresAt: { $gt: new Date() },
-                    acceptedAt: { $exists: false }
+                    status: 'pending'
                 });
                 if (invite) {
-                    // Add to members
-                    yield db.collection('company_members').updateOne({ companyId: invite.companyId, userId: user.id }, {
+                    // Update invite with targetUserId
+                    yield db.collection('company_invites').updateOne({ _id: invite._id }, {
                         $set: {
-                            companyId: invite.companyId,
-                            userId: user.id,
-                            role: invite.role,
-                            joinedAt: new Date()
+                            targetUserId: user.id,
+                            updatedAt: new Date()
                         }
-                    }, { upsert: true });
-                    // Mark invite as accepted
-                    yield db.collection('company_invites').updateOne({ _id: invite._id }, { $set: { acceptedAt: new Date(), acceptedByUserId: user.id } });
-                    console.log(`✅ Automatically accepted invite for user ${user.id}`);
+                    });
+                    // Get company name
+                    const company = yield db.collection('users').findOne({ id: invite.companyId });
+                    const companyName = (company === null || company === void 0 ? void 0 : company.name) || 'A Company';
+                    // Create notification so user sees it in their bell icon
+                    yield (0, notificationsController_1.createNotificationInDB)(user.id, 'company_invite', invite.invitedByUserId, `invited you to join ${companyName} as ${invite.role}`, undefined, undefined, {
+                        inviteId: invite._id.toString(),
+                        companyId: invite.companyId,
+                        role: invite.role,
+                        token: invite.token
+                    });
+                    console.log(`✅ Linked invite and created notification for new user ${user.id}`);
                 }
             }
             catch (inviteErr) {
-                console.error('Error auto-accepting invite:', inviteErr);
+                console.error('Error processing pending invite for new user:', inviteErr);
             }
         }
         const accessToken = (0, jwtUtils_1.generateAccessToken)(user);

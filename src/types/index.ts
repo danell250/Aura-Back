@@ -50,6 +50,19 @@ export interface User {
   }[];
 }
 
+export interface Company {
+  id: string;
+  name: string;
+  handle?: string;
+  industry: string;
+  bio: string;
+  website: string;
+  ownerId: string;
+  isVerified: boolean;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+}
+
 export interface PrivacySettings {
   profileVisibility: 'public' | 'friends' | 'private';
   showOnlineStatus: boolean;

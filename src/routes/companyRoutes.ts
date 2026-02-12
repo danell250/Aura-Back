@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/authMiddleware';
 import { sendCompanyInviteEmail } from '../services/emailService';
 import { createNotificationInDB } from '../controllers/notificationsController';
 import crypto from 'crypto';
+import { Company } from '../types';
 
 // Helper to generate unique handle for company
 const generateCompanyHandle = async (name: string): Promise<string> => {
@@ -46,7 +47,7 @@ router.get('/me', requireAuth, async (req, res) => {
       }
     }
 
-    const companies = await db.collection('companies').find({ id: { $in: companyIds } }).toArray();
+    const companies = await db.collection('companies').find({ id: { $in: companyIds } }).toArray() as unknown as Company[];
     
     // Fallback for legacy companies not in 'companies' collection yet
     const legacyIds = companyIds.filter(id => !companies.some(c => c.id === id));
@@ -202,7 +203,7 @@ router.get('/:companyId', requireAuth, async (req, res) => {
     const { companyId } = req.params;
     const db = getDB();
 
-    let company = await db.collection('companies').findOne({ id: companyId });
+    let company = await db.collection('companies').findOne({ id: companyId }) as unknown as Company | null;
     
     if (!company) {
       // Check legacy

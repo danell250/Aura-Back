@@ -81,6 +81,27 @@ function connectDB() {
                 console.log("✅ AdAnalyticsDaily collection initialized");
                 yield (0, AdEventDedupe_1.initializeAdEventDedupesCollection)(db);
                 console.log("✅ AdEventDedupes collection initialized");
+                // Initialize Company and Invite indexes
+                try {
+                    yield db.collection('companies').createIndex({ id: 1 }, { unique: true });
+                    yield db.collection('companies').createIndex({ ownerId: 1 });
+                    yield db.collection('companies').createIndex({ handle: 1 }, {
+                        unique: true,
+                        collation: { locale: 'en', strength: 2 },
+                        background: true,
+                        sparse: true,
+                        name: 'company_handle_unique_case_insensitive'
+                    });
+                    yield db.collection('company_members').createIndex({ companyId: 1, userId: 1 }, { unique: true });
+                    yield db.collection('company_members').createIndex({ userId: 1 });
+                    yield db.collection('company_invites').createIndex({ token: 1 }, { unique: true });
+                    yield db.collection('company_invites').createIndex({ email: 1 });
+                    yield db.collection('company_invites').createIndex({ companyId: 1 });
+                    console.log("✅ Company and Invite indexes initialized");
+                }
+                catch (companyIndexError) {
+                    console.warn("⚠️  Warning: Could not initialize company indexes:", companyIndexError);
+                }
                 // Initialize Post collection indexes
                 try {
                     yield db.collection('posts').createIndex({ 'author.id': 1 });
