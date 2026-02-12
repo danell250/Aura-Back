@@ -22,7 +22,8 @@ export const shareController = {
       const db = getDB();
       const post = await db.collection('posts').findOne({ id });
 
-      const frontendUrl = process.env.VITE_FRONTEND_URL || 'https://www.aura.net.za';
+      const frontendUrl = process.env.VITE_FRONTEND_URL || 
+        (req.headers.origin ? req.headers.origin.toString() : 'https://www.aura.net.za');
 
       if (!post) {
         // Fallback to generic metadata if post not found

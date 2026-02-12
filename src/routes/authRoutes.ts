@@ -245,7 +245,8 @@ router.get('/google/callback',
         setTokenCookies(res, accessToken, refreshToken);
 
         const frontendUrl = process.env.VITE_FRONTEND_URL ||
-          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+          (req.headers.origin ? req.headers.origin.toString() : 
+          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
 
         console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
         res.redirect(`${frontendUrl}/feed`);
@@ -354,7 +355,8 @@ router.get('/github/callback',
         setTokenCookies(res, accessToken, refreshToken);
 
         const frontendUrl = process.env.VITE_FRONTEND_URL ||
-          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+          (req.headers.origin ? req.headers.origin.toString() : 
+          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
 
         console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
         res.redirect(`${frontendUrl}/feed`);
@@ -536,7 +538,8 @@ router.get('/linkedin/callback', async (req: Request, res: Response) => {
     setTokenCookies(res, newAccessToken, refreshToken);
 
     const frontendUrl = process.env.VITE_FRONTEND_URL ||
-      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+      (req.headers.origin ? req.headers.origin.toString() : 
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
 
     console.log('[OAuth:LinkedIn] Redirecting to:', `${frontendUrl}/dashboard`);
     res.redirect(`${frontendUrl}/dashboard`);
@@ -759,7 +762,9 @@ router.post("/magic-link", async (req: Request, res: Response) => {
       }
     );
 
-    const frontendUrl = process.env.VITE_FRONTEND_URL || (process.env.NODE_ENV === "development" ? "http://localhost:5173" : "https://www.aura.net.za");
+    const frontendUrl = process.env.VITE_FRONTEND_URL || 
+      (req.headers.origin ? req.headers.origin.toString() : 
+      (process.env.NODE_ENV === "development" ? "http://localhost:5173" : "https://www.aura.net.za"));
     const magicLink = `${frontendUrl}/magic-login?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
     
     console.log('📧 Attempting to send magic link email to:', normalizedEmail);
@@ -1039,7 +1044,8 @@ router.get('/github/callback',
         setTokenCookies(res, accessToken, refreshToken);
 
         const frontendUrl = process.env.VITE_FRONTEND_URL ||
-          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+          (req.headers.origin ? req.headers.origin.toString() : 
+          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
 
         console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}/feed`);
         res.redirect(`${frontendUrl}/feed`);
