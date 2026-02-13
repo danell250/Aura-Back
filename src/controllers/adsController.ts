@@ -15,7 +15,7 @@ function fingerprint(req: Request) {
   return crypto.createHash('sha256').update(`${ip}|${ua}`).digest('hex');
 }
 
-export const emitAdAnalyticsUpdate = async (app: any, adId: string, ownerId: string) => {
+export const emitAdAnalyticsUpdate = async (app: any, adId: string, ownerId: string, ownerType: 'user' | 'company' = 'user') => {
   try {
     if (!adId || !ownerId) return;
     const io = app?.get && app.get('io');
@@ -28,9 +28,9 @@ export const emitAdAnalyticsUpdate = async (app: any, adId: string, ownerId: str
     const analytics = await db.collection('adAnalytics').findOne({ adId });
     if (!analytics) return;
 
-    console.log(`📡 Emitting live ad analytics update to user: ${ownerId}`);
-    io.to(ownerId).emit('analytics_update', {
-      userId: ownerId,
+    console.log(`📡 Emitting live ad analytics update to ${ownerType}: ${ownerId}`);
+    
+    const payload: any = {
       stats: {
         adMetrics: {
           adId: analytics.adId,
@@ -44,7 +44,15 @@ export const emitAdAnalyticsUpdate = async (app: any, adId: string, ownerId: str
           lastUpdated: analytics.lastUpdated || Date.now()
         }
       }
-    });
+    };
+
+    if (ownerType === 'company') {
+      payload.companyId = ownerId;
+      io.to(`company_${ownerId}`).emit('analytics_update', payload);
+    } else {
+      payload.userId = ownerId;
+      io.to(ownerId).emit('analytics_update', payload);
+    }
   } catch (err) {
     console.error('emitAdAnalyticsUpdate error', err);
   }
@@ -61,11 +69,35 @@ export const adsController = {
         return res.status(401).json({ success: false, error: 'Unauthorized' });
       }
 
+      const ownerType = (req.query.ownerType as string) || 'user';
+      const ownerId = (req.query.ownerId as string) || currentUser.id;
+
+      // Security check: If ownerType is user, ownerId must be currentUser.id
+      if (ownerType === 'user' && ownerId !== currentUser.id) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden',
+          message: 'You can only view your own ads.'
+        });
+      }
+
+      // Security check: If ownerType is company, user must be the owner of the company
+      if (ownerType === 'company') {
+        const company = await db.collection('companies').findOne({ id: ownerId, ownerId: currentUser.id });
+        if (!company) {
+          return res.status(403).json({
+            success: false,
+            error: 'Forbidden',
+            message: 'You do not have permission to view ads for this company.'
+          });
+        }
+      }
+
       const limit = Math.min(Number(req.query.limit || 50), 200);
       const skip = Math.max(Number(req.query.skip || 0), 0);
 
       const ads = await db.collection('ads')
-        .find({ ownerId: currentUser.id })
+        .find({ ownerId, ownerType })
         .sort({ timestamp: -1 })
         .skip(skip)
         .limit(limit)
@@ -81,7 +113,7 @@ export const adsController = {
   // GET /api/ads - Get all ads
   getAllAds: async (req: Request, res: Response) => {
     try {
-      const { page = 1, limit = 10, placement, status, hashtags } = req.query;
+      const { page = 1, limit = 10, placement, status, hashtags, ownerType } = req.query;
       let { ownerId } = req.query;
       
       const currentUser = (req as any).user;
@@ -89,7 +121,19 @@ export const adsController = {
 
       // Security hardening: Only admins can filter by arbitrary ownerId
       if (ownerId && !isAdmin) {
-        ownerId = undefined;
+        // Allow users to see their own ads or their company's ads if they are the owner
+        const isOwnUser = ownerId === currentUser?.id;
+        let isOwnCompany = false;
+        
+        if (!isOwnUser && ownerType === 'company' && currentUser?.id) {
+          const db = getDB();
+          const company = await db.collection('companies').findOne({ id: ownerId, ownerId: currentUser.id });
+          isOwnCompany = !!company;
+        }
+
+        if (!isOwnUser && !isOwnCompany) {
+          ownerId = undefined;
+        }
       }
 
       const currentUserId = currentUser?.id;
@@ -114,9 +158,12 @@ export const adsController = {
         query.placement = placement;
       }
       
-      // Filter by owner if specified (Admins only, enforced above)
+      // Filter by owner if specified (Admins or owner check above)
       if (ownerId) {
         query.ownerId = ownerId;
+        if (ownerType) {
+          query.ownerType = ownerType;
+        }
       }
       
       // Filter by hashtags if specified
@@ -141,13 +188,26 @@ export const adsController = {
         { 
           $lookup: { 
             from: 'adSubscriptions', 
-            let: { ownerId: '$ownerId' }, 
+            let: { ownerId: '$ownerId', ownerType: '$ownerType' }, 
             pipeline: [ 
               { 
                 $match: { 
                   $expr: { 
                     $and: [ 
-                      { $eq: ['$userId', '$$ownerId'] }, 
+                      { 
+                        $or: [
+                          { $and: [{ $eq: ['$ownerId', '$$ownerId'] }, { $eq: ['$ownerType', '$$ownerType'] }] },
+                          { $and: [{ $eq: ['$userId', '$$ownerId'] }, { $eq: ['$ownerType', '$$ownerType'] }] },
+                          // legacy support: if ownerType is user, match documents without ownerType
+                          { 
+                            $and: [
+                              { $eq: ['$$ownerType', 'user'] },
+                              { $eq: ['$userId', '$$ownerId'] },
+                              { $not: ['$ownerType'] }
+                            ]
+                          }
+                        ]
+                      },
                       { $eq: ['$status', 'active'] }, 
                       { 
                         $or: [ 
@@ -259,6 +319,8 @@ export const adsController = {
       }
 
       const userId = currentUser.id;
+      const ownerId = adData.ownerId || userId;
+      const ownerType = adData.ownerType || 'user';
 
       // Ensure required fields
       if (!adData.headline) {
@@ -269,12 +331,25 @@ export const adsController = {
         });
       }
 
-      if (adData.ownerId && adData.ownerId !== userId) {
+      // Security check: If ownerType is user, ownerId must be currentUser.id
+      if (ownerType === 'user' && ownerId !== userId) {
         return res.status(403).json({
           success: false,
           error: 'Owner mismatch',
           message: 'You can only create ads for your own account.'
         });
+      }
+
+      // Security check: If ownerType is company, user must be the owner of the company
+      if (ownerType === 'company') {
+        const company = await db.collection('companies').findOne({ id: ownerId, ownerId: userId });
+        if (!company) {
+          return res.status(403).json({
+            success: false,
+            error: 'Permission denied',
+            message: 'You do not have permission to create ads for this company.'
+          });
+        }
       }
 
       const isSpecialUser =
@@ -287,15 +362,34 @@ export const adsController = {
 
       // Check subscription limits and enforce at ACTION TIME
       if (!isSpecialUser) {
-        // Fetch active subscription for the user
-        subscription = await db.collection('adSubscriptions').findOne({
-          userId,
+        // Fetch active subscription for the owner (user or company)
+        const subscriptionQuery: any = {
           status: 'active',
           $or: [
             { endDate: { $exists: false } },
             { endDate: { $gt: now } }
+          ],
+          $and: [
+            {
+              $or: [
+                { ownerId: ownerId, ownerType: ownerType },
+                { userId: ownerId, ownerType: ownerType } // backward compatibility
+              ]
+            }
           ]
-        });
+        };
+
+        // If looking for user type, also match legacy documents without ownerType
+        if (ownerType === 'user') {
+          (subscriptionQuery.$and[0] as any).$or.push({ userId: ownerId, ownerType: { $exists: false } });
+        }
+
+        subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
+
+        if (subscription) {
+           // Ensure period is current before checking limits
+           subscription = await ensureCurrentPeriod(db, subscription);
+        }
 
         // If no active subscription, allow creation only if they have credits? 
         // OR strictly enforce plan.
@@ -307,11 +401,45 @@ export const adsController = {
              message: 'No active ad plan found. Please purchase a plan to create ads.'
            });
         }
+
+        // Check active ads limit
+        const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
+        const activeAdsLimit = plan ? plan.activeAdsLimit : 0;
+
+        if (activeAdsLimit > 0) {
+          const activeAdsCount = await db.collection('ads').countDocuments({
+            ownerId: ownerId,
+            ownerType: ownerType,
+            status: 'active'
+          });
+
+          if (activeAdsCount >= activeAdsLimit) {
+            return res.status(403).json({
+              success: false,
+              code: 'ACTIVE_AD_LIMIT_REACHED',
+              error: 'Active ad limit reached',
+              message: `You have reached your limit of ${activeAdsLimit} active ads for your current plan. Please deactivate an existing ad or upgrade your plan.`,
+              limit: activeAdsLimit,
+              current: activeAdsCount
+            });
+          }
+        }
+
+        // Check impression limit
+        if (subscription.impressionsUsed >= subscription.impressionLimit) {
+          return res.status(403).json({
+            success: false,
+            error: `Monthly impression limit reached (${subscription.impressionLimit}). Upgrade or wait for renewal.`,
+            limit: subscription.impressionLimit,
+            current: subscription.impressionsUsed
+          });
+        }
       }
 
       const newAd = {
         ...adData,
-        ownerId: userId,
+        ownerId: ownerId,
+        ownerType: ownerType,
         ownerActiveGlow: currentUser.activeGlow, // Enforce from trusted user object
         id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         timestamp: Date.now(),
@@ -326,6 +454,7 @@ export const adsController = {
         await db.collection('adAnalytics').insertOne({
         adId: newAd.id,
         ownerId: newAd.ownerId,
+        ownerType: newAd.ownerType,
         impressions: 0,
         clicks: 0,
         ctr: 0,
@@ -451,6 +580,28 @@ export const adsController = {
         updates.hashtags = getHashtagsFromText(updates.description || '');
       }
       
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      const currentUser = (req as any).user;
+      const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
+      let hasPermission = isAdmin;
+
+      if (!hasPermission && currentUser) {
+        if (ad.ownerType === 'user' || !ad.ownerType) {
+          hasPermission = ad.ownerId === currentUser.id;
+        } else if (ad.ownerType === 'company') {
+          const company = await db.collection('companies').findOne({ id: ad.ownerId, ownerId: currentUser.id });
+          hasPermission = !!company;
+        }
+      }
+
+      if (!hasPermission) {
+        return res.status(403).json({ success: false, error: 'Forbidden' });
+      }
+
       const result = await db.collection('ads').findOneAndUpdate(
         { id },
         { $set: updates },
@@ -489,11 +640,22 @@ export const adsController = {
       }
 
       const isAdmin = currentUser.role === 'admin' || currentUser.isAdmin === true;
-      if (!isAdmin && ad.ownerId !== currentUser.id) {
+      let hasPermission = isAdmin;
+
+      if (!hasPermission) {
+        if (ad.ownerType === 'user' || !ad.ownerType) {
+          hasPermission = ad.ownerId === currentUser.id;
+        } else if (ad.ownerType === 'company') {
+          const company = await db.collection('companies').findOne({ id: ad.ownerId, ownerId: currentUser.id });
+          hasPermission = !!company;
+        }
+      }
+
+      if (!hasPermission) {
         return res.status(403).json({
           success: false,
           error: 'Forbidden',
-          message: 'You can only delete your own ads'
+          message: 'You do not have permission to delete this ad'
         });
       }
       
@@ -528,7 +690,18 @@ export const adsController = {
       }
 
       const isAdmin = currentUser.role === 'admin' || currentUser.isAdmin === true;
-      if (!isAdmin && ad.ownerId !== currentUser.id) {
+      let hasPermission = isAdmin;
+      
+      if (!hasPermission) {
+        if (ad.ownerType === 'user' || !ad.ownerType) {
+          hasPermission = ad.ownerId === currentUser.id;
+        } else if (ad.ownerType === 'company') {
+          const company = await db.collection('companies').findOne({ id: ad.ownerId, ownerId: currentUser.id });
+          hasPermission = !!company;
+        }
+      }
+
+      if (!hasPermission) {
         return res.status(403).json({ success: false, error: 'Forbidden' });
       }
       
@@ -536,14 +709,31 @@ export const adsController = {
       if (status === 'active' && ad.status !== 'active') {
         // Get active subscription
         const now = Date.now();
-        let subscription = await db.collection('adSubscriptions').findOne({
-          userId: currentUser.id,
+        const ownerId = ad.ownerId;
+        const ownerType = ad.ownerType || 'user';
+
+        const subscriptionQuery: any = {
           status: 'active',
           $or: [
             { endDate: { $exists: false } },
             { endDate: { $gt: now } }
+          ],
+          $and: [
+            {
+              $or: [
+                { ownerId: ownerId, ownerType: ownerType },
+                { userId: ownerId, ownerType: ownerType } // backward compatibility
+              ]
+            }
           ]
-        });
+        };
+
+        // If looking for user type, also match legacy documents without ownerType
+        if (ownerType === 'user') {
+          (subscriptionQuery.$and[0] as any).$or.push({ userId: ownerId, ownerType: { $exists: false } });
+        }
+
+        let subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
 
         if (subscription) {
            // Ensure period is current before checking limits
@@ -557,9 +747,10 @@ export const adsController = {
 
           if (activeAdsLimit > 0) {
             const activeAdsCount = await db.collection('ads').countDocuments({
-              ownerId: currentUser.id,
-              status: 'active'
-            });
+        ownerId: ad.ownerId,
+        ownerType: ad.ownerType || 'user',
+        status: 'active'
+      });
 
             if (activeAdsCount >= activeAdsLimit) {
               return res.status(403).json({
@@ -592,7 +783,7 @@ export const adsController = {
       );
 
       // Emit real-time update
-      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId, ad.ownerType || 'user');
       
       res.json({ success: true, data: result });
     } catch (error) {
@@ -613,7 +804,18 @@ export const adsController = {
 
       const currentUser = (req as any).user;
       const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
-      if (!isAdmin && (!currentUser || currentUser.id !== ad.ownerId)) {
+      
+      let hasPermission = isAdmin;
+      if (!hasPermission && currentUser) {
+        if (ad.ownerType === 'company') {
+          const company = await db.collection('companies').findOne({ id: ad.ownerId, ownerId: currentUser.id });
+          hasPermission = !!company;
+        } else {
+          hasPermission = currentUser.id === ad.ownerId;
+        }
+      }
+
+      if (!hasPermission) {
         return res.status(403).json({
           success: false,
           error: 'Forbidden',
@@ -623,13 +825,33 @@ export const adsController = {
 
       const analytics = await db.collection('adAnalytics').findOne({ adId: id });
 
-      // Check user subscription level
+      // Check owner subscription level
       const now = Date.now();
-      const subscription = await db.collection('adSubscriptions').findOne({
-        userId: currentUser.id, // Viewer is owner (checked above)
+      const ownerId = ad.ownerId;
+      const ownerType = ad.ownerType || 'user';
+
+      const subscriptionQuery: any = {
         status: 'active',
-        $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
-      });
+        $or: [
+          { endDate: { $exists: false } },
+          { endDate: { $gt: now } }
+        ],
+        $and: [
+          {
+            $or: [
+              { ownerId: ownerId, ownerType: ownerType },
+              { userId: ownerId, ownerType: ownerType } // backward compatibility
+            ]
+          }
+        ]
+      };
+
+      // If looking for user type, also match legacy documents without ownerType
+      if (ownerType === 'user') {
+        (subscriptionQuery.$and[0] as any).$or.push({ userId: ownerId, ownerType: { $exists: false } });
+      }
+
+      const subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
 
       const packageId = subscription ? subscription.packageId : 'pkg-starter';
       const isBasic = packageId === 'pkg-starter';
@@ -699,19 +921,27 @@ export const adsController = {
   getUserAdPerformance: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
+      const ownerType = (req.query.ownerType as string) || 'user';
+      const ownerId = userId; // In this route, the param is named userId but could be companyId
       const db = getDB();
 
       const currentUser = (req as any).user;
       const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
-      if (!isAdmin && (!currentUser || currentUser.id !== userId)) {
-        return res.status(403).json({
-          success: false,
-          error: 'Forbidden',
-          message: 'You can only view analytics for your own ads'
-        });
+      
+      // Security check
+      if (!isAdmin) {
+        if (ownerType === 'user' && (!currentUser || currentUser.id !== ownerId)) {
+          return res.status(403).json({ success: false, error: 'Forbidden' });
+        }
+        if (ownerType === 'company') {
+          const company = await db.collection('companies').findOne({ id: ownerId, ownerId: currentUser.id });
+          if (!company) {
+            return res.status(403).json({ success: false, error: 'Forbidden' });
+          }
+        }
       }
 
-      const ads = await db.collection('ads').find({ ownerId: userId }).toArray();
+      const ads = await db.collection('ads').find({ ownerId, ownerType }).toArray();
       if (!ads || ads.length === 0) {
         return res.json({ success: true, data: [] });
       }
@@ -722,13 +952,30 @@ export const adsController = {
         .find({ adId: { $in: adIds } })
         .toArray();
 
-      // Check user subscription level
+      // Check user/company subscription level
       const now = Date.now();
-      const subscription = await db.collection('adSubscriptions').findOne({
-        userId,
+      const subscriptionQuery: any = {
         status: 'active',
-        $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
-      });
+        $or: [
+          { endDate: { $exists: false } },
+          { endDate: { $gt: now } }
+        ],
+        $and: [
+          {
+            $or: [
+              { ownerId: ownerId, ownerType: ownerType },
+              { userId: ownerId, ownerType: ownerType } // backward compatibility
+            ]
+          }
+        ]
+      };
+
+      // If looking for user type, also match legacy documents without ownerType
+      if (ownerType === 'user') {
+        (subscriptionQuery.$and[0] as any).$or.push({ userId: ownerId, ownerType: { $exists: false } });
+      }
+
+      const subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
 
       const packageId = subscription ? subscription.packageId : 'pkg-starter';
 
@@ -778,19 +1025,27 @@ export const adsController = {
   getCampaignPerformance: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
+      const ownerType = (req.query.ownerType as string) || 'user';
+      const ownerId = userId;
       const db = getDB();
 
       const currentUser = (req as any).user;
       const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
-      if (!isAdmin && (!currentUser || currentUser.id !== userId)) {
-        return res.status(403).json({
-          success: false,
-          error: 'Forbidden',
-          message: 'You can only view campaign analytics for your own ads'
-        });
+      
+      // Security check
+      if (!isAdmin) {
+        if (ownerType === 'user' && (!currentUser || currentUser.id !== ownerId)) {
+          return res.status(403).json({ success: false, error: 'Forbidden' });
+        }
+        if (ownerType === 'company') {
+          const company = await db.collection('companies').findOne({ id: ownerId, ownerId: currentUser.id });
+          if (!company) {
+            return res.status(403).json({ success: false, error: 'Forbidden' });
+          }
+        }
       }
 
-      const ads = await db.collection('ads').find({ ownerId: userId }).toArray();
+      const ads = await db.collection('ads').find({ ownerId, ownerType }).toArray();
       if (!ads || ads.length === 0) {
         return res.json({
           success: true,
@@ -808,13 +1063,30 @@ export const adsController = {
         });
       }
 
-      // Check user subscription level
+      // Check user/company subscription level
       const now = Date.now();
-      const subscription = await db.collection('adSubscriptions').findOne({
-        userId,
+      const subscriptionQuery: any = {
         status: 'active',
-        $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
-      });
+        $or: [
+          { endDate: { $exists: false } },
+          { endDate: { $gt: now } }
+        ],
+        $and: [
+          {
+            $or: [
+              { ownerId: ownerId, ownerType: ownerType },
+              { userId: ownerId, ownerType: ownerType } // backward compatibility
+            ]
+          }
+        ]
+      };
+
+      // If looking for user type, also match legacy documents without ownerType
+      if (ownerType === 'user') {
+        (subscriptionQuery.$and[0] as any).$or.push({ userId: ownerId, ownerType: { $exists: false } });
+      }
+
+      const subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
 
       const packageId = subscription ? subscription.packageId : 'pkg-starter';
       const isBasic = packageId === 'pkg-starter';
@@ -878,7 +1150,7 @@ export const adsController = {
         ? Math.ceil((subscription.endDate - now) / (1000 * 60 * 60 * 24))
         : null;
 
-      const build7DayTrend = async (ownerId: string) => {
+      const build7DayTrend = async (ownerId: string, ownerType: string) => {
         const days = 7;
         const start = new Date();
         start.setUTCHours(0, 0, 0, 0);
@@ -892,7 +1164,7 @@ export const adsController = {
         }
 
         const docs = await db.collection('adAnalyticsDaily')
-          .find({ ownerId, dateKey: { $in: keys } })
+          .find({ ownerId, ownerType, dateKey: { $in: keys } })
           .toArray();
 
         const map = new Map<string, any>();
@@ -919,7 +1191,7 @@ export const adsController = {
         return Array.from(map.values());
       };
 
-      const trendData = await build7DayTrend(userId);
+      const trendData = await build7DayTrend(ownerId, ownerType);
 
       const data: any = {
         totalImpressions,
@@ -966,7 +1238,7 @@ export const adsController = {
 
       // 2. Get Ad Owner's Subscription
       let subscription = await db.collection('adSubscriptions').findOne({
-        userId: ad.ownerId,
+        userId: ad.ownerId, // This is already the correct ID (userId or companyId)
         status: 'active',
         $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
       });
@@ -1011,6 +1283,8 @@ export const adsController = {
       await db.collection('adEventDedupes').insertOne({
         key: dedupKey,
         adId: id,
+        ownerId: ad.ownerId,
+        ownerType: ad.ownerType || 'user',
         dateKey: todayKey,
         fingerprint: userFingerprint,
         timestamp: now,
@@ -1019,7 +1293,7 @@ export const adsController = {
 
       // Increment uniqueReach in adAnalyticsDaily
       await db.collection('adAnalyticsDaily').updateOne(
-        { adId: id, ownerId: ad.ownerId, dateKey: todayKey },
+        { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: todayKey },
         { $inc: { uniqueReach: 1 } },
         { upsert: true }
       );
@@ -1039,7 +1313,11 @@ export const adsController = {
             impressions: 1,
             spend: cpi
           },
-          $set: { lastUpdated: now }
+          $set: { 
+            lastUpdated: now,
+            ownerId: ad.ownerId,
+            ownerType: ad.ownerType || 'user'
+          }
         },
         { upsert: true }
       );
@@ -1052,7 +1330,7 @@ export const adsController = {
 
       // 7. Update Daily Rollup (for trends and accurate CTR calculation)
       await db.collection('adDailyRollups').updateOne(
-        { adId: id, dateKey: todayKey },
+        { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: todayKey },
         {
           $inc: { impressions: 1 },
           $set: { lastUpdated: now }
@@ -1072,7 +1350,7 @@ export const adsController = {
       }
 
       // Emit real-time update
-      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId, ad.ownerType || 'user');
 
       res.json({ success: true, message: 'Impression tracked successfully.' });
     } catch (error) {
@@ -1121,13 +1399,13 @@ export const adsController = {
       );
 
       await db.collection('adAnalyticsDaily').updateOne(
-        { adId: id, ownerId: ad.ownerId, dateKey: dKey },
+        { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey },
         { $inc: { clicks: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } },
         { upsert: true }
       );
 
       // Emit real-time update
-      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId, ad.ownerType || 'user');
 
       res.json({ success: true });
     } catch (error) {
@@ -1152,7 +1430,7 @@ export const adsController = {
       // dedupe engagement per day per type
       const dedupe = await db.collection('adEventDedupes').updateOne(
         { adId: id, eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey },
-        { $setOnInsert: { adId: id, ownerId: ad.ownerId, eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey, createdAt: now } },
+        { $setOnInsert: { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey, createdAt: now } },
         { upsert: true }
       );
 
@@ -1165,18 +1443,25 @@ export const adsController = {
 
       await db.collection('adAnalytics').updateOne(
         { adId: id },
-        { $inc: inc, $set: { lastUpdated: now } },
+        { 
+          $inc: inc, 
+          $set: { 
+            lastUpdated: now,
+            ownerId: ad.ownerId,
+            ownerType: ad.ownerType || 'user'
+          } 
+        },
         { upsert: true }
       );
 
       await db.collection('adAnalyticsDaily').updateOne(
-        { adId: id, ownerId: ad.ownerId, dateKey: dKey },
+        { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey },
         { $inc: { engagement: 1, ...(engagementType ? { [`engagementByType.${engagementType}`]: 1 } : {}) }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } },
         { upsert: true }
       );
 
       // Emit real-time update
-      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId, ad.ownerType || 'user');
 
       res.json({ success: true });
     } catch (error) {
@@ -1199,7 +1484,7 @@ export const adsController = {
 
       const dedupe = await db.collection('adEventDedupes').updateOne(
         { adId: id, eventType: 'conversion', fingerprint: fp, dateKey: dKey },
-        { $setOnInsert: { adId: id, ownerId: ad.ownerId, eventType: 'conversion', fingerprint: fp, dateKey: dKey, createdAt: now } },
+        { $setOnInsert: { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', eventType: 'conversion', fingerprint: fp, dateKey: dKey, createdAt: now } },
         { upsert: true }
       );
 
@@ -1209,19 +1494,23 @@ export const adsController = {
         { adId: id },
         {
           $inc: { conversions: 1 },
-          $set: { lastUpdated: now }
+          $set: { 
+            lastUpdated: now,
+            ownerId: ad.ownerId,
+            ownerType: ad.ownerType || 'user'
+          }
         },
         { upsert: true }
       );
 
       await db.collection('adAnalyticsDaily').updateOne(
-        { adId: id, ownerId: ad.ownerId, dateKey: dKey },
+        { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey },
         { $inc: { conversions: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } },
         { upsert: true }
       );
 
       // Emit real-time update
-      emitAdAnalyticsUpdate(req.app, id, ad.ownerId);
+      emitAdAnalyticsUpdate(req.app, id, ad.ownerId, ad.ownerType || 'user');
 
       res.json({ success: true });
     } catch (error) {

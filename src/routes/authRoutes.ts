@@ -1420,7 +1420,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
 // ============ COMPLETE OAUTH PROFILE ============
 router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
   try {
-    const { firstName, lastName, bio, industry, companyName, handle } = req.body;
+    const { firstName, lastName, bio, handle } = req.body;
     const tempOAuthData = (req.session as any)?.tempOAuthData;
 
     if (!tempOAuthData) {
@@ -1465,8 +1465,6 @@ router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
       githubId: tempOAuthData.githubId,
       handle: normalizedHandle,
       bio: bio?.trim() || '',
-      industry: industry || 'Other',
-      companyName: companyName?.trim() || '',
       trustScore: 10,
       auraCredits: 100,
       activeGlow: 'none',

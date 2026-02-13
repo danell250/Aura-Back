@@ -513,7 +513,7 @@ export const usersController = {
         });
       }
 
-      const { googleId, id: _ignoredId, ...mutableUpdates } = updates;
+      const { googleId, id: _ignoredId, companyName, companyWebsite, industry, ...mutableUpdates } = updates;
       const updateData: any = {
         ...mutableUpdates
       };

@@ -103,12 +103,26 @@ export const adSubscriptionsController = {
   getUserSubscriptions: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
-      console.log('[AdSubscriptions] Fetching subscriptions for user:', userId);
+      const { ownerType = 'user' } = req.query;
+      console.log(`[AdSubscriptions] Fetching subscriptions for ${ownerType}:`, userId);
       
       const db = getDB();
 
+      const query: any = {
+        $or: [
+          { ownerId: userId, ownerType },
+          { userId: userId, ownerType } // backward compatibility
+        ]
+      };
+      
+      // If no ownerType was explicitly set in the document yet (old data), 
+      // and we're looking for 'user' type, also match documents without ownerType
+      if (ownerType === 'user') {
+        query.$or.push({ userId, ownerType: { $exists: false } });
+      }
+
       const subscriptions = await db.collection(AD_SUBSCRIPTIONS_COLLECTION)
-        .find({ userId })
+        .find(query)
         .sort({ createdAt: -1 })
         .toArray();
 
@@ -138,7 +152,8 @@ export const adSubscriptionsController = {
         packageName,
         paypalSubscriptionId,
         adLimit,
-        durationDays
+        durationDays,
+        ownerType = 'user'
       } = req.body;
 
       if (!userId || !packageId || !packageName || !adLimit) {
@@ -167,7 +182,9 @@ export const adSubscriptionsController = {
 
       const newSubscription = {
         id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
-        userId,
+        userId, // Legacy field
+        ownerId: userId, // New standardized field
+        ownerType,
         packageId,
         packageName,
         status: 'active',
@@ -190,6 +207,8 @@ export const adSubscriptionsController = {
       // Log the transaction
       await db.collection('transactions').insertOne({
         userId,
+        ownerId: userId,
+        ownerType,
         type: 'ad_subscription',
         packageId,
         packageName,
@@ -353,19 +372,38 @@ export const adSubscriptionsController = {
   getActiveSubscriptions: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
+      const { ownerType = 'user' } = req.query;
       const db = getDB();
       const now = Date.now();
 
+      const baseQuery = {
+        status: 'active',
+        $or: [
+          { endDate: { $exists: false } }, // Ongoing subscriptions
+          { endDate: { $gt: now } } // Not expired
+        ]
+      };
+
+      const query: any = {
+        $and: [
+          baseQuery,
+          {
+            $or: [
+              { ownerId: userId, ownerType },
+              { userId: userId, ownerType }
+            ]
+          }
+        ]
+      };
+
+      // Handle legacy 'user' subscriptions without ownerType field
+      if (ownerType === 'user') {
+        (query.$and[1] as any).$or.push({ userId, ownerType: { $exists: false } });
+      }
+
       // Find active subscriptions that haven't expired
       const activeSubscriptions = await db.collection(AD_SUBSCRIPTIONS_COLLECTION)
-        .find({
-          userId,
-          status: 'active',
-          $or: [
-            { endDate: { $exists: false } }, // Ongoing subscriptions
-            { endDate: { $gt: now } } // Not expired
-          ]
-        })
+        .find(query)
         .sort({ createdAt: -1 })
         .toArray();
 
@@ -376,12 +414,21 @@ export const adSubscriptionsController = {
       }
 
       // Auto-expire any subscriptions that have passed their end date
+      const expireQuery: any = {
+        status: 'active',
+        endDate: { $exists: true, $lte: now },
+        $or: [
+          { ownerId: userId, ownerType },
+          { userId: userId, ownerType }
+        ]
+      };
+
+      if (ownerType === 'user') {
+        expireQuery.$or.push({ userId, ownerType: { $exists: false } });
+      }
+
       await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany(
-        {
-          userId,
-          status: 'active',
-          endDate: { $exists: true, $lte: now }
-        },
+        expireQuery,
         {
           $set: { status: 'expired', updatedAt: now }
         }

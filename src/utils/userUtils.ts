@@ -12,6 +12,11 @@ export const transformUser = (user: any): any => {
   // and to treat it as a plain object.
   const transformed = { ...user };
 
+  // Remove legacy company fields from User objects to prevent leakage
+  delete transformed.companyName;
+  delete transformed.companyWebsite;
+  delete transformed.industry;
+
   if (transformed.avatarKey) {
     transformed.avatar = `${s3BaseUrl}/${transformed.avatarKey}`;
   }

@@ -3,6 +3,7 @@ import { Db, Collection } from 'mongodb';
 export interface IAdAnalyticsDaily {
   adId: string;
   ownerId: string;
+  ownerType?: 'user' | 'company';
   dateKey: string; // YYYY-MM-DD
   impressions: number;
   clicks: number;

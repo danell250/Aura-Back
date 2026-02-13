@@ -26,9 +26,6 @@ export interface User {
   trustScore: number; 
   auraCredits: number;
   activeGlow?: 'emerald' | 'cyan' | 'amber' | 'gold' | 'silver' | 'bronze' | 'none';
-  companyName?: string;
-  industry?: string;
-  employeeCount?: number;
   // Backend-specific fields
   googleId?: string;
   githubId?: string;
@@ -148,4 +145,39 @@ export interface MediaItem {
   caption?: string;
   order: number;
   metrics: MediaItemMetrics;
+}
+
+export interface Ad {
+  id: string;
+  ownerId: string;
+  ownerType: 'user' | 'company';
+  headline: string;
+  description: string;
+  imageUrl?: string;
+  videoUrl?: string;
+  ctaText?: string;
+  ctaUrl?: string;
+  status: 'active' | 'paused' | 'expired' | 'draft';
+  placement: 'feed' | 'sidebar' | 'story' | 'search';
+  hashtags: string[];
+  expiryDate?: number;
+  timestamp: number;
+  reactions?: Record<string, number>;
+  reactionUsers?: Record<string, string[]>;
+  ownerActiveGlow?: string;
+  budget?: number;
+}
+
+export interface AdAnalytics {
+  adId: string;
+  ownerId: string;
+  ownerType: 'user' | 'company';
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  reach: number;
+  engagement: number;
+  conversions: number;
+  spend: number;
+  lastUpdated: number;
 }

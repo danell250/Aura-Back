@@ -56,9 +56,7 @@ function calculateProfileCompleteness(user: any): number {
     'bio',
     'email',
     'dob',
-    'phone',
-    'companyName',
-    'companyWebsite'
+    'phone'
   ];
   const filled = fields.reduce((acc, key) => {
     const value = (user as any)[key];
@@ -227,19 +225,8 @@ function calculateHashtagOverlapScore(baseTags: Set<string>, candidateTags: Set<
 }
 
 function calculateIndustryMatchScore(currentUser: any, candidate: any): { score: number; match: boolean } {
-  const a = typeof currentUser.industry === 'string' ? currentUser.industry.toLowerCase().trim() : '';
-  const b = typeof candidate.industry === 'string' ? candidate.industry.toLowerCase().trim() : '';
-  if (!a || !b) {
-    return { score: 0, match: false };
-  }
-  if (a === b) {
-    return { score: 15, match: true };
-  }
-  const aRoot = a.split(' ')[0];
-  const bRoot = b.split(' ')[0];
-  if (aRoot && bRoot && aRoot === bRoot) {
-    return { score: 8, match: true };
-  }
+  // Industry-based matching for users is deprecated as industry is no longer stored on User objects.
+  // Future implementation will use company memberships.
   return { score: 0, match: false };
 }
 

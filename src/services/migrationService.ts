@@ -70,6 +70,18 @@ export async function migrateLegacyCompanies(): Promise<void> {
 
         await db.collection('companies').insertOne(newCompany);
         
+        // Remove legacy fields from user object
+        await db.collection('users').updateOne(
+          { id: user.id },
+          { 
+            $unset: { 
+              companyName: "", 
+              companyWebsite: "", 
+              industry: "" 
+            } 
+          }
+        );
+        
         // Ensure user also has a handle if they didn't have one (though they should)
         if (!user.handle) {
           await db.collection('users').updateOne(
