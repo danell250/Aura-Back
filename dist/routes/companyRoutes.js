@@ -80,7 +80,7 @@ router.get('/me', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, 
     }
     catch (error) {
         console.error('Get my companies error:', error);
-        res.status(500).json({ success: false, error: 'Failed to fetch your workspaces' });
+        res.status(500).json({ success: false, error: 'Failed to fetch your corporate identities' });
     }
 }));
 // POST /api/companies - Create a new company
@@ -90,7 +90,7 @@ router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, v
         const { name, industry, bio, website } = req.body;
         const db = (0, db_1.getDB)();
         if (!name) {
-            return res.status(400).json({ success: false, error: 'Workspace name is required' });
+            return res.status(400).json({ success: false, error: 'Identity name is required' });
         }
         const companyId = `comp-${crypto_1.default.randomBytes(8).toString('hex')}`;
         const handle = yield generateCompanyHandle(name);
@@ -121,7 +121,7 @@ router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, v
     }
     catch (error) {
         console.error('Create company error:', error);
-        res.status(500).json({ success: false, error: 'Failed to create workspace' });
+        res.status(500).json({ success: false, error: 'Failed to create corporate identity' });
     }
 }));
 // PATCH /api/companies/:companyId - Update company details
@@ -138,72 +138,37 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
             role: { $in: ['owner', 'admin'] }
         });
         if (!membership && currentUser.id !== companyId) {
-            return res.status(403).json({ success: false, error: 'Unauthorized to update this workspace' });
+            return res.status(403).json({ success: false, error: 'Unauthorized to update this corporate identity' });
         }
-        // Auto-verify if website is added
-        if (updates.website) {
-            updates.isVerified = true;
-        }
-        // Handle handle updates
-        if (updates.handle) {
-            const normalizedHandle = updates.handle.startsWith('@') ? updates.handle.toLowerCase() : `@${updates.handle.toLowerCase()}`;
-            const existingUser = yield db.collection('users').findOne({ handle: normalizedHandle });
-            const existingCompany = yield db.collection('companies').findOne({ handle: normalizedHandle, id: { $ne: companyId } });
-            if (existingUser || existingCompany) {
-                return res.status(409).json({ success: false, error: 'Handle already taken' });
-            }
-            updates.handle = normalizedHandle;
-        }
-        updates.updatedAt = new Date();
-        const result = yield db.collection('companies').updateOne({ id: companyId }, { $set: updates });
-        // If it was a legacy company in users collection
-        if (result.matchedCount === 0 && companyId === currentUser.id) {
-            yield db.collection('users').updateOne({ id: companyId }, { $set: {
-                    companyName: updates.name,
-                    companyWebsite: updates.website,
-                    industry: updates.industry,
-                    bio: updates.bio,
-                    isVerified: updates.isVerified,
-                    updatedAt: new Date().toISOString()
-                } });
-        }
-        res.json({ success: true, message: 'Workspace updated successfully' });
+        const { name, industry, bio, website } = req.body;
+        const updates = {};
+        if (name) updates.name = name;
+        if (industry) updates.industry = industry;
+        if (bio) updates.bio = bio;
+        if (website) updates.website = website;
+        
+        yield db.collection('companies').updateOne({ id: companyId }, { $set: updates });
+        res.json({ success: true, message: 'Corporate identity updated successfully' });
     }
     catch (error) {
         console.error('Update company error:', error);
-        res.status(500).json({ success: false, error: 'Failed to update workspace' });
+        res.status(500).json({ success: false, error: 'Failed to update corporate identity' });
     }
 }));
-// GET /api/companies/:companyId - Get single company
-router.get('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+// GET /api/companies/:id - Get a specific company
+router.get('/:id', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const { companyId } = req.params;
+        const { id } = req.params;
         const db = (0, db_1.getDB)();
-        let company = yield db.collection('companies').findOne({ id: companyId });
+        const company = yield db.collection('companies').findOne({ id });
         if (!company) {
-            // Check legacy
-            const u = yield db.collection('users').findOne({ id: companyId });
-            if (u && u.companyName) {
-                company = {
-                    id: u.id,
-                    name: u.companyName || u.name,
-                    website: u.companyWebsite,
-                    industry: u.industry,
-                    bio: u.bio,
-                    isVerified: u.isVerified,
-                    ownerId: u.id,
-                    createdAt: u.createdAt || new Date(),
-                    updatedAt: u.updatedAt || new Date()
-                };
-            }
-        }
-        if (!company) {
-            return res.status(404).json({ success: false, error: 'Workspace not found' });
+            return res.status(404).json({ success: false, error: 'Corporate identity not found' });
         }
         res.json({ success: true, data: company });
     }
     catch (error) {
-        res.status(500).json({ success: false, error: 'Failed to fetch workspace' });
+        console.error('Get company error:', error);
+        res.status(500).json({ success: false, error: 'Failed to fetch corporate identity' });
     }
 }));
 // POST /api/companies/:companyId/invites - Create invite

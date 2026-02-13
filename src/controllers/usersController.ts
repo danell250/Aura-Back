@@ -202,7 +202,7 @@ export const usersController = {
       
       res.json({
         success: true,
-        data: transformUsers(users),
+        data: transformUsers(users).map(u => ({ ...u, type: 'user' })),
         count: users.length
       });
     } catch (error) {
@@ -299,7 +299,10 @@ export const usersController = {
         return res.json({
           success: true,
           type: 'user',
-          data: transformUser(user)
+          data: {
+            ...transformUser(user),
+            type: 'user'
+          }
         });
       }
 
@@ -307,13 +310,14 @@ export const usersController = {
       const company = await db.collection('companies').findOne({ id });
 
       if (company) {
-        // Map company fields to user-like structure for ProfileView compatibility
+        // Map company fields to user-like structure for profile view compatibility
         const profileData = {
           ...company,
+          type: 'company',
           name: company.name,
           companyName: company.name,
           companyWebsite: company.website,
-          userMode: 'business',
+          userMode: 'corporate',
           isVerified: company.isVerified || false,
           trustScore: 100,
           auraCredits: 0,
@@ -327,7 +331,10 @@ export const usersController = {
         return res.json({
           success: true,
           type: 'company',
-          data: transformUser(profileData)
+          data: {
+            ...transformUser(profileData),
+            type: 'company'
+          }
         });
       }
       
@@ -370,7 +377,10 @@ export const usersController = {
         return res.json({
           success: true,
           type: 'user',
-          data: transformUser(user)
+          data: {
+            ...transformUser(user),
+            type: 'user'
+          }
         });
       }
 
@@ -380,13 +390,14 @@ export const usersController = {
       });
 
       if (company) {
-        // Map company fields to user-like structure for ProfileView compatibility
+        // Map company fields to user-like structure for profile view compatibility
         const profileData = {
           ...company,
+          type: 'company',
           name: company.name,
           companyName: company.name,
           companyWebsite: company.website,
-          userMode: 'business',
+          userMode: 'corporate',
           isVerified: company.isVerified || false,
           trustScore: 100, // Default trust score for companies
           auraCredits: 0,
@@ -400,7 +411,10 @@ export const usersController = {
         return res.json({
           success: true,
           type: 'company',
-          data: transformUser(profileData)
+          data: {
+            ...transformUser(profileData),
+            type: 'company'
+          }
         });
       }
       
@@ -483,7 +497,10 @@ export const usersController = {
 
       res.status(201).json({
         success: true,
-        data: transformUser(newUser),
+        data: {
+          ...transformUser(newUser),
+          type: 'user'
+        },
         message: 'User created successfully'
       });
     } catch (error) {
@@ -621,7 +638,10 @@ export const usersController = {
 
       // Get updated user
             const updatedUser = await db.collection('users').findOne({ id });
-            const transformedUser = transformUser(updatedUser);
+            const transformedUser = {
+              ...transformUser(updatedUser),
+              type: 'user'
+            };
 
             // Broadcast update to all clients via Socket.IO
             const io = req.app.get('io');
@@ -1253,7 +1273,7 @@ export const usersController = {
           ...c, 
           type: 'company',
           bio: c.description, // Map description to bio for consistent UI
-          userMode: 'business'
+          userMode: 'corporate'
         }))
       ];
 

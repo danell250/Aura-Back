@@ -1,6 +1,7 @@
 // Backend type definitions
 
 export interface User {
+  type: 'user';
   id: string; // Required field
   firstName: string;
   lastName: string;
@@ -22,7 +23,7 @@ export interface User {
   profileViews?: string[];
   isPrivate?: boolean;
   isVerified?: boolean;
-  userMode?: 'creator' | 'business' | 'hybrid';
+  userMode?: 'creator' | 'corporate' | 'hybrid';
   trustScore: number; 
   auraCredits: number;
   activeGlow?: 'emerald' | 'cyan' | 'amber' | 'gold' | 'silver' | 'bronze' | 'none';
@@ -49,6 +50,7 @@ export interface User {
 }
 
 export interface Company {
+  type: 'company';
   _id?: any;
   id: string;
   name: string;
@@ -61,6 +63,8 @@ export interface Company {
   createdAt: Date | string;
   updatedAt: Date | string;
 }
+
+export type Entity = User | Company;
 
 export interface PrivacySettings {
   profileVisibility: 'public' | 'friends' | 'private';
@@ -148,6 +152,7 @@ export interface MediaItem {
 }
 
 export interface Ad {
+  type: 'ad';
   id: string;
   ownerId: string;
   ownerType: 'user' | 'company';
@@ -166,6 +171,31 @@ export interface Ad {
   reactionUsers?: Record<string, string[]>;
   ownerActiveGlow?: string;
   budget?: number;
+}
+
+export interface Post {
+  type: 'post';
+  id: string;
+  author: {
+    id: string;
+    name: string;
+    handle: string;
+    avatar: string;
+  };
+  content: string;
+  energy: string;
+  radiance: number;
+  timestamp: number;
+  reactions: Record<string, number>;
+  reactionUsers?: Record<string, string[]>;
+  comments?: any[];
+  commentCount?: number;
+  isBoosted?: boolean;
+  hashtags?: string[];
+  mediaUrl?: string;
+  mediaType?: 'image' | 'video';
+  mediaItems?: MediaItem[];
+  visibility?: 'public' | 'acquaintances' | 'private';
 }
 
 export interface AdAnalytics {

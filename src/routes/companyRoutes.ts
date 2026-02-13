@@ -77,7 +77,7 @@ router.get('/me', requireAuth, async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     console.error('Get my companies error:', error);
-    res.status(500).json({ success: false, error: 'Failed to fetch your workspaces' });
+    res.status(500).json({ success: false, error: 'Failed to fetch your corporate identities' });
   }
 });
 
@@ -85,15 +85,43 @@ router.get('/me', requireAuth, async (req, res) => {
 router.post('/', requireAuth, async (req, res) => {
   try {
     const currentUser = (req as any).user;
-    const { name, industry, bio, website } = req.body;
+    const { name, industry, bio, website, handle: providedHandle } = req.body;
     const db = getDB();
 
     if (!name) {
-      return res.status(400).json({ success: false, error: 'Workspace name is required' });
+      return res.status(400).json({ success: false, error: 'Identity name is required' });
+    }
+
+    // Handle validation if provided
+    let handle = providedHandle;
+    if (handle) {
+      handle = handle.startsWith('@') ? handle.toLowerCase() : `@${handle.toLowerCase()}`;
+      if (!/^@[a-z0-9_]+$/.test(handle)) {
+        return res.status(400).json({ success: false, error: 'Handle can only contain letters, numbers, and underscores' });
+      }
+      if (handle.length < 4 || handle.length > 30) {
+        return res.status(400).json({ success: false, error: 'Handle must be between 3 and 30 characters' });
+      }
+      const existingUser = await db.collection('users').findOne({ handle });
+      const existingCompany = await db.collection('companies').findOne({ handle });
+      if (existingUser || existingCompany) {
+        return res.status(409).json({ success: false, error: 'Handle already taken' });
+      }
+    } else {
+      handle = await generateCompanyHandle(name);
+    }
+
+    // 1. Limit validation: Check how many companies the user owns
+    const ownedCompaniesCount = await db.collection('companies').countDocuments({ ownerId: currentUser.id });
+    const MAX_COMPANIES = 5;
+    if (ownedCompaniesCount >= MAX_COMPANIES) {
+      return res.status(403).json({ 
+        success: false, 
+        error: `You have reached the maximum limit of ${MAX_COMPANIES} corporate identities.` 
+      });
     }
 
     const companyId = `comp-${crypto.randomBytes(8).toString('hex')}`;
-    const handle = await generateCompanyHandle(name);
     
     const newCompany = {
       id: companyId,
@@ -128,7 +156,7 @@ router.post('/', requireAuth, async (req, res) => {
     res.json({ success: true, data: newCompany });
   } catch (error) {
     console.error('Create company error:', error);
-    res.status(500).json({ success: false, error: 'Failed to create workspace' });
+    res.status(500).json({ success: false, error: 'Failed to create corporate identity' });
   }
 });
 
@@ -148,7 +176,7 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
     });
 
     if (!membership && currentUser.id !== companyId) {
-      return res.status(403).json({ success: false, error: 'Unauthorized to update this workspace' });
+      return res.status(403).json({ success: false, error: 'Unauthorized to update this corporate identity' });
     }
 
     // Auto-verify if website is added
@@ -159,6 +187,16 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
     // Handle handle updates
     if (updates.handle) {
       const normalizedHandle = updates.handle.startsWith('@') ? updates.handle.toLowerCase() : `@${updates.handle.toLowerCase()}`;
+      
+      // Validation: No spaces or special characters except @
+      if (!/^@[a-z0-9_]+$/.test(normalizedHandle)) {
+        return res.status(400).json({ success: false, error: 'Handle can only contain letters, numbers, and underscores' });
+      }
+
+      if (normalizedHandle.length < 4 || normalizedHandle.length > 30) {
+        return res.status(400).json({ success: false, error: 'Handle must be between 3 and 30 characters' });
+      }
+
       const existingUser = await db.collection('users').findOne({ handle: normalizedHandle });
       const existingCompany = await db.collection('companies').findOne({ handle: normalizedHandle, id: { $ne: companyId } });
       
@@ -190,46 +228,42 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
        );
     }
 
-    res.json({ success: true, message: 'Workspace updated successfully' });
+    res.json({ success: true, message: 'Corporate identity updated successfully' });
   } catch (error) {
     console.error('Update company error:', error);
-    res.status(500).json({ success: false, error: 'Failed to update workspace' });
+    res.status(500).json({ success: false, error: 'Failed to update corporate identity' });
   }
 });
 
-// GET /api/companies/:companyId - Get single company
-router.get('/:companyId', requireAuth, async (req, res) => {
+// GET /api/companies/:id - Get a specific company
+router.get('/:id', requireAuth, async (req, res) => {
   try {
-    const { companyId } = req.params;
+    const { id } = req.params;
+    const currentUser = (req as any).user;
     const db = getDB();
 
-    let company: any = await db.collection('companies').findOne({ id: companyId });
-    
+    const company = await db.collection('companies').findOne({ id });
     if (!company) {
-      // Check legacy
-      const u = await db.collection('users').findOne({ id: companyId });
-      if (u && u.companyName) {
-        company = {
-          id: u.id,
-          name: u.companyName || u.name,
-          website: u.companyWebsite,
-          industry: u.industry,
-          bio: u.bio,
-          isVerified: u.isVerified,
-          ownerId: u.id,
-          createdAt: u.createdAt || new Date(),
-          updatedAt: u.updatedAt || new Date()
-        } as any;
-      }
+      return res.status(404).json({ success: false, error: 'Corporate identity not found' });
     }
 
-    if (!company) {
-      return res.status(404).json({ success: false, error: 'Workspace not found' });
+    // Access control: only members or owner can access management-level details
+    // If we want public access, we should have a separate public route or filter sensitive data
+    const membership = await db.collection('company_members').findOne({
+      companyId: id,
+      userId: currentUser.id
+    });
+
+    if (!membership && company.ownerId !== currentUser.id && id !== currentUser.id) {
+       // Check if this is a request for basic public info vs management info
+       // For now, restrict this route to members only as it's used in management views
+       return res.status(403).json({ success: false, error: 'You are not a member of this corporate identity' });
     }
 
     res.json({ success: true, data: company });
   } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to fetch workspace' });
+    console.error('Get company error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch corporate identity' });
   }
 });
 

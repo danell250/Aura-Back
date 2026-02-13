@@ -19,7 +19,7 @@ export interface IUser {
   notifications?: any[];
   auraCredits?: number;
   isPrivate?: boolean;
-  userMode?: 'creator' | 'business' | 'hybrid';
+  userMode?: 'creator' | 'corporate' | 'hybrid';
   googleId?: string;
   githubId?: string;
   linkedinId?: string;

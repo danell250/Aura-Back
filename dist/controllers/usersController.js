@@ -298,7 +298,7 @@ exports.usersController = {
             const company = yield db.collection('companies').findOne({ id });
             if (company) {
                 // Map company fields to user-like structure for ProfileView compatibility
-                const profileData = Object.assign(Object.assign({}, company), { name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'business', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
+                const profileData = Object.assign(Object.assign({}, company), { name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'corporate', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
                 return res.json({
                     success: true,
                     type: 'company',
@@ -349,7 +349,7 @@ exports.usersController = {
             });
             if (company) {
                 // Map company fields to user-like structure for ProfileView compatibility
-                const profileData = Object.assign(Object.assign({}, company), { name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'business', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
+                const profileData = Object.assign(Object.assign({}, company), { name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'corporate', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
                 return res.json({
                     success: true,
                     type: 'company',
@@ -1051,7 +1051,7 @@ exports.usersController = {
             // Transform and combine results
             const searchResults = [
                 ...usersResults.map(u => (Object.assign(Object.assign({}, u), { type: 'user' }))),
-                ...companiesResults.map(c => (Object.assign(Object.assign({}, c), { type: 'company', bio: c.description, userMode: 'business' })))
+                ...companiesResults.map(c => (Object.assign(Object.assign({}, c), { type: 'company', bio: c.description, userMode: 'corporate' })))
             ];
             res.json({
                 success: true,
