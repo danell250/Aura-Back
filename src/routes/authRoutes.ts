@@ -169,435 +169,435 @@ router.get('/google',
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
       return res.status(503).json({
         success: false,
-        message: 'Google login is not configured on the server.'
-      });
-    }
-    next();
-  },
-  passport.authenticate('google', { scope: ['profile', 'email'] })
+        message: 'Google login is not configured on the server. Please contact Aura© support.'
+    });
+  }
+  next();
+},
+passport.authenticate('google', { scope: ['profile', 'email'] })
 );
 
 router.get('/google/callback',
-  (req, res, next) => {
-    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-      return res.redirect('/login?error=google_not_configured');
-    }
-    next();
-  },
-  passport.authenticate('google', { failureRedirect: '/login', failureMessage: true }),
-  async (req: Request, res: Response) => {
-    try {
-      const frontendUrl = process.env.VITE_FRONTEND_URL ||
-        (req.headers.origin ? req.headers.origin.toString() : 
-        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+(req, res, next) => {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    return res.redirect('/login?error=google_not_configured');
+  }
+  next();
+},
+passport.authenticate('google', { failureRedirect: '/login', failureMessage: true }),
+async (req: Request, res: Response) => {
+  try {
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+      (req.headers.origin ? req.headers.origin.toString() : 
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
 
-      if (req.user) {
-        const db = getDB();
-        const userData = req.user as any;
+    if (req.user) {
+      const db = getDB();
+      const userData = req.user as any;
 
-        console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
+      console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
 
-        // Identify-First: Check by EMAIL
-        const existingUser = await db.collection('users').findOne({
-          email: userData.email
-        });
+      // Identify-First: Check by EMAIL
+      const existingUser = await db.collection('users').findOne({
+        email: userData.email
+      });
 
-        let userToReturn: User;
+      let userToReturn: User;
 
-        if (existingUser) {
-          console.log('✓ Found existing user by email:', existingUser.email);
-          
-          const updates: any = {
-            lastLogin: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            // Always link the ID of the current provider
-            googleId: userData.googleId || existingUser.googleId,
-          };
+      if (existingUser) {
+        console.log('✓ Found existing user by email:', existingUser.email);
+        
+        const updates: any = {
+          lastLogin: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          // Always link the ID of the current provider
+          googleId: userData.googleId || existingUser.googleId,
+        };
 
-          // DO NOT update these if they already exist
-          // This keeps the user's chosen identity intact
-          if (!existingUser.handle) updates.handle = userData.handle;
-          if (!existingUser.firstName) updates.firstName = userData.firstName;
-          if (!existingUser.avatar) updates.avatar = userData.avatar;
-
-          await db.collection('users').updateOne(
-            { id: existingUser.id },
-            { $set: updates }
-          );
-          
-          userToReturn = { ...existingUser, ...updates } as User;
-        } else {
-          console.log('➕ New user from Google OAuth');
-          // NEW USER: Generate unique handle
-          const uniqueHandle = await generateUniqueHandle(
-            userData.firstName || 'User',
-            userData.lastName || ''
-          );
-
-          const newUser = {
-            ...userData,
-            handle: uniqueHandle,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLogin: new Date().toISOString(),
-            auraCredits: 100,
-            trustScore: 10,
-            activeGlow: 'none',
-            acquaintances: [],
-            blockedUsers: [],
-            refreshTokens: []
-          };
-
-          await db.collection('users').insertOne(newUser);
-          console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
-          userToReturn = newUser as User;
-        }
-
-        const accessToken = generateAccessToken(userToReturn);
-        const refreshToken = generateRefreshToken(userToReturn);
+        // DO NOT update these if they already exist
+        // This keeps the user's chosen identity intact
+        if (!existingUser.handle) updates.handle = userData.handle;
+        if (!existingUser.firstName) updates.firstName = userData.firstName;
+        if (!existingUser.avatar) updates.avatar = userData.avatar;
 
         await db.collection('users').updateOne(
-          { id: userToReturn.id },
-          {
-            $push: { refreshTokens: refreshToken } as any
-          }
+          { id: existingUser.id },
+          { $set: updates }
+        );
+        
+        userToReturn = { ...existingUser, ...updates } as User;
+      } else {
+        console.log('➕ New user from Google OAuth');
+        // NEW USER: Generate unique handle
+        const uniqueHandle = await generateUniqueHandle(
+          userData.firstName || 'User',
+          userData.lastName || ''
         );
 
-        setTokenCookies(res, accessToken, refreshToken);
+        const newUser = {
+          ...userData,
+          handle: uniqueHandle,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString(),
+          auraCredits: 100,
+          trustScore: 10,
+          activeGlow: 'none',
+          acquaintances: [],
+          blockedUsers: [],
+          refreshTokens: []
+        };
 
-        const frontendUrl = process.env.VITE_FRONTEND_URL ||
-          (req.headers.origin ? req.headers.origin.toString() : 
-          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
-
-        console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
-        res.redirect(`${frontendUrl}/feed`);
+        await db.collection('users').insertOne(newUser);
+        console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
+        userToReturn = newUser as User;
       }
-    } catch (error) {
-      console.error('Error in OAuth callback:', error);
+
+      const accessToken = generateAccessToken(userToReturn);
+      const refreshToken = generateRefreshToken(userToReturn);
+
+      await db.collection('users').updateOne(
+        { id: userToReturn.id },
+        {
+          $push: { refreshTokens: refreshToken } as any
+        }
+      );
+
+      setTokenCookies(res, accessToken, refreshToken);
+
       const frontendUrl = process.env.VITE_FRONTEND_URL ||
         (req.headers.origin ? req.headers.origin.toString() : 
         (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
-      res.redirect(`${frontendUrl}/login?error=oauth_failed`);
+
+      console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
+      res.redirect(`${frontendUrl}/feed`);
     }
+  } catch (error) {
+    console.error('Error in OAuth callback:', error);
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+      (req.headers.origin ? req.headers.origin.toString() : 
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+    res.redirect(`${frontendUrl}/login?error=oauth_failed`);
   }
+}
 );
 
 // ============ GITHUB OAUTH ============
 router.get('/github',
-  (req, res, next) => {
-    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-      return res.status(503).json({
-        success: false,
-        message: 'GitHub login is not configured on the server.'
-      });
-    }
-    next();
-  },
-  passport.authenticate('github', { scope: ['user:email'] })
+(req, res, next) => {
+  if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+    return res.status(503).json({
+      success: false,
+      message: 'GitHub login is not configured on the server. Please contact Aura© support.'
+    });
+  }
+  next();
+},
+passport.authenticate('github', { scope: ['user:email'] })
 );
 
 router.get('/github/callback',
-  (req, res, next) => {
+(req, res, next) => {
+  const frontendUrl = process.env.VITE_FRONTEND_URL ||
+    (req.headers.origin ? req.headers.origin.toString() : 
+    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+  if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+    return res.redirect(`${frontendUrl}/login?error=github_not_configured`);
+  }
+  next();
+},
+passport.authenticate('github', { failureRedirect: '/login' }),
+async (req: Request, res: Response) => {
+  try {
     const frontendUrl = process.env.VITE_FRONTEND_URL ||
       (req.headers.origin ? req.headers.origin.toString() : 
       (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
-    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-      return res.redirect(`${frontendUrl}/login?error=github_not_configured`);
-    }
-    next();
-  },
-  passport.authenticate('github', { failureRedirect: '/login' }),
-  async (req: Request, res: Response) => {
-    try {
-      const frontendUrl = process.env.VITE_FRONTEND_URL ||
-        (req.headers.origin ? req.headers.origin.toString() : 
-        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
-      if (req.user) {
-        const db = getDB();
-        const userData = req.user as any;
+    if (req.user) {
+      const db = getDB();
+      const userData = req.user as any;
 
-        console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
+      console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
 
-        // Identify-First: Check by EMAIL
-        const existingUser = await db.collection('users').findOne({
-          email: userData.email
-        });
+      // Identify-First: Check by EMAIL
+      const existingUser = await db.collection('users').findOne({
+        email: userData.email
+      });
 
-        let userToReturn: User;
+      let userToReturn: User;
 
-        if (existingUser) {
-          console.log('✓ Found existing user by email:', existingUser.email);
-          
-          const updates: any = {
-            lastLogin: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            // Always link the ID of the current provider
-            githubId: userData.githubId || existingUser.githubId,
-          };
+      if (existingUser) {
+        console.log('✓ Found existing user by email:', existingUser.email);
+        
+        const updates: any = {
+          lastLogin: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          // Always link the ID of the current provider
+          githubId: userData.githubId || existingUser.githubId,
+        };
 
-          // DO NOT update these if they already exist
-          if (!existingUser.firstName) updates.firstName = userData.firstName;
-          if (!existingUser.avatar) updates.avatar = userData.avatar;
-          
-          await db.collection('users').updateOne(
-            { id: existingUser.id },
-            { $set: updates }
-          );
-          
-          userToReturn = { ...existingUser, ...updates } as User;
-        } else {
-          console.log('➕ New user from GitHub OAuth');
-          // NEW USER: Generate unique handle
-          const uniqueHandle = await generateUniqueHandle(
-            userData.firstName || 'User',
-            userData.lastName || ''
-          );
-
-          const newUser = {
-            ...userData,
-            handle: uniqueHandle,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLogin: new Date().toISOString(),
-            auraCredits: 100,
-            trustScore: 10,
-            activeGlow: 'none',
-            acquaintances: [],
-            blockedUsers: [],
-            refreshTokens: []
-          };
-
-          await db.collection('users').insertOne(newUser);
-          console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
-          userToReturn = newUser as User;
-        }
-
-        const accessToken = generateAccessToken(userToReturn);
-        const refreshToken = generateRefreshToken(userToReturn);
-
+        // DO NOT update these if they already exist
+        if (!existingUser.firstName) updates.firstName = userData.firstName;
+        if (!existingUser.avatar) updates.avatar = userData.avatar;
+        
         await db.collection('users').updateOne(
-          { id: userToReturn.id },
-          {
-            $push: { refreshTokens: refreshToken } as any
-          }
+          { id: existingUser.id },
+          { $set: updates }
+        );
+        
+        userToReturn = { ...existingUser, ...updates } as User;
+      } else {
+        console.log('➕ New user from GitHub OAuth');
+        // NEW USER: Generate unique handle
+        const uniqueHandle = await generateUniqueHandle(
+          userData.firstName || 'User',
+          userData.lastName || ''
         );
 
-        setTokenCookies(res, accessToken, refreshToken);
+        const newUser = {
+          ...userData,
+          handle: uniqueHandle,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString(),
+          auraCredits: 100,
+          trustScore: 10,
+          activeGlow: 'none',
+          acquaintances: [],
+          blockedUsers: [],
+          refreshTokens: []
+        };
 
-        const frontendUrl = process.env.VITE_FRONTEND_URL ||
-          (req.headers.origin ? req.headers.origin.toString() : 
-          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
-
-        console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
-        res.redirect(`${frontendUrl}/feed`);
+        await db.collection('users').insertOne(newUser);
+        console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
+        userToReturn = newUser as User;
       }
-    } catch (error) {
-      console.error('Error in OAuth callback:', error);
+
+      const accessToken = generateAccessToken(userToReturn);
+      const refreshToken = generateRefreshToken(userToReturn);
+
+      await db.collection('users').updateOne(
+        { id: userToReturn.id },
+        {
+          $push: { refreshTokens: refreshToken } as any
+        }
+      );
+
+      setTokenCookies(res, accessToken, refreshToken);
+
       const frontendUrl = process.env.VITE_FRONTEND_URL ||
         (req.headers.origin ? req.headers.origin.toString() : 
         (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
-      res.redirect(`${frontendUrl}/login?error=oauth_failed`);
+
+      console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
+      res.redirect(`${frontendUrl}/feed`);
     }
+  } catch (error) {
+    console.error('Error in OAuth callback:', error);
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+      (req.headers.origin ? req.headers.origin.toString() : 
+      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+    res.redirect(`${frontendUrl}/login?error=oauth_failed`);
   }
+}
 );
 
 // ============ LINKEDIN OAUTH ============
 router.get('/linkedin', (req: Request, res: Response) => {
-  if (!process.env.LINKEDIN_CLIENT_ID || !process.env.LINKEDIN_CLIENT_SECRET) {
-    return res.status(503).json({
-      success: false,
-      message: 'LinkedIn login is not configured on the server.'
-    });
-  }
-
-  // 1. Generate a secure random state
-  const state = crypto.randomBytes(16).toString('hex');
-
-  // 2. Store state in a secure, httpOnly cookie (valid for 5 mins)
-  res.cookie('linkedin_auth_state', state, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production', // secure in prod
-    sameSite: 'lax', // allows redirect from external site
-    maxAge: 5 * 60 * 1000 // 5 minutes
+if (!process.env.LINKEDIN_CLIENT_ID || !process.env.LINKEDIN_CLIENT_SECRET) {
+  return res.status(503).json({
+    success: false,
+    message: 'LinkedIn login is not configured on the server. Please contact Aura© support.'
   });
+}
 
-  // 3. Construct the authorization URL
-  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
-  const clientId = process.env.LINKEDIN_CLIENT_ID;
-  const scope = 'openid profile email';
-  
-  const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(scope)}`;
-  
-  // 4. Redirect user to LinkedIn
-  res.redirect(authUrl);
+// 1. Generate a secure random state
+const state = crypto.randomBytes(16).toString('hex');
+
+// 2. Store state in a secure, httpOnly cookie (valid for 5 mins)
+res.cookie('linkedin_auth_state', state, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production', // secure in prod
+  sameSite: 'lax', // allows redirect from external site
+  maxAge: 5 * 60 * 1000 // 5 minutes
+});
+
+// 3. Construct the authorization URL
+const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
+const clientId = process.env.LINKEDIN_CLIENT_ID;
+const scope = 'openid profile email';
+
+const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(scope)}`;
+
+// 4. Redirect user to LinkedIn
+res.redirect(authUrl);
 });
 
 router.get('/linkedin/callback', async (req: Request, res: Response) => {
-  const { code, state, error } = req.query;
+const { code, state, error } = req.query;
+
+const frontendUrl = process.env.VITE_FRONTEND_URL ||
+  (req.headers.origin ? req.headers.origin.toString() : 
+  (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+
+// Handle LinkedIn errors
+if (error) {
+  console.error('LinkedIn OAuth Error:', error);
+  return res.redirect(`${frontendUrl}/login?error=linkedin_auth_failed`);
+}
+
+if (!code) {
+  return res.redirect(`${frontendUrl}/login?error=no_code`);
+}
+
+// 1. Validate State
+const storedState = req.cookies.linkedin_auth_state;
+if (!state || !storedState || state !== storedState) {
+  console.error('LinkedIn OAuth State Mismatch:', { received: state, stored: storedState });
+  return res.redirect(`${frontendUrl}/login?error=state_mismatch`);
+}
+
+// Clear the state cookie once used
+res.clearCookie('linkedin_auth_state');
+
+try {
+  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
+  
+  // 2. Exchange code for access token
+  const tokenResponse = await axios.post('https://www.linkedin.com/oauth/v2/accessToken', null, {
+    params: {
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+      client_id: process.env.LINKEDIN_CLIENT_ID,
+      client_secret: process.env.LINKEDIN_CLIENT_SECRET
+    },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    }
+  });
+
+  const accessToken = tokenResponse.data.access_token;
+
+  // 3. Fetch user info
+  const profileResponse = await axios.get('https://api.linkedin.com/v2/userinfo', {
+    headers: {
+      'Authorization': `Bearer ${accessToken}`
+    }
+  });
+
+  const profile = profileResponse.data;
+  // LinkedIn profile structure: { sub, name, given_name, family_name, picture, email, ... }
+
+  if (!profile.email_verified) {
+     return res.redirect('/login?error=linkedin_email_not_verified');
+  }
+
+  const db = getDB();
+  // 4. Find or Create User
+  // Identify-First: Check by EMAIL
+  const existingUser = await db.collection('users').findOne({ email: profile.email });
+
+  let userToReturn: User;
+
+  if (existingUser) {
+    console.log('✓ Found existing user by email:', existingUser.email);
+
+    // 2. Account exists (could be from Google, Magic Link, or Password)
+    // Simply "link" this LinkedIn sub ID to the existing account if not already there
+    const updates: any = {
+      lastLogin: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      // Always link the ID of the current provider
+      linkedinId: profile.sub || existingUser.linkedinId,
+    };
+
+    // 3. DO NOT overwrite firstName, lastName, or handle if they already exist
+    // Only fill them in if the existing record is missing them
+    if (!existingUser.firstName) updates.firstName = profile.given_name;
+    if (!existingUser.avatar) updates.avatar = profile.picture;
+    // Also preserve handle
+    if (!existingUser.handle) {
+       // Generate one if really needed, though usually we won't need to do this here 
+       // as we don't have userData.handle from LinkedIn usually.
+       // But for consistency with the request:
+       // LinkedIn profile doesn't always have a handle concept, so we skip unless we want to generate one.
+    }
+
+    await db.collection('users').updateOne(
+      { id: existingUser.id },
+      { $set: updates }
+    );
+    
+    userToReturn = { ...existingUser, ...updates } as User;
+  } else {
+    console.log('➕ New user from LinkedIn OAuth');
+    const uniqueHandle = await generateUniqueHandle(
+      profile.given_name || 'User',
+      profile.family_name || ''
+    );
+
+    const newUser = {
+      id: crypto.randomUUID(),
+      linkedinId: profile.sub,
+      firstName: profile.given_name || 'User',
+      lastName: profile.family_name || '',
+      name: profile.name || 'User',
+      email: profile.email || '',
+      avatar: profile.picture || `https://ui-avatars.com/api/?name=${profile.name}&background=random`,
+      avatarType: 'url',
+      handle: uniqueHandle,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      lastLogin: new Date().toISOString(),
+      auraCredits: 100,
+      trustScore: 10,
+      activeGlow: 'none',
+      acquaintances: [],
+      blockedUsers: [],
+      refreshTokens: []
+    };
+
+    await db.collection('users').insertOne(newUser as any);
+    userToReturn = newUser as any;
+  }
+
+  // 5. Session Management
+  const newAccessToken = generateAccessToken(userToReturn);
+  const refreshToken = generateRefreshToken(userToReturn);
+
+  await db.collection('users').updateOne(
+    { id: userToReturn.id },
+    {
+      $push: { refreshTokens: refreshToken } as any
+    }
+  );
+
+  setTokenCookies(res, newAccessToken, refreshToken);
 
   const frontendUrl = process.env.VITE_FRONTEND_URL ||
     (req.headers.origin ? req.headers.origin.toString() : 
     (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
 
-  // Handle LinkedIn errors
-  if (error) {
-    console.error('LinkedIn OAuth Error:', error);
-    return res.redirect(`${frontendUrl}/login?error=linkedin_auth_failed`);
-  }
+  console.log('[OAuth:LinkedIn] Redirecting to:', `${frontendUrl}/dashboard`);
+  res.redirect(`${frontendUrl}/dashboard`);
 
-  if (!code) {
-    return res.redirect(`${frontendUrl}/login?error=no_code`);
-  }
-
-  // 1. Validate State
-  const storedState = req.cookies.linkedin_auth_state;
-  if (!state || !storedState || state !== storedState) {
-    console.error('LinkedIn OAuth State Mismatch:', { received: state, stored: storedState });
-    return res.redirect(`${frontendUrl}/login?error=state_mismatch`);
-  }
-
-  // Clear the state cookie once used
-  res.clearCookie('linkedin_auth_state');
-
-  try {
-    const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
-    
-    // 2. Exchange code for access token
-    const tokenResponse = await axios.post('https://www.linkedin.com/oauth/v2/accessToken', null, {
-      params: {
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-        client_id: process.env.LINKEDIN_CLIENT_ID,
-        client_secret: process.env.LINKEDIN_CLIENT_SECRET
-      },
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      }
-    });
-
-    const accessToken = tokenResponse.data.access_token;
-
-    // 3. Fetch user info
-    const profileResponse = await axios.get('https://api.linkedin.com/v2/userinfo', {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      }
-    });
-
-    const profile = profileResponse.data;
-    // LinkedIn profile structure: { sub, name, given_name, family_name, picture, email, ... }
-
-    if (!profile.email_verified) {
-       return res.redirect('/login?error=linkedin_email_not_verified');
-    }
-
-    const db = getDB();
-    // 4. Find or Create User
-    // Identify-First: Check by EMAIL
-    const existingUser = await db.collection('users').findOne({ email: profile.email });
-
-    let userToReturn: User;
-
-    if (existingUser) {
-      console.log('✓ Found existing user by email:', existingUser.email);
-
-      // 2. Account exists (could be from Google, Magic Link, or Password)
-      // Simply "link" this LinkedIn sub ID to the existing account if not already there
-      const updates: any = {
-        lastLogin: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        // Always link the ID of the current provider
-        linkedinId: profile.sub || existingUser.linkedinId,
-      };
-
-      // 3. DO NOT overwrite firstName, lastName, or handle if they already exist
-      // Only fill them in if the existing record is missing them
-      if (!existingUser.firstName) updates.firstName = profile.given_name;
-      if (!existingUser.avatar) updates.avatar = profile.picture;
-      // Also preserve handle
-      if (!existingUser.handle) {
-         // Generate one if really needed, though usually we won't need to do this here 
-         // as we don't have userData.handle from LinkedIn usually.
-         // But for consistency with the request:
-         // LinkedIn profile doesn't always have a handle concept, so we skip unless we want to generate one.
-      }
-
-      await db.collection('users').updateOne(
-        { id: existingUser.id },
-        { $set: updates }
-      );
-      
-      userToReturn = { ...existingUser, ...updates } as User;
-    } else {
-      console.log('➕ New user from LinkedIn OAuth');
-      const uniqueHandle = await generateUniqueHandle(
-        profile.given_name || 'User',
-        profile.family_name || ''
-      );
-
-      const newUser = {
-        id: crypto.randomUUID(),
-        linkedinId: profile.sub,
-        firstName: profile.given_name || 'User',
-        lastName: profile.family_name || '',
-        name: profile.name || 'User',
-        email: profile.email || '',
-        avatar: profile.picture || `https://ui-avatars.com/api/?name=${profile.name}&background=random`,
-        avatarType: 'url',
-        handle: uniqueHandle,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        lastLogin: new Date().toISOString(),
-        auraCredits: 100,
-        trustScore: 10,
-        activeGlow: 'none',
-        acquaintances: [],
-        blockedUsers: [],
-        refreshTokens: []
-      };
-
-      await db.collection('users').insertOne(newUser as any);
-      userToReturn = newUser as any;
-    }
-
-    // 5. Session Management
-    const newAccessToken = generateAccessToken(userToReturn);
-    const refreshToken = generateRefreshToken(userToReturn);
-
-    await db.collection('users').updateOne(
-      { id: userToReturn.id },
-      {
-        $push: { refreshTokens: refreshToken } as any
-      }
-    );
-
-    setTokenCookies(res, newAccessToken, refreshToken);
-
-    const frontendUrl = process.env.VITE_FRONTEND_URL ||
-      (req.headers.origin ? req.headers.origin.toString() : 
-      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
-
-    console.log('[OAuth:LinkedIn] Redirecting to:', `${frontendUrl}/dashboard`);
-    res.redirect(`${frontendUrl}/dashboard`);
-
-  } catch (error: any) {
-    console.error('LinkedIn OAuth callback error:', error?.response?.data || error.message);
-    const frontendUrl = process.env.VITE_FRONTEND_URL ||
-      (req.headers.origin ? req.headers.origin.toString() : 
-      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
-    res.redirect(`${frontendUrl}/login?error=linkedin_callback_error`);
-  }
+} catch (error: any) {
+  console.error('LinkedIn OAuth callback error:', error?.response?.data || error.message);
+  const frontendUrl = process.env.VITE_FRONTEND_URL ||
+    (req.headers.origin ? req.headers.origin.toString() : 
+    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+  res.redirect(`${frontendUrl}/login?error=linkedin_callback_error`);
+}
 });
 
 // ============ DISCORD OAUTH ============
 router.get('/discord', (req: Request, res: Response) => {
-  if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
-    return res.status(503).json({
-      success: false,
-      message: 'Discord login is not configured on the server.'
-    });
-  }
+if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
+  return res.status(503).json({
+    success: false,
+    message: 'Discord login is not configured on the server. Please contact Aura© support.'
+  });
+}
 
   const state = crypto.randomBytes(16).toString('hex');
 
@@ -1570,7 +1570,7 @@ router.post('/register', async (req: Request, res: Response) => {
       email: normalizedEmail,
       phone: phone?.trim() || '',
       handle: finalHandle,
-      bio: 'New to Aura',
+      bio: 'New to Aura©',
       industry: 'Other',
       companyName: '',
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
