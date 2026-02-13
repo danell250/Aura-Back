@@ -50,6 +50,10 @@ router.post("/media/upload-url", async (req, res) => {
     const { fileName, fileType, contentType, folder = "avatars", userId, entityId } = req.body; 
     const finalContentType = fileType || contentType;
 
+    // Determine logical owner for this media (user or company/entity)
+    // For posts/ads/documents we mostly use entityId, for avatars/covers we prefer entityId when present.
+    const ownerId = entityId || userId;
+
     // --- STRICT VALIDATION START ---
     const ALLOWED_FOLDERS: Record<string, string[]> = {
       avatars: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
@@ -60,7 +64,7 @@ router.post("/media/upload-url", async (req, res) => {
       chat: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
     };
 
-    if (!fileName || !finalContentType || !userId) { 
+    if (!fileName || !finalContentType || !ownerId) { 
       return res.status(400).json({ success: false, error: "Missing fields" }); 
     }
 
@@ -91,10 +95,11 @@ router.post("/media/upload-url", async (req, res) => {
 
     let key = "";
 
-    // Special case for user profile media (avatars/covers)
+    // Special case for profile media (avatars/covers)
+    // Use entityId when provided (e.g. company avatars), otherwise fall back to userId.
     if (folder === "avatars" || folder === "covers") {
-      // avatars/{userId}-{uuid}.png
-      key = `${folder}/${userId}-${id}.${safeExt}`;
+      // avatars/{ownerId}-{uuid}.png
+      key = `${folder}/${ownerId}-${id}.${safeExt}`;
     } 
     // Special case for entity-specific media (posts/ads/documents)
     else if (entityId) {
