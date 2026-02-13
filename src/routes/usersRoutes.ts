@@ -41,74 +41,74 @@ router.post('/test-route', (req: Request, res: Response) => {
 
 // POST /api/users/:id/purchase-credits - Purchase credits
 console.log('Registering purchase-credits route for pattern /:id/purchase-credits');
-router.post('/:id/purchase-credits', (req: Request, res: Response) => {
+router.post('/:id/purchase-credits', requireAuth, (req: Request, res: Response) => {
   console.log('Purchase credits route hit!', req.params, req.body);
   usersController.purchaseCredits(req, res);
 });
 
 // POST /api/users/:id/spend-credits - Spend credits
-router.post('/:id/spend-credits', usersController.spendCredits);
+router.post('/:id/spend-credits', requireAuth, usersController.spendCredits);
 
 // Privacy and Data Management Routes
 // GET /api/users/:id/privacy-data - Export user's privacy data (GDPR compliance)
-router.get('/:id/privacy-data', usersController.getPrivacyData);
+router.get('/:id/privacy-data', requireAuth, usersController.getPrivacyData);
 
 // POST /api/users/:id/clear-data - Clear all user data (GDPR right to be forgotten)
-router.post('/:id/clear-data', usersController.clearUserData);
+router.post('/:id/clear-data', requireAuth, usersController.clearUserData);
 
 // GET /api/users/:id/privacy-settings - Get user's privacy settings
-router.get('/:id/privacy-settings', usersController.getPrivacySettings);
+router.get('/:id/privacy-settings', requireAuth, usersController.getPrivacySettings);
 
 // PUT /api/users/:id/privacy-settings - Update user's privacy settings
-router.put('/:id/privacy-settings', usersController.updatePrivacySettings);
+router.put('/:id/privacy-settings', requireAuth, usersController.updatePrivacySettings);
 
 // Social interaction routes
 // POST /api/users/:id/connect - Send connection request
-router.post('/:id/connect', usersController.sendConnectionRequest);
+router.post('/:id/connect', requireAuth, usersController.sendConnectionRequest);
 
 // POST /api/users/:id/cancel-connection - Cancel connection request
-router.post('/:id/cancel-connection', usersController.cancelConnectionRequest);
+router.post('/:id/cancel-connection', requireAuth, usersController.cancelConnectionRequest);
 
 // POST /api/users/:id/accept-connection - Accept connection request
-router.post('/:id/accept-connection', usersController.acceptConnectionRequest);
+router.post('/:id/accept-connection', requireAuth, usersController.acceptConnectionRequest);
 
 // POST /api/users/:id/reject-connection - Reject connection request
-router.post('/:id/reject-connection', usersController.rejectConnectionRequest);
+router.post('/:id/reject-connection', requireAuth, usersController.rejectConnectionRequest);
 
 // POST /api/users/:id/block - Block user
-router.post('/:id/block', usersController.blockUser);
+router.post('/:id/block', requireAuth, usersController.blockUser);
 
-router.post('/:id/unblock', usersController.unblockUser);
+router.post('/:id/unblock', requireAuth, usersController.unblockUser);
 
 // POST /api/users/:id/report - Report user
-router.post('/:id/report', usersController.reportUser);
+router.post('/:id/report', requireAuth, usersController.reportUser);
 
 // POST /api/users/:id/remove-acquaintance - Remove acquaintance
-router.post('/:id/remove-acquaintance', usersController.removeAcquaintance);
+router.post('/:id/remove-acquaintance', requireAuth, usersController.removeAcquaintance);
 
 // POST /api/users/:id/record-profile-view - Record profile view
-router.post('/:id/record-profile-view', usersController.recordProfileView);
+router.post('/:id/record-profile-view', requireAuth, usersController.recordProfileView);
 
 // GET /api/users/:id - Get user by ID (public)
 router.get('/:id', usersController.getUserById);
 
-router.get('/:id/serendipity-matches', usersController.getSerendipityMatches);
-router.post('/:id/serendipity-skip', usersController.addSerendipitySkip);
+router.get('/:id/serendipity-matches', requireAuth, usersController.getSerendipityMatches);
+router.post('/:id/serendipity-skip', requireAuth, usersController.addSerendipitySkip);
 
 // PUT /api/users/:id - Update user
-router.put('/:id', usersController.updateUser);
+router.put('/:id', requireAuth, usersController.updateUser);
 
 // DELETE /api/users/:id - Delete user
-router.delete('/:id', usersController.deleteUser);
+router.delete('/:id', requireAuth, usersController.deleteUser);
 
 // DELETE /api/users/force-delete/:email - Force delete a user (Admin)
-router.delete('/force-delete/:email', usersController.forceDeleteUser);
+router.delete('/force-delete/:email', requireAuth, usersController.forceDeleteUser);
 
 // Trust calibration routes
 // POST /api/users/:id/recalculate-trust - Recalculate trust score for a single user
-router.post('/:id/recalculate-trust', usersController.recalculateTrustForUser);
+router.post('/:id/recalculate-trust', requireAuth, usersController.recalculateTrustForUser);
 
 // POST /api/users/recalculate-trust-all - Recalculate trust scores for all users
-router.post('/recalculate-trust-all', usersController.recalculateTrustForAllUsers);
+router.post('/recalculate-trust-all', requireAuth, usersController.recalculateTrustForAllUsers);
 
 export default router;

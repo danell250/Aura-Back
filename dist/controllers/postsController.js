@@ -18,6 +18,16 @@ const userUtils_1 = require("../utils/userUtils");
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
+const canActAsEntity = (authUserId, entityId) => __awaiter(void 0, void 0, void 0, function* () {
+    if (authUserId === entityId)
+        return true;
+    const db = (0, db_1.getDB)();
+    const membership = yield db.collection('company_members').findOne({ companyId: entityId, userId: authUserId });
+    if (membership)
+        return true;
+    const company = yield db.collection('companies').findOne({ id: entityId, ownerId: authUserId });
+    return !!company;
+});
 const postSseClients = [];
 const broadcastPostViewUpdate = (payload) => {
     if (!postSseClients.length)
@@ -704,11 +714,30 @@ exports.postsController = {
     }),
     // POST /api/posts - Create new post
     createPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
+            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authUserId) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
             const { content, mediaUrl, mediaType, mediaKey, mediaMimeType, mediaSize, mediaItems, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle, timezone, visibility, isSystemPost, systemType, ownerId, createdByUserId, id // Allow frontend to provide ID (e.g. for S3 key consistency)
              } = req.body;
             if (!authorId) {
                 return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
+            }
+            if (!(yield canActAsEntity(authUserId, authorId))) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'You cannot create posts for this identity'
+                });
+            }
+            if (ownerId && ownerId !== authorId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid owner',
+                    message: 'ownerId must match authorId'
+                });
             }
             // Handle media uploads
             const files = req.files;
@@ -939,12 +968,12 @@ exports.postsController = {
         try {
             const { id } = req.params;
             const { reaction, action: forceAction } = req.body;
-            const userId = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id) || req.body.userId; // Prefer authenticated user
+            const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             if (!reaction) {
                 return res.status(400).json({ success: false, error: 'Missing reaction' });
             }
             if (!userId) {
-                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
             }
             const db = (0, db_1.getDB)();
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
@@ -1016,13 +1045,20 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/boost - Boost post and deduct credits server-side
     boostPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
+            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authUserId) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
             const { id } = req.params;
             const { userId, credits } = req.body;
             const db = (0, db_1.getDB)();
             if (!userId) {
                 return res.status(400).json({ success: false, error: 'Missing userId' });
+            }
+            if (!(yield canActAsEntity(authUserId, userId))) {
+                return res.status(403).json({ success: false, error: 'Forbidden' });
             }
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
@@ -1074,7 +1110,7 @@ exports.postsController = {
                 }
                 try {
                     const appInstance = req.app;
-                    const authorId = ((_a = boostedDoc.author) === null || _a === void 0 ? void 0 : _a.id) || post.author.id;
+                    const authorId = ((_b = boostedDoc.author) === null || _b === void 0 ? void 0 : _b.id) || post.author.id;
                     if (authorId) {
                         yield (0, exports.emitAuthorInsightsUpdate)(appInstance, authorId);
                     }
@@ -1096,10 +1132,18 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/share - Share a post
     sharePost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
+            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authUserId) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
             const { id } = req.params;
             const { userId } = req.body;
             const db = (0, db_1.getDB)();
+            if (!userId || !(yield canActAsEntity(authUserId, userId))) {
+                return res.status(403).json({ success: false, error: 'Forbidden' });
+            }
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found' });

@@ -11,6 +11,15 @@ const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 
+const canActAsEntity = async (authUserId: string, entityId: string): Promise<boolean> => {
+  if (authUserId === entityId) return true;
+  const db = getDB();
+  const membership = await db.collection('company_members').findOne({ companyId: entityId, userId: authUserId });
+  if (membership) return true;
+  const company = await db.collection('companies').findOne({ id: entityId, ownerId: authUserId });
+  return !!company;
+};
+
 interface PostSseClient {
   id: string;
   res: Response;
@@ -797,6 +806,11 @@ export const postsController = {
   // POST /api/posts - Create new post
   createPost: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
       const { 
         content, 
         mediaUrl, 
@@ -824,6 +838,22 @@ export const postsController = {
       
       if (!authorId) {
         return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
+      }
+
+      if (!(await canActAsEntity(authUserId, authorId))) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden',
+          message: 'You cannot create posts for this identity'
+        });
+      }
+
+      if (ownerId && ownerId !== authorId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid owner',
+          message: 'ownerId must match authorId'
+        });
       }
 
       // Handle media uploads
@@ -1151,13 +1181,13 @@ export const postsController = {
     try {
       const { id } = req.params;
       const { reaction, action: forceAction } = req.body;
-      const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
+      const userId = (req as any).user?.id as string | undefined;
 
       if (!reaction) {
         return res.status(400).json({ success: false, error: 'Missing reaction' });
       }
       if (!userId) {
-        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
       }
 
       const db = getDB();
@@ -1189,7 +1219,7 @@ export const postsController = {
              {
                $pull: { [`reactionUsers.${reaction}`]: userId },
                $inc: { [`reactions.${reaction}`]: -1 }
-             }
+             } as any
            );
         } else {
            // Add reaction
@@ -1198,7 +1228,7 @@ export const postsController = {
              {
                $addToSet: { [`reactionUsers.${reaction}`]: userId },
                $inc: { [`reactions.${reaction}`]: 1 }
-             }
+             } as any
            );
         }
       }
@@ -1248,12 +1278,21 @@ export const postsController = {
   // POST /api/posts/:id/boost - Boost post and deduct credits server-side
   boostPost: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
       const { id } = req.params;
       const { userId, credits } = req.body as { userId: string; credits?: number | string };
       const db = getDB();
 
       if (!userId) {
         return res.status(400).json({ success: false, error: 'Missing userId' });
+      }
+
+      if (!(await canActAsEntity(authUserId, userId))) {
+        return res.status(403).json({ success: false, error: 'Forbidden' });
       }
 
       const post = await db.collection(POSTS_COLLECTION).findOne({ id });
@@ -1352,9 +1391,18 @@ export const postsController = {
   // POST /api/posts/:id/share - Share a post
   sharePost: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
       const { id } = req.params;
       const { userId } = req.body;
       const db = getDB();
+
+      if (!userId || !(await canActAsEntity(authUserId, userId))) {
+        return res.status(403).json({ success: false, error: 'Forbidden' });
+      }
 
       const post = await db.collection(POSTS_COLLECTION).findOne({ id });
       if (!post) {

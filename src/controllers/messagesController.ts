@@ -4,13 +4,45 @@ import { ObjectId } from 'mongodb';
 import { getDB, isDBConnected } from '../db';
 import { transformUser } from '../utils/userUtils';
 
+const canActAsEntity = async (authUserId: string, entityId: string): Promise<boolean> => {
+  if (authUserId === entityId) return true;
+
+  const db = getDB();
+  const membership = await db.collection('company_members').findOne({ companyId: entityId, userId: authUserId });
+  if (membership) return true;
+
+  const company = await db.collection('companies').findOne({ id: entityId, ownerId: authUserId });
+  return !!company;
+};
+
 export const messagesController = {
   // GET /api/messages/conversations - Get all conversations for a user
   getConversations: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+      }
+
       const { userId, ownerType = 'user' } = req.query;
-      
-      if (!userId) {
+      const resolvedOwnerId = String(userId || authUserId);
+      const resolvedOwnerType = String(ownerType || 'user');
+
+      if (resolvedOwnerType !== 'user' && resolvedOwnerType !== 'company') {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid ownerType'
+        });
+      }
+
+      if (!(await canActAsEntity(authUserId, resolvedOwnerId))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden'
+        });
+      }
+
+      if (!resolvedOwnerId) {
         return res.status(400).json({
           success: false,
           message: 'User ID is required'
@@ -32,8 +64,8 @@ export const messagesController = {
         {
           $match: {
             $or: [
-              { senderId: userId },
-              { receiverId: userId }
+              { senderId: resolvedOwnerId },
+              { receiverId: resolvedOwnerId }
             ]
           }
         },
@@ -41,7 +73,7 @@ export const messagesController = {
           $addFields: {
             conversationWith: {
               $cond: {
-                if: { $eq: ['$senderId', userId] },
+                if: { $eq: ['$senderId', resolvedOwnerId] },
                 then: '$receiverId',
                 else: '$senderId'
               }
@@ -60,7 +92,7 @@ export const messagesController = {
                 $cond: {
                   if: {
                     $and: [
-                      { $eq: ['$receiverId', userId] },
+                      { $eq: ['$receiverId', resolvedOwnerId] },
                       { $eq: ['$isRead', false] }
                     ]
                   },
@@ -109,8 +141,8 @@ export const messagesController = {
         }
       ]).toArray();
 
-      const collectionName = ownerType === 'company' ? 'companies' : 'users';
-      const doc = await db.collection(collectionName).findOne({ id: userId });
+      const collectionName = resolvedOwnerType === 'company' ? 'companies' : 'users';
+      const doc = await db.collection(collectionName).findOne({ id: resolvedOwnerId });
       const archivedChats: string[] = (doc?.archivedChats as string[]) || [];
 
       const conversationsWithArchive = conversations.map(conv => {
@@ -138,13 +170,26 @@ export const messagesController = {
   // GET /api/messages/:userId - Get messages between current user and another user
   getMessages: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+      }
+
       const { userId } = req.params;
       const { currentUserId, page = 1, limit = 50 } = req.query;
+      const resolvedCurrentUserId = String(currentUserId || authUserId);
       
-      if (!currentUserId) {
+      if (!resolvedCurrentUserId) {
         return res.status(400).json({
           success: false,
           message: 'Current user ID is required'
+        });
+      }
+
+      if (!(await canActAsEntity(authUserId, resolvedCurrentUserId))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden'
         });
       }
 
@@ -159,8 +204,8 @@ export const messagesController = {
 
       const messages = await messagesCollection.find({
         $or: [
-          { senderId: currentUserId, receiverId: userId },
-          { senderId: userId, receiverId: currentUserId }
+          { senderId: resolvedCurrentUserId, receiverId: userId },
+          { senderId: userId, receiverId: resolvedCurrentUserId }
         ]
       })
       .sort({ timestamp: -1 })
@@ -177,7 +222,7 @@ export const messagesController = {
       await messagesCollection.updateMany(
         {
           senderId: userId,
-          receiverId: currentUserId,
+          receiverId: resolvedCurrentUserId,
           isRead: false
         },
         { $set: { isRead: true } }
@@ -199,6 +244,11 @@ export const messagesController = {
   // POST /api/messages - Send a new message
   sendMessage: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+      }
+
       const { 
         senderId, 
         receiverId, 
@@ -215,6 +265,13 @@ export const messagesController = {
         return res.status(400).json({
           success: false,
           message: 'Sender ID, receiver ID, and text are required'
+        });
+      }
+
+      if (!(await canActAsEntity(authUserId, senderId))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden'
         });
       }
 
@@ -280,6 +337,11 @@ export const messagesController = {
   // PUT /api/messages/:messageId - Edit a message
   editMessage: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+      }
+
       const { messageId } = req.params;
       const { text, userId } = req.body;
       
@@ -287,6 +349,13 @@ export const messagesController = {
         return res.status(400).json({
           success: false,
           message: 'Text and user ID are required'
+        });
+      }
+
+      if (!(await canActAsEntity(authUserId, userId))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden'
         });
       }
 
@@ -349,6 +418,11 @@ export const messagesController = {
   // DELETE /api/messages/:messageId - Delete a message
   deleteMessage: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+      }
+
       const { messageId } = req.params;
       const { userId } = req.body;
       
@@ -356,6 +430,13 @@ export const messagesController = {
         return res.status(400).json({
           success: false,
           message: 'User ID is required'
+        });
+      }
+
+      if (!(await canActAsEntity(authUserId, userId))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden'
         });
       }
 
@@ -401,12 +482,24 @@ export const messagesController = {
   // DELETE /api/messages/conversation - Delete all messages in a conversation
   deleteConversation: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+      }
+
       const { userId, otherUserId } = req.body;
 
       if (!userId || !otherUserId) {
         return res.status(400).json({
           success: false,
           message: 'userId and otherUserId are required'
+        });
+      }
+
+      if (!(await canActAsEntity(authUserId, userId))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden'
         });
       }
 
@@ -463,6 +556,13 @@ export const messagesController = {
         });
       }
 
+      if (!authUser?.id || !(await canActAsEntity(authUser.id, resolvedReceiverId))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden'
+        });
+      }
+
       if (!isDBConnected()) {
         return res.status(503).json({
           success: false,
@@ -496,12 +596,24 @@ export const messagesController = {
 
   archiveConversation: async (req: Request, res: Response) => {
     try {
+      const authUserId = (req as any).user?.id as string | undefined;
+      if (!authUserId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+      }
+
       const { userId, otherUserId, archived } = req.body;
 
       if (!userId || !otherUserId || typeof archived !== 'boolean') {
         return res.status(400).json({
           success: false,
           message: 'userId, otherUserId and archived flag are required'
+        });
+      }
+
+      if (!(await canActAsEntity(authUserId, userId))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden'
         });
       }
 

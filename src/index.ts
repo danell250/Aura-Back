@@ -25,7 +25,7 @@ import privacyRoutes from './routes/privacyRoutes';
 import shareRoutes from './routes/shareRoutes';
 import mediaRoutes from './routes/mediaRoutes';
 import companyRoutes from './routes/companyRoutes';
-import { attachUser } from './middleware/authMiddleware';
+import { attachUser, requireAuth } from './middleware/authMiddleware';
 import path from 'path';
 import fs from 'fs';
 import { connectDB, checkDBHealth, isDBConnected, getDB } from './db';
@@ -361,6 +361,12 @@ app.get('/auth/user', (req, res) => {
 });
 
 app.get('/api/debug/env', (req, res) => {
+  const actor = (req as any).user;
+  const isAdmin = !!(actor && (actor.role === 'admin' || actor.isAdmin === true));
+  if (process.env.NODE_ENV === 'production' && !isAdmin) {
+    return res.status(404).json({ success: false, error: 'Not found' });
+  }
+
   res.json({
     frontendUrl: process.env.VITE_FRONTEND_URL,
     nodeEnv: process.env.NODE_ENV,
@@ -377,6 +383,12 @@ app.get('/api/debug/env', (req, res) => {
 });
 
 app.get('/api/debug/cookies', (req, res) => {
+  const actor = (req as any).user;
+  const isAdmin = !!(actor && (actor.role === 'admin' || actor.isAdmin === true));
+  if (process.env.NODE_ENV === 'production' && !isAdmin) {
+    return res.status(404).json({ success: false, error: 'Not found' });
+  }
+
   res.json({
     cookies: req.cookies,
     signedCookies: req.signedCookies,
@@ -385,6 +397,12 @@ app.get('/api/debug/cookies', (req, res) => {
 });
 
 app.get('/api/debug/sendgrid', (req, res) => {
+  const actor = (req as any).user;
+  const isAdmin = !!(actor && (actor.role === 'admin' || actor.isAdmin === true));
+  if (process.env.NODE_ENV === 'production' && !isAdmin) {
+    return res.status(404).json({ success: false, error: 'Not found' });
+  }
+
   const apiKey = process.env.SENDGRID_API_KEY;
   const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM || 'no-reply@aura.net.za';
   
@@ -396,9 +414,23 @@ app.get('/api/debug/sendgrid', (req, res) => {
   });
 });
 
-app.get('/api/credits/history/:userId', async (req, res) => {
+app.get('/api/credits/history/:userId', requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+    const actor = (req as any).user;
+    const isAdmin = !!(actor && (actor.role === 'admin' || actor.isAdmin === true));
+    if (!actor?.id) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+    }
+    if (!isAdmin && actor.id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden'
+      });
+    }
     
     if (!isDBConnected()) {
       return res.status(503).json({

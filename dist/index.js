@@ -372,6 +372,11 @@ app.get('/auth/user', (req, res) => {
     }
 });
 app.get('/api/debug/env', (req, res) => {
+    const actor = req.user;
+    const isAdmin = !!(actor && (actor.role === 'admin' || actor.isAdmin === true));
+    if (process.env.NODE_ENV === 'production' && !isAdmin) {
+        return res.status(404).json({ success: false, error: 'Not found' });
+    }
     res.json({
         frontendUrl: process.env.VITE_FRONTEND_URL,
         nodeEnv: process.env.NODE_ENV,
@@ -387,6 +392,11 @@ app.get('/api/debug/env', (req, res) => {
     });
 });
 app.get('/api/debug/cookies', (req, res) => {
+    const actor = req.user;
+    const isAdmin = !!(actor && (actor.role === 'admin' || actor.isAdmin === true));
+    if (process.env.NODE_ENV === 'production' && !isAdmin) {
+        return res.status(404).json({ success: false, error: 'Not found' });
+    }
     res.json({
         cookies: req.cookies,
         signedCookies: req.signedCookies,
@@ -394,6 +404,11 @@ app.get('/api/debug/cookies', (req, res) => {
     });
 });
 app.get('/api/debug/sendgrid', (req, res) => {
+    const actor = req.user;
+    const isAdmin = !!(actor && (actor.role === 'admin' || actor.isAdmin === true));
+    if (process.env.NODE_ENV === 'production' && !isAdmin) {
+        return res.status(404).json({ success: false, error: 'Not found' });
+    }
     const apiKey = process.env.SENDGRID_API_KEY;
     const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM || 'no-reply@aura.net.za';
     res.json({
@@ -403,9 +418,23 @@ app.get('/api/debug/sendgrid', (req, res) => {
         env: process.env.NODE_ENV
     });
 });
-app.get('/api/credits/history/:userId', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.get('/api/credits/history/:userId', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { userId } = req.params;
+        const actor = req.user;
+        const isAdmin = !!(actor && (actor.role === 'admin' || actor.isAdmin === true));
+        if (!(actor === null || actor === void 0 ? void 0 : actor.id)) {
+            return res.status(401).json({
+                success: false,
+                error: 'Authentication required'
+            });
+        }
+        if (!isAdmin && actor.id !== userId) {
+            return res.status(403).json({
+                success: false,
+                error: 'Forbidden'
+            });
+        }
         if (!(0, db_1.isDBConnected)()) {
             return res.status(503).json({
                 success: false,

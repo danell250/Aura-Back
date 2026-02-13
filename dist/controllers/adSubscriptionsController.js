@@ -96,23 +96,43 @@ function ensureCurrentPeriod(db, subscription) {
     });
 }
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
+const isAdminUser = (user) => !!(user && (user.role === 'admin' || user.isAdmin === true));
+const canAccessOwner = (req, ownerId, ownerType) => __awaiter(void 0, void 0, void 0, function* () {
+    const actor = req.user;
+    if (!(actor === null || actor === void 0 ? void 0 : actor.id))
+        return false;
+    if (isAdminUser(actor))
+        return true;
+    if (ownerType === 'user')
+        return actor.id === ownerId;
+    const db = (0, db_1.getDB)();
+    const membership = yield db.collection('company_members').findOne({ companyId: ownerId, userId: actor.id });
+    if (membership)
+        return true;
+    const company = yield db.collection('companies').findOne({ id: ownerId, ownerId: actor.id });
+    return !!company;
+});
 exports.adSubscriptionsController = {
     // GET /api/ad-subscriptions/user/:userId - Get user's ad subscriptions
     getUserSubscriptions: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
             const { ownerType = 'user' } = req.query;
+            const resolvedOwnerType = ownerType === 'company' ? 'company' : 'user';
+            if (!(yield canAccessOwner(req, userId, resolvedOwnerType))) {
+                return res.status(403).json({ success: false, error: 'Forbidden' });
+            }
             console.log(`[AdSubscriptions] Fetching subscriptions for ${ownerType}:`, userId);
             const db = (0, db_1.getDB)();
             const query = {
                 $or: [
-                    { ownerId: userId, ownerType },
-                    { userId: userId, ownerType } // backward compatibility
+                    { ownerId: userId, ownerType: resolvedOwnerType },
+                    { userId: userId, ownerType: resolvedOwnerType } // backward compatibility
                 ]
             };
             // If no ownerType was explicitly set in the document yet (old data), 
             // and we're looking for 'user' type, also match documents without ownerType
-            if (ownerType === 'user') {
+            if (resolvedOwnerType === 'user') {
                 query.$or.push({ userId, ownerType: { $exists: false } });
             }
             const subscriptions = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION)
@@ -139,6 +159,7 @@ exports.adSubscriptionsController = {
     createSubscription: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId, packageId, packageName, paypalSubscriptionId, adLimit, durationDays, ownerType = 'user' } = req.body;
+            const resolvedOwnerType = ownerType === 'company' ? 'company' : 'user';
             if (!userId || !packageId || !packageName || !adLimit) {
                 return res.status(400).json({
                     success: false,
@@ -148,6 +169,13 @@ exports.adSubscriptionsController = {
             }
             const db = (0, db_1.getDB)();
             const now = Date.now();
+            if (!(yield canAccessOwner(req, userId, resolvedOwnerType))) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'You do not have permission to create this subscription'
+                });
+            }
             // Calculate end date for one-time packages
             const endDate = durationDays ? now + (durationDays * 24 * 60 * 60 * 1000) : undefined;
             // For subscriptions, next billing is typically 30 days from start
@@ -161,7 +189,7 @@ exports.adSubscriptionsController = {
                 id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
                 userId, // Legacy field
                 ownerId: userId, // New standardized field
-                ownerType,
+                ownerType: resolvedOwnerType,
                 packageId,
                 packageName,
                 status: 'active',
@@ -183,7 +211,7 @@ exports.adSubscriptionsController = {
             yield db.collection('transactions').insertOne({
                 userId,
                 ownerId: userId,
-                ownerType,
+                ownerType: resolvedOwnerType,
                 type: 'ad_subscription',
                 packageId,
                 packageName,
@@ -236,6 +264,11 @@ exports.adSubscriptionsController = {
                     error: 'Subscription not found',
                     message: 'The requested subscription could not be found.'
                 });
+            }
+            const subOwnerId = subscription.ownerId || subscription.userId;
+            const subOwnerType = subscription.ownerType === 'company' ? 'company' : 'user';
+            if (!subOwnerId || !(yield canAccessOwner(req, subOwnerId, subOwnerType))) {
+                return res.status(403).json({ success: false, error: 'Forbidden' });
             }
             if (subscription.status !== 'active') {
                 return res.status(400).json({
@@ -291,6 +324,18 @@ exports.adSubscriptionsController = {
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
+            const existing = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
+            if (!existing) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Subscription not found'
+                });
+            }
+            const subOwnerId = existing.ownerId || existing.userId;
+            const subOwnerType = existing.ownerType === 'company' ? 'company' : 'user';
+            if (!subOwnerId || !(yield canAccessOwner(req, subOwnerId, subOwnerType))) {
+                return res.status(403).json({ success: false, error: 'Forbidden' });
+            }
             const result = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne({ id }, {
                 $set: {
                     status: 'cancelled',
@@ -324,6 +369,10 @@ exports.adSubscriptionsController = {
         try {
             const { userId } = req.params;
             const { ownerType = 'user' } = req.query;
+            const resolvedOwnerType = ownerType === 'company' ? 'company' : 'user';
+            if (!(yield canAccessOwner(req, userId, resolvedOwnerType))) {
+                return res.status(403).json({ success: false, error: 'Forbidden' });
+            }
             const db = (0, db_1.getDB)();
             const now = Date.now();
             const baseQuery = {
@@ -338,14 +387,14 @@ exports.adSubscriptionsController = {
                     baseQuery,
                     {
                         $or: [
-                            { ownerId: userId, ownerType },
-                            { userId: userId, ownerType }
+                            { ownerId: userId, ownerType: resolvedOwnerType },
+                            { userId: userId, ownerType: resolvedOwnerType }
                         ]
                     }
                 ]
             };
             // Handle legacy 'user' subscriptions without ownerType field
-            if (ownerType === 'user') {
+            if (resolvedOwnerType === 'user') {
                 query.$and[1].$or.push({ userId, ownerType: { $exists: false } });
             }
             // Find active subscriptions that haven't expired
@@ -363,11 +412,11 @@ exports.adSubscriptionsController = {
                 status: 'active',
                 endDate: { $exists: true, $lte: now },
                 $or: [
-                    { ownerId: userId, ownerType },
-                    { userId: userId, ownerType }
+                    { ownerId: userId, ownerType: resolvedOwnerType },
+                    { userId: userId, ownerType: resolvedOwnerType }
                 ]
             };
-            if (ownerType === 'user') {
+            if (resolvedOwnerType === 'user') {
                 expireQuery.$or.push({ userId, ownerType: { $exists: false } });
             }
             yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany(expireQuery, {
@@ -398,6 +447,11 @@ exports.adSubscriptionsController = {
                     success: false,
                     error: 'Subscription not found'
                 });
+            }
+            const subOwnerId = subscription.ownerId || subscription.userId;
+            const subOwnerType = subscription.ownerType === 'company' ? 'company' : 'user';
+            if (!subOwnerId || !(yield canAccessOwner(req, subOwnerId, subOwnerType))) {
+                return res.status(403).json({ success: false, error: 'Forbidden' });
             }
             res.json({
                 success: true,

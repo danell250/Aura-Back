@@ -112,8 +112,18 @@ export const commentsController = {
     try {
       const { postId } = req.params;
       const { text, authorId, parentId, taggedUserIds, tempId } = req.body as { text: string; authorId: string; parentId?: string; taggedUserIds?: string[], tempId?: string };
+      const authUserId = (req as any).user?.id as string | undefined;
+
+      if (!authUserId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+      }
+
       if (!text || !authorId) {
         return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text and authorId are required' });
+      }
+
+      if (authorId !== authUserId) {
+        return res.status(403).json({ success: false, error: 'Forbidden', message: 'authorId must match authenticated user' });
       }
 
       const db = getDB();
@@ -305,13 +315,13 @@ export const commentsController = {
     try {
       const { id } = req.params;
       const { reaction, action: forceAction } = req.body as { reaction: string, action?: 'add' | 'remove' };
-      const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
+      const userId = (req as any).user?.id as string | undefined;
 
       if (!reaction) {
         return res.status(400).json({ success: false, error: 'Missing reaction' });
       }
       if (!userId) {
-        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
       }
 
       const db = getDB();
@@ -343,7 +353,7 @@ export const commentsController = {
              {
                $pull: { [`reactionUsers.${reaction}`]: userId },
                $inc: { [`reactions.${reaction}`]: -1 }
-             }
+             } as any
            );
         } else {
            // Add reaction
@@ -352,7 +362,7 @@ export const commentsController = {
              {
                $addToSet: { [`reactionUsers.${reaction}`]: userId },
                $inc: { [`reactions.${reaction}`]: 1 }
-             }
+             } as any
            );
         }
       }
