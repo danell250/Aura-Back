@@ -8,7 +8,7 @@ export const messagesController = {
   // GET /api/messages/conversations - Get all conversations for a user
   getConversations: async (req: Request, res: Response) => {
     try {
-      const { userId } = req.query;
+      const { userId, ownerType = 'user' } = req.query;
       
       if (!userId) {
         return res.status(400).json({
@@ -80,8 +80,27 @@ export const messagesController = {
           }
         },
         {
+          $lookup: {
+            from: 'companies',
+            localField: '_id',
+            foreignField: 'id',
+            as: 'otherCompany'
+          }
+        },
+        {
+          $addFields: {
+            otherEntity: {
+              $cond: {
+                if: { $gt: [{ $size: '$otherUser' }, 0] },
+                then: { $arrayElemAt: ['$otherUser', 0] },
+                else: { $arrayElemAt: ['$otherCompany', 0] }
+              }
+            }
+          }
+        },
+        {
           $unwind: {
-            path: '$otherUser',
+            path: '$otherEntity',
             preserveNullAndEmptyArrays: true
           }
         },
@@ -90,11 +109,12 @@ export const messagesController = {
         }
       ]).toArray();
 
-      const user = await db.collection('users').findOne({ id: userId });
-      const archivedChats: string[] = (user?.archivedChats as string[]) || [];
+      const collectionName = ownerType === 'company' ? 'companies' : 'users';
+      const doc = await db.collection(collectionName).findOne({ id: userId });
+      const archivedChats: string[] = (doc?.archivedChats as string[]) || [];
 
       const conversationsWithArchive = conversations.map(conv => {
-        const otherUser = conv.otherUser ? transformUser(conv.otherUser) : null;
+        const otherUser = conv.otherEntity ? transformUser(conv.otherEntity) : null;
         return {
           ...conv,
           otherUser,
@@ -234,6 +254,12 @@ export const messagesController = {
         : null;
 
       await db.collection('users').updateOne(
+        { id: receiverId },
+        { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } }
+      );
+      
+      // Also try companies collection in case receiver is a company
+      await db.collection('companies').updateOne(
         { id: receiverId },
         { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } }
       );
@@ -484,10 +510,11 @@ export const messagesController = {
         ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } }
         : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } };
 
-      await db.collection('users').updateOne(
-        { id: userId },
-        update
-      );
+      // Update in both collections to be safe, or we could pass ownerType from frontend
+      await Promise.all([
+        db.collection('users').updateOne({ id: userId }, update),
+        db.collection('companies').updateOne({ id: userId }, update)
+      ]);
 
       res.json({
         success: true,

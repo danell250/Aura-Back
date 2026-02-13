@@ -10,7 +10,8 @@ export const createNotificationInDB = async (
   postId?: string,
   connectionId?: string,
   meta?: any,
-  yearKey?: string
+  yearKey?: string,
+  ownerType: 'user' | 'company' = 'user'
 ) => {
   let db: any = null;
   if (isDBConnected()) {
@@ -30,14 +31,17 @@ export const createNotificationInDB = async (
     }
   }
 
+  // Determine collection based on ownerType
+  const collectionName = ownerType === 'company' ? 'companies' : 'users';
+
   if (db && yearKey) {
     try {
-      const existingUser = await db.collection('users').findOne({
+      const existingDoc = await db.collection(collectionName).findOne({
         id: userId,
         notifications: { $elemMatch: { yearKey, type } }
       });
-      if (existingUser && Array.isArray(existingUser.notifications)) {
-        const existingNotification = existingUser.notifications.find(
+      if (existingDoc && Array.isArray(existingDoc.notifications)) {
+        const existingNotification = existingDoc.notifications.find(
           (n: any) => n.yearKey === yearKey && n.type === type
         );
         if (existingNotification) {
@@ -86,19 +90,20 @@ export const createNotificationInDB = async (
     connectionId: connectionId || undefined,
     meta: meta || undefined,
     data: meta || undefined, // Alias for 'data' as requested
-    yearKey: yearKey || undefined
+    yearKey: yearKey || undefined,
+    ownerType // Store ownerType in notification too
   };
 
   if (db) {
     try {
-      await db.collection('users').updateOne(
+      await db.collection(collectionName).updateOne(
         { id: userId },
         { 
           $push: { notifications: { $each: [newNotification], $position: 0 } }
         } as any
       );
     } catch (error) {
-      console.error('Error creating notification in DB:', error);
+      console.error(`Error creating notification in DB (${collectionName}):`, error);
     }
   }
 
@@ -114,7 +119,9 @@ export const notificationsController = {
         return res.status(401).json({ success: false, error: 'Unauthorized' });
       }
 
-      const { page = 1, limit = 20, unreadOnly } = req.query;
+      const { page = 1, limit = 20, unreadOnly, ownerType = 'user', ownerId } = req.query;
+      const targetId = (ownerType === 'company' && ownerId) ? String(ownerId) : currentUser.id;
+      const collectionName = ownerType === 'company' ? 'companies' : 'users';
       
       if (!isDBConnected()) {
         return res.json({
@@ -132,15 +139,15 @@ export const notificationsController = {
 
       const db = getDB();
       
-      const user = await db.collection('users').findOne({ id: currentUser.id });
-      if (!user) {
+      const doc = await db.collection(collectionName).findOne({ id: targetId });
+      if (!doc) {
         return res.status(404).json({
           success: false,
-          error: 'User not found'
+          error: `${ownerType === 'company' ? 'Company' : 'User'} not found`
         });
       }
 
-      let notifications = user.notifications || [];
+      let notifications = doc.notifications || [];
       
       // Filter unread only if specified
       if (unreadOnly === 'true') {
@@ -169,7 +176,7 @@ export const notificationsController = {
           total: notifications.length,
           pages: Math.ceil(notifications.length / Number(limit))
         },
-        unreadCount: (user.notifications || []).filter((n: any) => !n.isRead).length
+        unreadCount: (doc.notifications || []).filter((n: any) => !n.isRead).length
       });
     } catch (error) {
       console.error('Error fetching notifications:', error);
@@ -184,7 +191,8 @@ export const notificationsController = {
   getNotificationsByUser: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
-      const { page = 1, limit = 20, unreadOnly } = req.query;
+      const { page = 1, limit = 20, unreadOnly, ownerType = 'user' } = req.query;
+      const collectionName = ownerType === 'company' ? 'companies' : 'users';
       
       if (!isDBConnected()) {
         return res.json({
@@ -202,15 +210,15 @@ export const notificationsController = {
 
       const db = getDB();
       
-      const user = await db.collection('users').findOne({ id: userId });
-      if (!user) {
+      const doc = await db.collection(collectionName).findOne({ id: userId });
+      if (!doc) {
         return res.status(404).json({
           success: false,
-          error: 'User not found'
+          error: `${ownerType === 'company' ? 'Company' : 'User'} not found`
         });
       }
 
-      let notifications = user.notifications || [];
+      let notifications = doc.notifications || [];
       
       // Filter unread only if specified
       if (unreadOnly === 'true') {
@@ -239,7 +247,7 @@ export const notificationsController = {
           total: notifications.length,
           pages: Math.ceil(notifications.length / Number(limit))
         },
-        unreadCount: (user.notifications || []).filter((n: any) => !n.isRead).length
+        unreadCount: (doc.notifications || []).filter((n: any) => !n.isRead).length
       });
     } catch (error) {
       console.error('Error fetching notifications:', error);
@@ -254,7 +262,7 @@ export const notificationsController = {
   // POST /api/notifications - Create new notification
   createNotification: async (req: Request, res: Response) => {
     try {
-      const { userId, type, fromUserId, message, postId, connectionId } = req.body;
+      const { userId, type, fromUserId, message, postId, connectionId, ownerType = 'user' } = req.body;
       const db = getDB();
       
       // Validate required fields
@@ -276,19 +284,19 @@ export const notificationsController = {
         name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
         handle: fromUserDoc.handle,
         avatar: fromUserDoc.avatar,
-    avatarKey: fromUserDoc.avatarKey,
-    avatarType: fromUserDoc.avatarType || 'image',
-    activeGlow: fromUserDoc.activeGlow
-  } : {
-    id: fromUserId,
-    firstName: 'User',
-    lastName: '',
-    name: 'User',
-    handle: '@user',
-    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`,
-    avatarType: 'image',
-    activeGlow: undefined
-  };
+        avatarKey: fromUserDoc.avatarKey,
+        avatarType: fromUserDoc.avatarType || 'image',
+        activeGlow: fromUserDoc.activeGlow
+      } : {
+        id: fromUserId,
+        firstName: 'User',
+        lastName: '',
+        name: 'User',
+        handle: '@user',
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${fromUserId}`,
+        avatarType: 'image',
+        activeGlow: undefined
+      };
 
       const newNotification = {
         id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -299,11 +307,14 @@ export const notificationsController = {
         timestamp: Date.now(),
         isRead: false,
         postId: postId || undefined,
-        connectionId: connectionId || undefined
+        connectionId: connectionId || undefined,
+        ownerType
       };
 
+      const collectionName = ownerType === 'company' ? 'companies' : 'users';
+
       // Save to database
-      await db.collection('users').updateOne(
+      await db.collection(collectionName).updateOne(
         { id: userId },
         { 
           $push: { notifications: { $each: [newNotification], $position: 0 } }
@@ -336,8 +347,8 @@ export const notificationsController = {
       const { id } = req.params;
       const db = getDB();
       
-      // Find user with this notification and update it
-      const result = await db.collection('users').updateOne(
+      // Try updating in users collection first
+      let result = await db.collection('users').updateOne(
         { "notifications.id": id },
         { 
           $set: { 
@@ -347,6 +358,20 @@ export const notificationsController = {
           } 
         }
       );
+
+      // If not found, try companies collection
+      if (result.matchedCount === 0) {
+        result = await db.collection('companies').updateOne(
+          { "notifications.id": id },
+          { 
+            $set: { 
+              "notifications.$.isRead": true,
+              "notifications.$.readAt": new Date(),
+              "notifications.$.updatedAt": new Date()
+            } 
+          }
+        );
+      }
 
       if (result.matchedCount === 0) {
         return res.status(404).json({
@@ -374,22 +399,23 @@ export const notificationsController = {
   markAllAsRead: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
+      const { ownerType = 'user' } = req.query;
+      const collectionName = ownerType === 'company' ? 'companies' : 'users';
       const db = getDB();
       
-      const user = await db.collection('users').findOne({ id: userId });
-      if (!user) {
-        return res.status(404).json({ success: false, error: 'User not found' });
+      const doc = await db.collection(collectionName).findOne({ id: userId });
+      if (!doc) {
+        return res.status(404).json({ success: false, error: `${ownerType === 'company' ? 'Company' : 'User'} not found` });
       }
       
-      if (!user.notifications || user.notifications.length === 0) {
+      if (!doc.notifications || doc.notifications.length === 0) {
         return res.json({ success: true, message: 'No notifications to mark as read' });
       }
 
-      // Update all notifications in memory then save, or use array filters
-      // Simpler to just map and replace for now
-      const updatedNotifications = user.notifications.map((n: any) => ({ ...n, isRead: true }));
+      // Update all notifications in memory then save
+      const updatedNotifications = doc.notifications.map((n: any) => ({ ...n, isRead: true }));
       
-      await db.collection('users').updateOne(
+      await db.collection(collectionName).updateOne(
         { id: userId },
         { $set: { notifications: updatedNotifications } }
       );
