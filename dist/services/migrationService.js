@@ -73,6 +73,14 @@ function migrateLegacyCompanies() {
                         updatedAt: user.updatedAt || new Date()
                     };
                     yield db.collection('companies').insertOne(newCompany);
+                    // Remove legacy fields from user object
+                    yield db.collection('users').updateOne({ id: user.id }, {
+                        $unset: {
+                            companyName: "",
+                            companyWebsite: "",
+                            industry: ""
+                        }
+                    });
                     // Ensure user also has a handle if they didn't have one (though they should)
                     if (!user.handle) {
                         yield db.collection('users').updateOne({ id: user.id }, { $set: { handle: handle } });

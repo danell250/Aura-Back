@@ -159,7 +159,7 @@ router.get('/google', (req, res, next) => {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
         return res.status(503).json({
             success: false,
-            message: 'Google login is not configured on the server.'
+            message: 'Google login is not configured on the server. Please contact Aura© support.'
         });
     }
     next();
@@ -169,8 +169,11 @@ router.get('/google/callback', (req, res, next) => {
         return res.redirect('/login?error=google_not_configured');
     }
     next();
-}, passport_1.default.authenticate('google', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+}, passport_1.default.authenticate('google', { failureRedirect: '/login', failureMessage: true }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (req.headers.origin ? req.headers.origin.toString() :
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
         if (req.user) {
             const db = (0, db_1.getDB)();
             const userData = req.user;
@@ -223,7 +226,10 @@ router.get('/google/callback', (req, res, next) => {
     }
     catch (error) {
         console.error('Error in OAuth callback:', error);
-        res.redirect('/login?error=oauth_failed');
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (req.headers.origin ? req.headers.origin.toString() :
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+        res.redirect(`${frontendUrl}/login?error=oauth_failed`);
     }
 }));
 // ============ GITHUB OAUTH ============
@@ -231,18 +237,24 @@ router.get('/github', (req, res, next) => {
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
         return res.status(503).json({
             success: false,
-            message: 'GitHub login is not configured on the server.'
+            message: 'GitHub login is not configured on the server. Please contact Aura© support.'
         });
     }
     next();
 }, passport_1.default.authenticate('github', { scope: ['user:email'] }));
 router.get('/github/callback', (req, res, next) => {
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        (req.headers.origin ? req.headers.origin.toString() :
+            (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-        return res.redirect('/login?error=github_not_configured');
+        return res.redirect(`${frontendUrl}/login?error=github_not_configured`);
     }
     next();
 }, passport_1.default.authenticate('github', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (req.headers.origin ? req.headers.origin.toString() :
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
         if (req.user) {
             const db = (0, db_1.getDB)();
             const userData = req.user;
@@ -292,7 +304,10 @@ router.get('/github/callback', (req, res, next) => {
     }
     catch (error) {
         console.error('Error in OAuth callback:', error);
-        res.redirect('/login?error=oauth_failed');
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (req.headers.origin ? req.headers.origin.toString() :
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+        res.redirect(`${frontendUrl}/login?error=oauth_failed`);
     }
 }));
 // ============ LINKEDIN OAUTH ============
@@ -300,7 +315,7 @@ router.get('/linkedin', (req, res) => {
     if (!process.env.LINKEDIN_CLIENT_ID || !process.env.LINKEDIN_CLIENT_SECRET) {
         return res.status(503).json({
             success: false,
-            message: 'LinkedIn login is not configured on the server.'
+            message: 'LinkedIn login is not configured on the server. Please contact Aura© support.'
         });
     }
     // 1. Generate a secure random state
@@ -323,19 +338,22 @@ router.get('/linkedin', (req, res) => {
 router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     const { code, state, error } = req.query;
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        (req.headers.origin ? req.headers.origin.toString() :
+            (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
     // Handle LinkedIn errors
     if (error) {
         console.error('LinkedIn OAuth Error:', error);
-        return res.redirect('/login?error=linkedin_auth_failed');
+        return res.redirect(`${frontendUrl}/login?error=linkedin_auth_failed`);
     }
     if (!code) {
-        return res.redirect('/login?error=no_code');
+        return res.redirect(`${frontendUrl}/login?error=no_code`);
     }
     // 1. Validate State
     const storedState = req.cookies.linkedin_auth_state;
     if (!state || !storedState || state !== storedState) {
         console.error('LinkedIn OAuth State Mismatch:', { received: state, stored: storedState });
-        return res.redirect('/login?error=state_mismatch');
+        return res.redirect(`${frontendUrl}/login?error=state_mismatch`);
     }
     // Clear the state cookie once used
     res.clearCookie('linkedin_auth_state');
@@ -438,7 +456,10 @@ router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0,
     }
     catch (error) {
         console.error('LinkedIn OAuth callback error:', ((_a = error === null || error === void 0 ? void 0 : error.response) === null || _a === void 0 ? void 0 : _a.data) || error.message);
-        res.redirect('/login?error=linkedin_callback_error');
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (req.headers.origin ? req.headers.origin.toString() :
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+        res.redirect(`${frontendUrl}/login?error=linkedin_callback_error`);
     }
 }));
 // ============ DISCORD OAUTH ============
@@ -446,7 +467,7 @@ router.get('/discord', (req, res) => {
     if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
         return res.status(503).json({
             success: false,
-            message: 'Discord login is not configured on the server.'
+            message: 'Discord login is not configured on the server. Please contact Aura© support.'
         });
     }
     const state = crypto_1.default.randomBytes(16).toString('hex');
@@ -463,10 +484,13 @@ router.get('/discord', (req, res) => {
 router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     const { code, error } = req.query;
+    const frontendUrl = process.env.VITE_FRONTEND_URL ||
+        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
     if (error)
-        return res.redirect('/login?error=discord_auth_failed');
+        return res.redirect(`${frontendUrl}/login?error=discord_auth_failed`);
     if (!code)
-        return res.redirect('/login?error=discord_no_code');
+        return res.redirect(`${frontendUrl}/login?error=discord_no_code`);
+    const db = (0, db_1.getDB)();
     try {
         const redirectUri = process.env.DISCORD_CALLBACK_URL ||
             `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/discord/callback`;
@@ -489,10 +513,9 @@ router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, 
         const discord = userRes.data;
         const email = (discord.email || '').trim().toLowerCase();
         if (!email)
-            return res.redirect('/login?error=discord_no_email');
+            return res.redirect(`${frontendUrl}/login?error=discord_no_email`);
         if (discord.verified === false)
-            return res.redirect('/login?error=discord_email_not_verified');
-        const db = (0, db_1.getDB)();
+            return res.redirect(`${frontendUrl}/login?error=discord_email_not_verified`);
         const existingUser = yield db.collection('users').findOne({ email });
         // Build Discord avatar URL (optional)
         const discordAvatar = discord.avatar
@@ -548,13 +571,13 @@ router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, 
         const newRefreshToken = (0, jwtUtils_1.generateRefreshToken)(userToReturn);
         yield db.collection('users').updateOne({ id: userToReturn.id }, { $push: { refreshTokens: newRefreshToken } });
         (0, jwtUtils_1.setTokenCookies)(res, newAccessToken, newRefreshToken);
-        const frontendUrl = process.env.VITE_FRONTEND_URL ||
-            (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
         return res.redirect(`${frontendUrl}/feed`);
     }
     catch (e) {
         console.error('Discord OAuth callback error:', ((_a = e === null || e === void 0 ? void 0 : e.response) === null || _a === void 0 ? void 0 : _a.data) || e.message);
-        return res.redirect('/login?error=discord_callback_error');
+        const errorFrontendUrl = process.env.VITE_FRONTEND_URL ||
+            (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+        return res.redirect(`${errorFrontendUrl}/login?error=discord_callback_error`);
     }
 }));
 // ============ MAGIC LINK ============
@@ -817,6 +840,9 @@ router.get('/github/callback', (req, res, next) => {
     next();
 }, passport_1.default.authenticate('github', { failureRedirect: '/login' }), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (req.headers.origin ? req.headers.origin.toString() :
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
         if (req.user) {
             const db = (0, db_1.getDB)();
             const userData = req.user;
@@ -867,12 +893,18 @@ router.get('/github/callback', (req, res, next) => {
             res.redirect(`${frontendUrl}/feed`);
         }
         else {
-            res.redirect('/login');
+            const frontendUrl = process.env.VITE_FRONTEND_URL ||
+                (req.headers.origin ? req.headers.origin.toString() :
+                    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+            res.redirect(`${frontendUrl}/login`);
         }
     }
     catch (error) {
         console.error('GitHub OAuth callback error:', error);
-        res.redirect('/login');
+        const frontendUrl = process.env.VITE_FRONTEND_URL ||
+            (req.headers.origin ? req.headers.origin.toString() :
+                (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+        res.redirect(`${frontendUrl}/login`);
     }
 }));
 // ============ GET CURRENT USER ============
@@ -1090,7 +1122,7 @@ router.post('/login', loginRateLimiter, (req, res) => __awaiter(void 0, void 0, 
 router.post('/complete-oauth-profile', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     try {
-        const { firstName, lastName, bio, industry, companyName, handle } = req.body;
+        const { firstName, lastName, bio, handle } = req.body;
         const tempOAuthData = (_a = req.session) === null || _a === void 0 ? void 0 : _a.tempOAuthData;
         if (!tempOAuthData) {
             return res.status(400).json({
@@ -1129,8 +1161,6 @@ router.post('/complete-oauth-profile', (req, res) => __awaiter(void 0, void 0, v
             githubId: tempOAuthData.githubId,
             handle: normalizedHandle,
             bio: (bio === null || bio === void 0 ? void 0 : bio.trim()) || '',
-            industry: industry || 'Other',
-            companyName: (companyName === null || companyName === void 0 ? void 0 : companyName.trim()) || '',
             trustScore: 10,
             auraCredits: 100,
             activeGlow: 'none',
@@ -1217,7 +1247,7 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             email: normalizedEmail,
             phone: (phone === null || phone === void 0 ? void 0 : phone.trim()) || '',
             handle: finalHandle,
-            bio: 'New to Aura',
+            bio: 'New to Aura©',
             industry: 'Other',
             companyName: '',
             avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,

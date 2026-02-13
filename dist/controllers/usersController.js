@@ -212,7 +212,7 @@ exports.usersController = {
             const users = yield db.collection('users').find(query).toArray();
             res.json({
                 success: true,
-                data: (0, userUtils_1.transformUsers)(users),
+                data: (0, userUtils_1.transformUsers)(users).map(u => (Object.assign(Object.assign({}, u), { type: 'user' }))),
                 count: users.length
             });
         }
@@ -291,18 +291,18 @@ exports.usersController = {
                 return res.json({
                     success: true,
                     type: 'user',
-                    data: (0, userUtils_1.transformUser)(user)
+                    data: Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(user)), { type: 'user' })
                 });
             }
             // Try to find company
             const company = yield db.collection('companies').findOne({ id });
             if (company) {
-                // Map company fields to user-like structure for ProfileView compatibility
-                const profileData = Object.assign(Object.assign({}, company), { name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'corporate', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
+                // Map company fields to user-like structure for profile view compatibility
+                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'corporate', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
                 return res.json({
                     success: true,
                     type: 'company',
-                    data: (0, userUtils_1.transformUser)(profileData)
+                    data: Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(profileData)), { type: 'company' })
                 });
             }
             return res.status(404).json({
@@ -340,7 +340,7 @@ exports.usersController = {
                 return res.json({
                     success: true,
                     type: 'user',
-                    data: (0, userUtils_1.transformUser)(user)
+                    data: Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(user)), { type: 'user' })
                 });
             }
             // Try to find company
@@ -348,12 +348,12 @@ exports.usersController = {
                 handle: { $regex: new RegExp(`^${handle}$`, 'i') }
             });
             if (company) {
-                // Map company fields to user-like structure for ProfileView compatibility
-                const profileData = Object.assign(Object.assign({}, company), { name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'corporate', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
+                // Map company fields to user-like structure for profile view compatibility
+                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'corporate', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
                 return res.json({
                     success: true,
                     type: 'company',
-                    data: (0, userUtils_1.transformUser)(profileData)
+                    data: Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(profileData)), { type: 'company' })
                 });
             }
             return res.status(404).json({
@@ -425,7 +425,7 @@ exports.usersController = {
             console.log('✓ User created:', userId, '| Handle:', uniqueHandle);
             res.status(201).json({
                 success: true,
-                data: (0, userUtils_1.transformUser)(newUser),
+                data: Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(newUser)), { type: 'user' }),
                 message: 'User created successfully'
             });
         }
@@ -452,7 +452,7 @@ exports.usersController = {
                     message: `User with ID ${id} does not exist`
                 });
             }
-            const { googleId, id: _ignoredId } = updates, mutableUpdates = __rest(updates, ["googleId", "id"]);
+            const { googleId, id: _ignoredId, companyName, companyWebsite, industry } = updates, mutableUpdates = __rest(updates, ["googleId", "id", "companyName", "companyWebsite", "industry"]);
             const updateData = Object.assign({}, mutableUpdates);
             if (typeof mutableUpdates.handle === 'string') {
                 const handleValidation = validateHandleFormat(mutableUpdates.handle);
@@ -528,7 +528,7 @@ exports.usersController = {
             }
             // Get updated user
             const updatedUser = yield db.collection('users').findOne({ id });
-            const transformedUser = (0, userUtils_1.transformUser)(updatedUser);
+            const transformedUser = Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(updatedUser)), { type: 'user' });
             // Broadcast update to all clients via Socket.IO
             const io = req.app.get('io');
             if (io) {
@@ -944,7 +944,7 @@ exports.usersController = {
             };
             yield db.collection('reports').insertOne(reportDoc);
             const toEmail = process.env.ADMIN_EMAIL || 'danelloosthuizen3@gmail.com';
-            const subject = `Aura User Report: ${target.name || target.handle || targetUserId}`;
+            const subject = `Aura© User Report: ${target.name || target.handle || targetUserId}`;
             const body = [
                 `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,
                 `Target: ${target.name || target.handle || targetUserId} (${targetUserId})`,
@@ -1433,7 +1433,7 @@ exports.usersController = {
                     ],
                     legalBasis: 'Consent and legitimate interest',
                     retentionPeriod: '2 years after account deletion',
-                    thirdPartySharing: 'None - all data remains within Aura platform',
+                    thirdPartySharing: 'None - all data remains within Aura© platform',
                     dataLocation: 'United States (with EU adequacy protections)'
                 },
                 exportedAt: new Date().toISOString(),

@@ -27,7 +27,7 @@ function fingerprint(req) {
     const ua = String(req.headers['user-agent'] || '');
     return crypto_1.default.createHash('sha256').update(`${ip}|${ua}`).digest('hex');
 }
-const emitAdAnalyticsUpdate = (app, adId, ownerId) => __awaiter(void 0, void 0, void 0, function* () {
+const emitAdAnalyticsUpdate = (app_1, adId_1, ownerId_1, ...args_1) => __awaiter(void 0, [app_1, adId_1, ownerId_1, ...args_1], void 0, function* (app, adId, ownerId, ownerType = 'user') {
     try {
         if (!adId || !ownerId)
             return;
@@ -40,9 +40,8 @@ const emitAdAnalyticsUpdate = (app, adId, ownerId) => __awaiter(void 0, void 0, 
         const analytics = yield db.collection('adAnalytics').findOne({ adId });
         if (!analytics)
             return;
-        console.log(`📡 Emitting live ad analytics update to user: ${ownerId}`);
-        io.to(ownerId).emit('analytics_update', {
-            userId: ownerId,
+        console.log(`📡 Emitting live ad analytics update to ${ownerType}: ${ownerId}`);
+        const payload = {
             stats: {
                 adMetrics: {
                     adId: analytics.adId,
@@ -56,7 +55,15 @@ const emitAdAnalyticsUpdate = (app, adId, ownerId) => __awaiter(void 0, void 0, 
                     lastUpdated: analytics.lastUpdated || Date.now()
                 }
             }
-        });
+        };
+        if (ownerType === 'company') {
+            payload.companyId = ownerId;
+            io.to(`company_${ownerId}`).emit('analytics_update', payload);
+        }
+        else {
+            payload.userId = ownerId;
+            io.to(ownerId).emit('analytics_update', payload);
+        }
     }
     catch (err) {
         console.error('emitAdAnalyticsUpdate error', err);
@@ -72,10 +79,31 @@ exports.adsController = {
             if (!(currentUser === null || currentUser === void 0 ? void 0 : currentUser.id)) {
                 return res.status(401).json({ success: false, error: 'Unauthorized' });
             }
+            const ownerType = req.query.ownerType || 'user';
+            const ownerId = req.query.ownerId || currentUser.id;
+            // Security check: If ownerType is user, ownerId must be currentUser.id
+            if (ownerType === 'user' && ownerId !== currentUser.id) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'You can only view your own ads.'
+                });
+            }
+            // Security check: If ownerType is company, user must be the owner of the company
+            if (ownerType === 'company') {
+                const company = yield db.collection('companies').findOne({ id: ownerId, ownerId: currentUser.id });
+                if (!company) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Forbidden',
+                        message: 'You do not have permission to view ads for this company.'
+                    });
+                }
+            }
             const limit = Math.min(Number(req.query.limit || 50), 200);
             const skip = Math.max(Number(req.query.skip || 0), 0);
             const ads = yield db.collection('ads')
-                .find({ ownerId: currentUser.id })
+                .find({ ownerId, ownerType })
                 .sort({ timestamp: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -90,13 +118,23 @@ exports.adsController = {
     // GET /api/ads - Get all ads
     getAllAds: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { page = 1, limit = 10, placement, status, hashtags } = req.query;
+            const { page = 1, limit = 10, placement, status, hashtags, ownerType } = req.query;
             let { ownerId } = req.query;
             const currentUser = req.user;
             const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
             // Security hardening: Only admins can filter by arbitrary ownerId
             if (ownerId && !isAdmin) {
-                ownerId = undefined;
+                // Allow users to see their own ads or their company's ads if they are the owner
+                const isOwnUser = ownerId === (currentUser === null || currentUser === void 0 ? void 0 : currentUser.id);
+                let isOwnCompany = false;
+                if (!isOwnUser && ownerType === 'company' && (currentUser === null || currentUser === void 0 ? void 0 : currentUser.id)) {
+                    const db = (0, db_1.getDB)();
+                    const company = yield db.collection('companies').findOne({ id: ownerId, ownerId: currentUser.id });
+                    isOwnCompany = !!company;
+                }
+                if (!isOwnUser && !isOwnCompany) {
+                    ownerId = undefined;
+                }
             }
             const currentUserId = currentUser === null || currentUser === void 0 ? void 0 : currentUser.id;
             const db = (0, db_1.getDB)();
@@ -116,9 +154,12 @@ exports.adsController = {
             if (placement) {
                 query.placement = placement;
             }
-            // Filter by owner if specified (Admins only, enforced above)
+            // Filter by owner if specified (Admins or owner check above)
             if (ownerId) {
                 query.ownerId = ownerId;
+                if (ownerType) {
+                    query.ownerType = ownerType;
+                }
             }
             // Filter by hashtags if specified
             if (hashtags) {
@@ -139,13 +180,26 @@ exports.adsController = {
                 {
                     $lookup: {
                         from: 'adSubscriptions',
-                        let: { ownerId: '$ownerId' },
+                        let: { ownerId: '$ownerId', ownerType: '$ownerType' },
                         pipeline: [
                             {
                                 $match: {
                                     $expr: {
                                         $and: [
-                                            { $eq: ['$userId', '$$ownerId'] },
+                                            {
+                                                $or: [
+                                                    { $and: [{ $eq: ['$ownerId', '$$ownerId'] }, { $eq: ['$ownerType', '$$ownerType'] }] },
+                                                    { $and: [{ $eq: ['$userId', '$$ownerId'] }, { $eq: ['$ownerType', '$$ownerType'] }] },
+                                                    // legacy support: if ownerType is user, match documents without ownerType
+                                                    {
+                                                        $and: [
+                                                            { $eq: ['$$ownerType', 'user'] },
+                                                            { $eq: ['$userId', '$$ownerId'] },
+                                                            { $not: ['$ownerType'] }
+                                                        ]
+                                                    }
+                                                ]
+                                            },
                                             { $eq: ['$status', 'active'] },
                                             {
                                                 $or: [
@@ -247,6 +301,8 @@ exports.adsController = {
                 return res.status(401).json({ success: false, error: 'Authentication required' });
             }
             const userId = currentUser.id;
+            const ownerId = adData.ownerId || userId;
+            const ownerType = adData.ownerType || 'user';
             // Ensure required fields
             if (!adData.headline) {
                 return res.status(400).json({
@@ -255,12 +311,24 @@ exports.adsController = {
                     message: 'Ad headline is required to create an ad.'
                 });
             }
-            if (adData.ownerId && adData.ownerId !== userId) {
+            // Security check: If ownerType is user, ownerId must be currentUser.id
+            if (ownerType === 'user' && ownerId !== userId) {
                 return res.status(403).json({
                     success: false,
                     error: 'Owner mismatch',
                     message: 'You can only create ads for your own account.'
                 });
+            }
+            // Security check: If ownerType is company, user must be the owner of the company
+            if (ownerType === 'company') {
+                const company = yield db.collection('companies').findOne({ id: ownerId, ownerId: userId });
+                if (!company) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Permission denied',
+                        message: 'You do not have permission to create ads for this company.'
+                    });
+                }
             }
             const isSpecialUser = adData.ownerEmail &&
                 adData.ownerEmail.toLowerCase() === 'danelloosthuizen3@gmail.com';
@@ -269,15 +337,31 @@ exports.adsController = {
             const now = Date.now();
             // Check subscription limits and enforce at ACTION TIME
             if (!isSpecialUser) {
-                // Fetch active subscription for the user
-                subscription = yield db.collection('adSubscriptions').findOne({
-                    userId,
+                // Fetch active subscription for the owner (user or company)
+                const subscriptionQuery = {
                     status: 'active',
                     $or: [
                         { endDate: { $exists: false } },
                         { endDate: { $gt: now } }
+                    ],
+                    $and: [
+                        {
+                            $or: [
+                                { ownerId: ownerId, ownerType: ownerType },
+                                { userId: ownerId, ownerType: ownerType } // backward compatibility
+                            ]
+                        }
                     ]
-                });
+                };
+                // If looking for user type, also match legacy documents without ownerType
+                if (ownerType === 'user') {
+                    subscriptionQuery.$and[0].$or.push({ userId: ownerId, ownerType: { $exists: false } });
+                }
+                subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
+                if (subscription) {
+                    // Ensure period is current before checking limits
+                    subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
+                }
                 // If no active subscription, allow creation only if they have credits? 
                 // OR strictly enforce plan.
                 // Based on "pkg-starter" being $39, we should require a subscription.
@@ -288,13 +372,43 @@ exports.adsController = {
                         message: 'No active ad plan found. Please purchase a plan to create ads.'
                     });
                 }
+                // Check active ads limit
+                const plan = adPlans_1.AD_PLANS[subscription.packageId];
+                const activeAdsLimit = plan ? plan.activeAdsLimit : 0;
+                if (activeAdsLimit > 0) {
+                    const activeAdsCount = yield db.collection('ads').countDocuments({
+                        ownerId: ownerId,
+                        ownerType: ownerType,
+                        status: 'active'
+                    });
+                    if (activeAdsCount >= activeAdsLimit) {
+                        return res.status(403).json({
+                            success: false,
+                            code: 'ACTIVE_AD_LIMIT_REACHED',
+                            error: 'Active ad limit reached',
+                            message: `You have reached your limit of ${activeAdsLimit} active ads for your current plan. Please deactivate an existing ad or upgrade your plan.`,
+                            limit: activeAdsLimit,
+                            current: activeAdsCount
+                        });
+                    }
+                }
+                // Check impression limit
+                if (subscription.impressionsUsed >= subscription.impressionLimit) {
+                    return res.status(403).json({
+                        success: false,
+                        error: `Monthly impression limit reached (${subscription.impressionLimit}). Upgrade or wait for renewal.`,
+                        limit: subscription.impressionLimit,
+                        current: subscription.impressionsUsed
+                    });
+                }
             }
-            const newAd = Object.assign(Object.assign({}, adData), { ownerId: userId, ownerActiveGlow: currentUser.activeGlow, id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, timestamp: Date.now(), reactions: {}, reactionUsers: {}, hashtags: (0, hashtagUtils_1.getHashtagsFromText)(adData.description || '') });
+            const newAd = Object.assign(Object.assign({}, adData), { ownerId: ownerId, ownerType: ownerType, ownerActiveGlow: currentUser.activeGlow, id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, timestamp: Date.now(), reactions: {}, reactionUsers: {}, hashtags: (0, hashtagUtils_1.getHashtagsFromText)(adData.description || '') });
             try {
                 yield db.collection('ads').insertOne(newAd);
                 yield db.collection('adAnalytics').insertOne({
                     adId: newAd.id,
                     ownerId: newAd.ownerId,
+                    ownerType: newAd.ownerType,
                     impressions: 0,
                     clicks: 0,
                     ctr: 0,
@@ -408,6 +522,25 @@ exports.adsController = {
             if (typeof updates.description === 'string') {
                 updates.hashtags = (0, hashtagUtils_1.getHashtagsFromText)(updates.description || '');
             }
+            const ad = yield db.collection('ads').findOne({ id });
+            if (!ad) {
+                return res.status(404).json({ success: false, error: 'Ad not found' });
+            }
+            const currentUser = req.user;
+            const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
+            let hasPermission = isAdmin;
+            if (!hasPermission && currentUser) {
+                if (ad.ownerType === 'user' || !ad.ownerType) {
+                    hasPermission = ad.ownerId === currentUser.id;
+                }
+                else if (ad.ownerType === 'company') {
+                    const company = yield db.collection('companies').findOne({ id: ad.ownerId, ownerId: currentUser.id });
+                    hasPermission = !!company;
+                }
+            }
+            if (!hasPermission) {
+                return res.status(403).json({ success: false, error: 'Forbidden' });
+            }
             const result = yield db.collection('ads').findOneAndUpdate({ id }, { $set: updates }, { returnDocument: 'after' });
             if (!result) {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
@@ -437,11 +570,21 @@ exports.adsController = {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
             }
             const isAdmin = currentUser.role === 'admin' || currentUser.isAdmin === true;
-            if (!isAdmin && ad.ownerId !== currentUser.id) {
+            let hasPermission = isAdmin;
+            if (!hasPermission) {
+                if (ad.ownerType === 'user' || !ad.ownerType) {
+                    hasPermission = ad.ownerId === currentUser.id;
+                }
+                else if (ad.ownerType === 'company') {
+                    const company = yield db.collection('companies').findOne({ id: ad.ownerId, ownerId: currentUser.id });
+                    hasPermission = !!company;
+                }
+            }
+            if (!hasPermission) {
                 return res.status(403).json({
                     success: false,
                     error: 'Forbidden',
-                    message: 'You can only delete your own ads'
+                    message: 'You do not have permission to delete this ad'
                 });
             }
             const result = yield db.collection('ads').deleteOne({ id });
@@ -470,21 +613,45 @@ exports.adsController = {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
             }
             const isAdmin = currentUser.role === 'admin' || currentUser.isAdmin === true;
-            if (!isAdmin && ad.ownerId !== currentUser.id) {
+            let hasPermission = isAdmin;
+            if (!hasPermission) {
+                if (ad.ownerType === 'user' || !ad.ownerType) {
+                    hasPermission = ad.ownerId === currentUser.id;
+                }
+                else if (ad.ownerType === 'company') {
+                    const company = yield db.collection('companies').findOne({ id: ad.ownerId, ownerId: currentUser.id });
+                    hasPermission = !!company;
+                }
+            }
+            if (!hasPermission) {
                 return res.status(403).json({ success: false, error: 'Forbidden' });
             }
             // Enforce limits if activating
             if (status === 'active' && ad.status !== 'active') {
                 // Get active subscription
                 const now = Date.now();
-                let subscription = yield db.collection('adSubscriptions').findOne({
-                    userId: currentUser.id,
+                const ownerId = ad.ownerId;
+                const ownerType = ad.ownerType || 'user';
+                const subscriptionQuery = {
                     status: 'active',
                     $or: [
                         { endDate: { $exists: false } },
                         { endDate: { $gt: now } }
+                    ],
+                    $and: [
+                        {
+                            $or: [
+                                { ownerId: ownerId, ownerType: ownerType },
+                                { userId: ownerId, ownerType: ownerType } // backward compatibility
+                            ]
+                        }
                     ]
-                });
+                };
+                // If looking for user type, also match legacy documents without ownerType
+                if (ownerType === 'user') {
+                    subscriptionQuery.$and[0].$or.push({ userId: ownerId, ownerType: { $exists: false } });
+                }
+                let subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
                 if (subscription) {
                     // Ensure period is current before checking limits
                     subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
@@ -495,7 +662,8 @@ exports.adsController = {
                     const activeAdsLimit = plan ? plan.activeAdsLimit : 0; // Default to 0 if plan not found or limit not defined
                     if (activeAdsLimit > 0) {
                         const activeAdsCount = yield db.collection('ads').countDocuments({
-                            ownerId: currentUser.id,
+                            ownerId: ad.ownerId,
+                            ownerType: ad.ownerType || 'user',
                             status: 'active'
                         });
                         if (activeAdsCount >= activeAdsLimit) {
@@ -522,7 +690,7 @@ exports.adsController = {
             }
             const result = yield db.collection('ads').findOneAndUpdate({ id }, { $set: { status } }, { returnDocument: 'after' });
             // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId);
+            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true, data: result });
         }
         catch (error) {
@@ -541,7 +709,17 @@ exports.adsController = {
             }
             const currentUser = req.user;
             const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
-            if (!isAdmin && (!currentUser || currentUser.id !== ad.ownerId)) {
+            let hasPermission = isAdmin;
+            if (!hasPermission && currentUser) {
+                if (ad.ownerType === 'company') {
+                    const company = yield db.collection('companies').findOne({ id: ad.ownerId, ownerId: currentUser.id });
+                    hasPermission = !!company;
+                }
+                else {
+                    hasPermission = currentUser.id === ad.ownerId;
+                }
+            }
+            if (!hasPermission) {
                 return res.status(403).json({
                     success: false,
                     error: 'Forbidden',
@@ -549,13 +727,30 @@ exports.adsController = {
                 });
             }
             const analytics = yield db.collection('adAnalytics').findOne({ adId: id });
-            // Check user subscription level
+            // Check owner subscription level
             const now = Date.now();
-            const subscription = yield db.collection('adSubscriptions').findOne({
-                userId: currentUser.id, // Viewer is owner (checked above)
+            const ownerId = ad.ownerId;
+            const ownerType = ad.ownerType || 'user';
+            const subscriptionQuery = {
                 status: 'active',
-                $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
-            });
+                $or: [
+                    { endDate: { $exists: false } },
+                    { endDate: { $gt: now } }
+                ],
+                $and: [
+                    {
+                        $or: [
+                            { ownerId: ownerId, ownerType: ownerType },
+                            { userId: ownerId, ownerType: ownerType } // backward compatibility
+                        ]
+                    }
+                ]
+            };
+            // If looking for user type, also match legacy documents without ownerType
+            if (ownerType === 'user') {
+                subscriptionQuery.$and[0].$or.push({ userId: ownerId, ownerType: { $exists: false } });
+            }
+            const subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
             const packageId = subscription ? subscription.packageId : 'pkg-starter';
             const isBasic = packageId === 'pkg-starter';
             const isPro = packageId === 'pkg-pro';
@@ -614,17 +809,24 @@ exports.adsController = {
     getUserAdPerformance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
+            const ownerType = req.query.ownerType || 'user';
+            const ownerId = userId; // In this route, the param is named userId but could be companyId
             const db = (0, db_1.getDB)();
             const currentUser = req.user;
             const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
-            if (!isAdmin && (!currentUser || currentUser.id !== userId)) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'Forbidden',
-                    message: 'You can only view analytics for your own ads'
-                });
+            // Security check
+            if (!isAdmin) {
+                if (ownerType === 'user' && (!currentUser || currentUser.id !== ownerId)) {
+                    return res.status(403).json({ success: false, error: 'Forbidden' });
+                }
+                if (ownerType === 'company') {
+                    const company = yield db.collection('companies').findOne({ id: ownerId, ownerId: currentUser.id });
+                    if (!company) {
+                        return res.status(403).json({ success: false, error: 'Forbidden' });
+                    }
+                }
             }
-            const ads = yield db.collection('ads').find({ ownerId: userId }).toArray();
+            const ads = yield db.collection('ads').find({ ownerId, ownerType }).toArray();
             if (!ads || ads.length === 0) {
                 return res.json({ success: true, data: [] });
             }
@@ -633,13 +835,28 @@ exports.adsController = {
                 .collection('adAnalytics')
                 .find({ adId: { $in: adIds } })
                 .toArray();
-            // Check user subscription level
+            // Check user/company subscription level
             const now = Date.now();
-            const subscription = yield db.collection('adSubscriptions').findOne({
-                userId,
+            const subscriptionQuery = {
                 status: 'active',
-                $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
-            });
+                $or: [
+                    { endDate: { $exists: false } },
+                    { endDate: { $gt: now } }
+                ],
+                $and: [
+                    {
+                        $or: [
+                            { ownerId: ownerId, ownerType: ownerType },
+                            { userId: ownerId, ownerType: ownerType } // backward compatibility
+                        ]
+                    }
+                ]
+            };
+            // If looking for user type, also match legacy documents without ownerType
+            if (ownerType === 'user') {
+                subscriptionQuery.$and[0].$or.push({ userId: ownerId, ownerType: { $exists: false } });
+            }
+            const subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
             const packageId = subscription ? subscription.packageId : 'pkg-starter';
             const analyticsMap = new Map();
             analyticsDocs.forEach(doc => {
@@ -685,17 +902,24 @@ exports.adsController = {
     getCampaignPerformance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
+            const ownerType = req.query.ownerType || 'user';
+            const ownerId = userId;
             const db = (0, db_1.getDB)();
             const currentUser = req.user;
             const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
-            if (!isAdmin && (!currentUser || currentUser.id !== userId)) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'Forbidden',
-                    message: 'You can only view campaign analytics for your own ads'
-                });
+            // Security check
+            if (!isAdmin) {
+                if (ownerType === 'user' && (!currentUser || currentUser.id !== ownerId)) {
+                    return res.status(403).json({ success: false, error: 'Forbidden' });
+                }
+                if (ownerType === 'company') {
+                    const company = yield db.collection('companies').findOne({ id: ownerId, ownerId: currentUser.id });
+                    if (!company) {
+                        return res.status(403).json({ success: false, error: 'Forbidden' });
+                    }
+                }
             }
-            const ads = yield db.collection('ads').find({ ownerId: userId }).toArray();
+            const ads = yield db.collection('ads').find({ ownerId, ownerType }).toArray();
             if (!ads || ads.length === 0) {
                 return res.json({
                     success: true,
@@ -712,13 +936,28 @@ exports.adsController = {
                     }
                 });
             }
-            // Check user subscription level
+            // Check user/company subscription level
             const now = Date.now();
-            const subscription = yield db.collection('adSubscriptions').findOne({
-                userId,
+            const subscriptionQuery = {
                 status: 'active',
-                $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
-            });
+                $or: [
+                    { endDate: { $exists: false } },
+                    { endDate: { $gt: now } }
+                ],
+                $and: [
+                    {
+                        $or: [
+                            { ownerId: ownerId, ownerType: ownerType },
+                            { userId: ownerId, ownerType: ownerType } // backward compatibility
+                        ]
+                    }
+                ]
+            };
+            // If looking for user type, also match legacy documents without ownerType
+            if (ownerType === 'user') {
+                subscriptionQuery.$and[0].$or.push({ userId: ownerId, ownerType: { $exists: false } });
+            }
+            const subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
             const packageId = subscription ? subscription.packageId : 'pkg-starter';
             const isBasic = packageId === 'pkg-starter';
             // const isPro = packageId === 'pkg-pro';
@@ -772,7 +1011,7 @@ exports.adsController = {
             const daysToNextExpiry = (subscription === null || subscription === void 0 ? void 0 : subscription.endDate)
                 ? Math.ceil((subscription.endDate - now) / (1000 * 60 * 60 * 24))
                 : null;
-            const build7DayTrend = (ownerId) => __awaiter(void 0, void 0, void 0, function* () {
+            const build7DayTrend = (ownerId, ownerType) => __awaiter(void 0, void 0, void 0, function* () {
                 const days = 7;
                 const start = new Date();
                 start.setUTCHours(0, 0, 0, 0);
@@ -784,7 +1023,7 @@ exports.adsController = {
                     keys.push(d.toISOString().slice(0, 10));
                 }
                 const docs = yield db.collection('adAnalyticsDaily')
-                    .find({ ownerId, dateKey: { $in: keys } })
+                    .find({ ownerId, ownerType, dateKey: { $in: keys } })
                     .toArray();
                 const map = new Map();
                 for (const k of keys) {
@@ -808,7 +1047,7 @@ exports.adsController = {
                 }
                 return Array.from(map.values());
             });
-            const trendData = yield build7DayTrend(userId);
+            const trendData = yield build7DayTrend(ownerId, ownerType);
             const data = {
                 totalImpressions,
                 totalClicks,
@@ -850,7 +1089,7 @@ exports.adsController = {
             }
             // 2. Get Ad Owner's Subscription
             let subscription = yield db.collection('adSubscriptions').findOne({
-                userId: ad.ownerId,
+                userId: ad.ownerId, // This is already the correct ID (userId or companyId)
                 status: 'active',
                 $or: [{ endDate: { $exists: false } }, { endDate: { $gt: now } }]
             });
@@ -887,13 +1126,15 @@ exports.adsController = {
             yield db.collection('adEventDedupes').insertOne({
                 key: dedupKey,
                 adId: id,
+                ownerId: ad.ownerId,
+                ownerType: ad.ownerType || 'user',
                 dateKey: todayKey,
                 fingerprint: userFingerprint,
                 timestamp: now,
                 expiresAt: new Date(now + 24 * 60 * 60 * 1000) // Expires in 24 hours
             });
             // Increment uniqueReach in adAnalyticsDaily
-            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, dateKey: todayKey }, { $inc: { uniqueReach: 1 } }, { upsert: true });
+            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: todayKey }, { $inc: { uniqueReach: 1 } }, { upsert: true });
             // 5. Determine Cost Per Impression (CPI)
             let cpi = 0;
             if (plan.impressionLimit > 0 && plan.numericPrice) {
@@ -906,13 +1147,17 @@ exports.adsController = {
                     impressions: 1,
                     spend: cpi
                 },
-                $set: { lastUpdated: now }
+                $set: {
+                    lastUpdated: now,
+                    ownerId: ad.ownerId,
+                    ownerType: ad.ownerType || 'user'
+                }
             }, { upsert: true });
             // Update adSubscription impressionsUsed
             yield db.collection('adSubscriptions').updateOne({ _id: subscription._id }, // Use _id for direct document update
             { $inc: { impressionsUsed: 1 }, $set: { updatedAt: now } });
             // 7. Update Daily Rollup (for trends and accurate CTR calculation)
-            yield db.collection('adDailyRollups').updateOne({ adId: id, dateKey: todayKey }, {
+            yield db.collection('adDailyRollups').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: todayKey }, {
                 $inc: { impressions: 1 },
                 $set: { lastUpdated: now }
             }, { upsert: true });
@@ -924,7 +1169,7 @@ exports.adsController = {
                 yield db.collection('adAnalytics').updateOne({ adId: id }, { $set: { ctr: newCtr, lastUpdated: now } });
             }
             // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId);
+            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true, message: 'Impression tracked successfully.' });
         }
         catch (error) {
@@ -959,9 +1204,9 @@ exports.adsController = {
                     }
                 }
             ], { upsert: true });
-            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, dateKey: dKey }, { $inc: { clicks: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
+            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey }, { $inc: { clicks: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
             // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId);
+            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true });
         }
         catch (error) {
@@ -981,17 +1226,24 @@ exports.adsController = {
             const dKey = dateKeyUTC(now);
             const fp = fingerprint(req);
             // dedupe engagement per day per type
-            const dedupe = yield db.collection('adEventDedupes').updateOne({ adId: id, eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey }, { $setOnInsert: { adId: id, ownerId: ad.ownerId, eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey, createdAt: now } }, { upsert: true });
+            const dedupe = yield db.collection('adEventDedupes').updateOne({ adId: id, eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey }, { $setOnInsert: { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey, createdAt: now } }, { upsert: true });
             if (dedupe.upsertedCount === 0) {
                 return res.json({ success: true, deduped: true });
             }
             const inc = { engagement: 1 };
             if (engagementType)
                 inc[`engagementByType.${engagementType}`] = 1;
-            yield db.collection('adAnalytics').updateOne({ adId: id }, { $inc: inc, $set: { lastUpdated: now } }, { upsert: true });
-            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, dateKey: dKey }, { $inc: Object.assign({ engagement: 1 }, (engagementType ? { [`engagementByType.${engagementType}`]: 1 } : {})), $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
+            yield db.collection('adAnalytics').updateOne({ adId: id }, {
+                $inc: inc,
+                $set: {
+                    lastUpdated: now,
+                    ownerId: ad.ownerId,
+                    ownerType: ad.ownerType || 'user'
+                }
+            }, { upsert: true });
+            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey }, { $inc: Object.assign({ engagement: 1 }, (engagementType ? { [`engagementByType.${engagementType}`]: 1 } : {})), $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
             // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId);
+            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true });
         }
         catch (error) {
@@ -1009,16 +1261,20 @@ exports.adsController = {
             const now = Date.now();
             const dKey = dateKeyUTC(now);
             const fp = fingerprint(req);
-            const dedupe = yield db.collection('adEventDedupes').updateOne({ adId: id, eventType: 'conversion', fingerprint: fp, dateKey: dKey }, { $setOnInsert: { adId: id, ownerId: ad.ownerId, eventType: 'conversion', fingerprint: fp, dateKey: dKey, createdAt: now } }, { upsert: true });
+            const dedupe = yield db.collection('adEventDedupes').updateOne({ adId: id, eventType: 'conversion', fingerprint: fp, dateKey: dKey }, { $setOnInsert: { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', eventType: 'conversion', fingerprint: fp, dateKey: dKey, createdAt: now } }, { upsert: true });
             if (dedupe.upsertedCount === 0)
                 return res.json({ success: true, deduped: true });
             yield db.collection('adAnalytics').updateOne({ adId: id }, {
                 $inc: { conversions: 1 },
-                $set: { lastUpdated: now }
+                $set: {
+                    lastUpdated: now,
+                    ownerId: ad.ownerId,
+                    ownerType: ad.ownerType || 'user'
+                }
             }, { upsert: true });
-            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, dateKey: dKey }, { $inc: { conversions: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
+            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey }, { $inc: { conversions: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
             // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId);
+            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true });
         }
         catch (error) {

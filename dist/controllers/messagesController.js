@@ -18,7 +18,7 @@ exports.messagesController = {
     // GET /api/messages/conversations - Get all conversations for a user
     getConversations: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { userId } = req.query;
+            const { userId, ownerType = 'user' } = req.query;
             if (!userId) {
                 return res.status(400).json({
                     success: false,
@@ -86,8 +86,27 @@ exports.messagesController = {
                     }
                 },
                 {
+                    $lookup: {
+                        from: 'companies',
+                        localField: '_id',
+                        foreignField: 'id',
+                        as: 'otherCompany'
+                    }
+                },
+                {
+                    $addFields: {
+                        otherEntity: {
+                            $cond: {
+                                if: { $gt: [{ $size: '$otherUser' }, 0] },
+                                then: { $arrayElemAt: ['$otherUser', 0] },
+                                else: { $arrayElemAt: ['$otherCompany', 0] }
+                            }
+                        }
+                    }
+                },
+                {
                     $unwind: {
-                        path: '$otherUser',
+                        path: '$otherEntity',
                         preserveNullAndEmptyArrays: true
                     }
                 },
@@ -95,10 +114,11 @@ exports.messagesController = {
                     $sort: { 'lastMessage.timestamp': -1 }
                 }
             ]).toArray();
-            const user = yield db.collection('users').findOne({ id: userId });
-            const archivedChats = (user === null || user === void 0 ? void 0 : user.archivedChats) || [];
+            const collectionName = ownerType === 'company' ? 'companies' : 'users';
+            const doc = yield db.collection(collectionName).findOne({ id: userId });
+            const archivedChats = (doc === null || doc === void 0 ? void 0 : doc.archivedChats) || [];
             const conversationsWithArchive = conversations.map(conv => {
-                const otherUser = conv.otherUser ? (0, userUtils_1.transformUser)(conv.otherUser) : null;
+                const otherUser = conv.otherEntity ? (0, userUtils_1.transformUser)(conv.otherEntity) : null;
                 return Object.assign(Object.assign({}, conv), { otherUser, isArchived: archivedChats.includes(conv._id) });
             });
             res.json({
@@ -199,6 +219,8 @@ exports.messagesController = {
             const responseMessage = insertedMessage
                 ? Object.assign(Object.assign({}, insertedMessage), { id: insertedMessage._id ? String(insertedMessage._id) : undefined }) : null;
             yield db.collection('users').updateOne({ id: receiverId }, { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } });
+            // Also try companies collection in case receiver is a company
+            yield db.collection('companies').updateOne({ id: receiverId }, { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } });
             res.status(201).json({
                 success: true,
                 data: responseMessage
@@ -406,7 +428,11 @@ exports.messagesController = {
             const update = archived
                 ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } }
                 : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } };
-            yield db.collection('users').updateOne({ id: userId }, update);
+            // Update in both collections to be safe, or we could pass ownerType from frontend
+            yield Promise.all([
+                db.collection('users').updateOne({ id: userId }, update),
+                db.collection('companies').updateOne({ id: userId }, update)
+            ]);
             res.json({
                 success: true,
                 message: archived ? 'Conversation archived successfully' : 'Conversation unarchived successfully'

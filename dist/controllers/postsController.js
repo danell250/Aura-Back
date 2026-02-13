@@ -234,9 +234,9 @@ exports.postsController = {
             const posts = yield db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
             const transformedPosts = posts.map((post) => {
                 if (post.author) {
-                    post.author = (0, userUtils_1.transformUser)(post.author);
+                    post.author = Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(post.author)), { type: post.authorType || 'user' });
                 }
-                return post;
+                return Object.assign(Object.assign({}, post), { type: 'post' });
             });
             res.json({ success: true, data: transformedPosts });
         }
@@ -463,10 +463,10 @@ exports.postsController = {
             const transformedData = data.map((post) => {
                 // Use fresh author details from lookup if available
                 if (post.authorDetails && post.authorDetails[0]) {
-                    post.author = (0, userUtils_1.transformUser)(Object.assign(Object.assign({}, post.author), post.authorDetails[0]));
+                    post.author = Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(Object.assign(Object.assign({}, post.author), post.authorDetails[0]))), { type: post.authorType || 'user' });
                 }
                 else if (post.author) {
-                    post.author = (0, userUtils_1.transformUser)(post.author);
+                    post.author = Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(post.author)), { type: post.authorType || 'user' });
                 }
                 delete post.authorDetails; // Clean up
                 if (currentUserId) {
@@ -479,7 +479,7 @@ exports.postsController = {
                     // Optional: Remove reactionUsers from response to save bandwidth/privacy
                     // delete post.reactionUsers; 
                 }
-                return post;
+                return Object.assign(Object.assign({}, post), { type: 'post' });
             });
             res.json({
                 success: true,
@@ -856,7 +856,11 @@ exports.postsController = {
                 // Trigger live insights update for the author
                 (0, exports.emitAuthorInsightsUpdate)(req.app, authorEmbed.id);
             }
-            res.status(201).json({ success: true, data: newPost, message: 'Post created successfully' });
+            res.status(201).json({
+                success: true,
+                data: Object.assign(Object.assign({}, newPost), { type: 'post' }),
+                message: 'Post created successfully'
+            });
         }
         catch (error) {
             console.error('Error creating post:', error);
@@ -891,11 +895,15 @@ exports.postsController = {
                 return res.status(500).json({ success: false, error: 'Failed to update post' });
             }
             if (updatedDoc.author) {
-                updatedDoc.author = (0, userUtils_1.transformUser)(updatedDoc.author);
+                updatedDoc.author = Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(updatedDoc.author)), { type: updatedDoc.author.type || 'user' });
             }
             // Trigger live insights update for the author
             (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id);
-            res.json({ success: true, data: updatedDoc, message: 'Post updated successfully' });
+            res.json({
+                success: true,
+                data: Object.assign(Object.assign({}, updatedDoc), { type: 'post' }),
+                message: 'Post updated successfully'
+            });
         }
         catch (error) {
             console.error('Error updating post:', error);

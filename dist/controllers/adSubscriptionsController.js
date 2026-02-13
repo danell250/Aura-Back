@@ -101,10 +101,22 @@ exports.adSubscriptionsController = {
     getUserSubscriptions: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
-            console.log('[AdSubscriptions] Fetching subscriptions for user:', userId);
+            const { ownerType = 'user' } = req.query;
+            console.log(`[AdSubscriptions] Fetching subscriptions for ${ownerType}:`, userId);
             const db = (0, db_1.getDB)();
+            const query = {
+                $or: [
+                    { ownerId: userId, ownerType },
+                    { userId: userId, ownerType } // backward compatibility
+                ]
+            };
+            // If no ownerType was explicitly set in the document yet (old data), 
+            // and we're looking for 'user' type, also match documents without ownerType
+            if (ownerType === 'user') {
+                query.$or.push({ userId, ownerType: { $exists: false } });
+            }
             const subscriptions = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION)
-                .find({ userId })
+                .find(query)
                 .sort({ createdAt: -1 })
                 .toArray();
             console.log('[AdSubscriptions] Found subscriptions:', subscriptions.length);
@@ -126,7 +138,7 @@ exports.adSubscriptionsController = {
     // POST /api/ad-subscriptions - Create new ad subscription
     createSubscription: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { userId, packageId, packageName, paypalSubscriptionId, adLimit, durationDays } = req.body;
+            const { userId, packageId, packageName, paypalSubscriptionId, adLimit, durationDays, ownerType = 'user' } = req.body;
             if (!userId || !packageId || !packageName || !adLimit) {
                 return res.status(400).json({
                     success: false,
@@ -147,7 +159,9 @@ exports.adSubscriptionsController = {
             const periodEnd = nextBillingDate || (now + BILLING_MS);
             const newSubscription = {
                 id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
-                userId,
+                userId, // Legacy field
+                ownerId: userId, // New standardized field
+                ownerType,
                 packageId,
                 packageName,
                 status: 'active',
@@ -168,6 +182,8 @@ exports.adSubscriptionsController = {
             // Log the transaction
             yield db.collection('transactions').insertOne({
                 userId,
+                ownerId: userId,
+                ownerType,
                 type: 'ad_subscription',
                 packageId,
                 packageName,
@@ -307,18 +323,34 @@ exports.adSubscriptionsController = {
     getActiveSubscriptions: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
+            const { ownerType = 'user' } = req.query;
             const db = (0, db_1.getDB)();
             const now = Date.now();
-            // Find active subscriptions that haven't expired
-            const activeSubscriptions = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION)
-                .find({
-                userId,
+            const baseQuery = {
                 status: 'active',
                 $or: [
                     { endDate: { $exists: false } }, // Ongoing subscriptions
                     { endDate: { $gt: now } } // Not expired
                 ]
-            })
+            };
+            const query = {
+                $and: [
+                    baseQuery,
+                    {
+                        $or: [
+                            { ownerId: userId, ownerType },
+                            { userId: userId, ownerType }
+                        ]
+                    }
+                ]
+            };
+            // Handle legacy 'user' subscriptions without ownerType field
+            if (ownerType === 'user') {
+                query.$and[1].$or.push({ userId, ownerType: { $exists: false } });
+            }
+            // Find active subscriptions that haven't expired
+            const activeSubscriptions = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION)
+                .find(query)
                 .sort({ createdAt: -1 })
                 .toArray();
             // Update subscription periods and return
@@ -327,11 +359,18 @@ exports.adSubscriptionsController = {
                 updated.push(yield ensureCurrentPeriod(db, sub));
             }
             // Auto-expire any subscriptions that have passed their end date
-            yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany({
-                userId,
+            const expireQuery = {
                 status: 'active',
-                endDate: { $exists: true, $lte: now }
-            }, {
+                endDate: { $exists: true, $lte: now },
+                $or: [
+                    { ownerId: userId, ownerType },
+                    { userId: userId, ownerType }
+                ]
+            };
+            if (ownerType === 'user') {
+                expireQuery.$or.push({ userId, ownerType: { $exists: false } });
+            }
+            yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany(expireQuery, {
                 $set: { status: 'expired', updatedAt: now }
             });
             res.json({

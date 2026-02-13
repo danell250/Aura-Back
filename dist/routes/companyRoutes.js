@@ -87,13 +87,40 @@ router.get('/me', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, 
 router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const currentUser = req.user;
-        const { name, industry, bio, website } = req.body;
+        const { name, industry, bio, website, handle: providedHandle } = req.body;
         const db = (0, db_1.getDB)();
         if (!name) {
             return res.status(400).json({ success: false, error: 'Identity name is required' });
         }
+        // Handle validation if provided
+        let handle = providedHandle;
+        if (handle) {
+            handle = handle.startsWith('@') ? handle.toLowerCase() : `@${handle.toLowerCase()}`;
+            if (!/^@[a-z0-9_]+$/.test(handle)) {
+                return res.status(400).json({ success: false, error: 'Handle can only contain letters, numbers, and underscores' });
+            }
+            if (handle.length < 4 || handle.length > 30) {
+                return res.status(400).json({ success: false, error: 'Handle must be between 3 and 30 characters' });
+            }
+            const existingUser = yield db.collection('users').findOne({ handle });
+            const existingCompany = yield db.collection('companies').findOne({ handle });
+            if (existingUser || existingCompany) {
+                return res.status(409).json({ success: false, error: 'Handle already taken' });
+            }
+        }
+        else {
+            handle = yield generateCompanyHandle(name);
+        }
+        // 1. Limit validation: Check how many companies the user owns
+        const ownedCompaniesCount = yield db.collection('companies').countDocuments({ ownerId: currentUser.id });
+        const MAX_COMPANIES = 5;
+        if (ownedCompaniesCount >= MAX_COMPANIES) {
+            return res.status(403).json({
+                success: false,
+                error: `You have reached the maximum limit of ${MAX_COMPANIES} corporate identities.`
+            });
+        }
         const companyId = `comp-${crypto_1.default.randomBytes(8).toString('hex')}`;
-        const handle = yield generateCompanyHandle(name);
         const newCompany = {
             id: companyId,
             name,
@@ -140,14 +167,40 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
         if (!membership && currentUser.id !== companyId) {
             return res.status(403).json({ success: false, error: 'Unauthorized to update this corporate identity' });
         }
-        const { name, industry, bio, website } = req.body;
-        const updates = {};
-        if (name) updates.name = name;
-        if (industry) updates.industry = industry;
-        if (bio) updates.bio = bio;
-        if (website) updates.website = website;
-        
-        yield db.collection('companies').updateOne({ id: companyId }, { $set: updates });
+        // Auto-verify if website is added
+        if (updates.website) {
+            updates.isVerified = true;
+        }
+        // Handle handle updates
+        if (updates.handle) {
+            const normalizedHandle = updates.handle.startsWith('@') ? updates.handle.toLowerCase() : `@${updates.handle.toLowerCase()}`;
+            // Validation: No spaces or special characters except @
+            if (!/^@[a-z0-9_]+$/.test(normalizedHandle)) {
+                return res.status(400).json({ success: false, error: 'Handle can only contain letters, numbers, and underscores' });
+            }
+            if (normalizedHandle.length < 4 || normalizedHandle.length > 30) {
+                return res.status(400).json({ success: false, error: 'Handle must be between 3 and 30 characters' });
+            }
+            const existingUser = yield db.collection('users').findOne({ handle: normalizedHandle });
+            const existingCompany = yield db.collection('companies').findOne({ handle: normalizedHandle, id: { $ne: companyId } });
+            if (existingUser || existingCompany) {
+                return res.status(409).json({ success: false, error: 'Handle already taken' });
+            }
+            updates.handle = normalizedHandle;
+        }
+        updates.updatedAt = new Date();
+        const result = yield db.collection('companies').updateOne({ id: companyId }, { $set: updates });
+        // If it was a legacy company in users collection
+        if (result.matchedCount === 0 && companyId === currentUser.id) {
+            yield db.collection('users').updateOne({ id: companyId }, { $set: {
+                    companyName: updates.name,
+                    companyWebsite: updates.website,
+                    industry: updates.industry,
+                    bio: updates.bio,
+                    isVerified: updates.isVerified,
+                    updatedAt: new Date().toISOString()
+                } });
+        }
         res.json({ success: true, message: 'Corporate identity updated successfully' });
     }
     catch (error) {
@@ -159,10 +212,22 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
 router.get('/:id', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { id } = req.params;
+        const currentUser = req.user;
         const db = (0, db_1.getDB)();
         const company = yield db.collection('companies').findOne({ id });
         if (!company) {
             return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+        }
+        // Access control: only members or owner can access management-level details
+        // If we want public access, we should have a separate public route or filter sensitive data
+        const membership = yield db.collection('company_members').findOne({
+            companyId: id,
+            userId: currentUser.id
+        });
+        if (!membership && company.ownerId !== currentUser.id && id !== currentUser.id) {
+            // Check if this is a request for basic public info vs management info
+            // For now, restrict this route to members only as it's used in management views
+            return res.status(403).json({ success: false, error: 'You are not a member of this corporate identity' });
         }
         res.json({ success: true, data: company });
     }

@@ -12,7 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.notificationsController = exports.createNotificationInDB = void 0;
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
-const createNotificationInDB = (userId, type, fromUserId, message, postId, connectionId, meta, yearKey) => __awaiter(void 0, void 0, void 0, function* () {
+const createNotificationInDB = (userId_1, type_1, fromUserId_1, message_1, postId_1, connectionId_1, meta_1, yearKey_1, ...args_1) => __awaiter(void 0, [userId_1, type_1, fromUserId_1, message_1, postId_1, connectionId_1, meta_1, yearKey_1, ...args_1], void 0, function* (userId, type, fromUserId, message, postId, connectionId, meta, yearKey, ownerType = 'user') {
     let db = null;
     if ((0, db_1.isDBConnected)()) {
         try {
@@ -31,14 +31,16 @@ const createNotificationInDB = (userId, type, fromUserId, message, postId, conne
             console.error('Error fetching notification fromUser in DB:', error);
         }
     }
+    // Determine collection based on ownerType
+    const collectionName = ownerType === 'company' ? 'companies' : 'users';
     if (db && yearKey) {
         try {
-            const existingUser = yield db.collection('users').findOne({
+            const existingDoc = yield db.collection(collectionName).findOne({
                 id: userId,
                 notifications: { $elemMatch: { yearKey, type } }
             });
-            if (existingUser && Array.isArray(existingUser.notifications)) {
-                const existingNotification = existingUser.notifications.find((n) => n.yearKey === yearKey && n.type === type);
+            if (existingDoc && Array.isArray(existingDoc.notifications)) {
+                const existingNotification = existingDoc.notifications.find((n) => n.yearKey === yearKey && n.type === type);
                 if (existingNotification) {
                     return existingNotification;
                 }
@@ -84,16 +86,17 @@ const createNotificationInDB = (userId, type, fromUserId, message, postId, conne
         connectionId: connectionId || undefined,
         meta: meta || undefined,
         data: meta || undefined, // Alias for 'data' as requested
-        yearKey: yearKey || undefined
+        yearKey: yearKey || undefined,
+        ownerType // Store ownerType in notification too
     };
     if (db) {
         try {
-            yield db.collection('users').updateOne({ id: userId }, {
+            yield db.collection(collectionName).updateOne({ id: userId }, {
                 $push: { notifications: { $each: [newNotification], $position: 0 } }
             });
         }
         catch (error) {
-            console.error('Error creating notification in DB:', error);
+            console.error(`Error creating notification in DB (${collectionName}):`, error);
         }
     }
     return newNotification;
@@ -107,7 +110,9 @@ exports.notificationsController = {
             if (!currentUser) {
                 return res.status(401).json({ success: false, error: 'Unauthorized' });
             }
-            const { page = 1, limit = 20, unreadOnly } = req.query;
+            const { page = 1, limit = 20, unreadOnly, ownerType = 'user', ownerId } = req.query;
+            const targetId = (ownerType === 'company' && ownerId) ? String(ownerId) : currentUser.id;
+            const collectionName = ownerType === 'company' ? 'companies' : 'users';
             if (!(0, db_1.isDBConnected)()) {
                 return res.json({
                     success: true,
@@ -122,14 +127,14 @@ exports.notificationsController = {
                 });
             }
             const db = (0, db_1.getDB)();
-            const user = yield db.collection('users').findOne({ id: currentUser.id });
-            if (!user) {
+            const doc = yield db.collection(collectionName).findOne({ id: targetId });
+            if (!doc) {
                 return res.status(404).json({
                     success: false,
-                    error: 'User not found'
+                    error: `${ownerType === 'company' ? 'Company' : 'User'} not found`
                 });
             }
-            let notifications = user.notifications || [];
+            let notifications = doc.notifications || [];
             // Filter unread only if specified
             if (unreadOnly === 'true') {
                 notifications = notifications.filter((notif) => !notif.isRead);
@@ -154,7 +159,7 @@ exports.notificationsController = {
                     total: notifications.length,
                     pages: Math.ceil(notifications.length / Number(limit))
                 },
-                unreadCount: (user.notifications || []).filter((n) => !n.isRead).length
+                unreadCount: (doc.notifications || []).filter((n) => !n.isRead).length
             });
         }
         catch (error) {
@@ -169,7 +174,8 @@ exports.notificationsController = {
     getNotificationsByUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
-            const { page = 1, limit = 20, unreadOnly } = req.query;
+            const { page = 1, limit = 20, unreadOnly, ownerType = 'user' } = req.query;
+            const collectionName = ownerType === 'company' ? 'companies' : 'users';
             if (!(0, db_1.isDBConnected)()) {
                 return res.json({
                     success: true,
@@ -184,14 +190,14 @@ exports.notificationsController = {
                 });
             }
             const db = (0, db_1.getDB)();
-            const user = yield db.collection('users').findOne({ id: userId });
-            if (!user) {
+            const doc = yield db.collection(collectionName).findOne({ id: userId });
+            if (!doc) {
                 return res.status(404).json({
                     success: false,
-                    error: 'User not found'
+                    error: `${ownerType === 'company' ? 'Company' : 'User'} not found`
                 });
             }
-            let notifications = user.notifications || [];
+            let notifications = doc.notifications || [];
             // Filter unread only if specified
             if (unreadOnly === 'true') {
                 notifications = notifications.filter((notif) => !notif.isRead);
@@ -216,7 +222,7 @@ exports.notificationsController = {
                     total: notifications.length,
                     pages: Math.ceil(notifications.length / Number(limit))
                 },
-                unreadCount: (user.notifications || []).filter((n) => !n.isRead).length
+                unreadCount: (doc.notifications || []).filter((n) => !n.isRead).length
             });
         }
         catch (error) {
@@ -231,7 +237,7 @@ exports.notificationsController = {
     // POST /api/notifications - Create new notification
     createNotification: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { userId, type, fromUserId, message, postId, connectionId } = req.body;
+            const { userId, type, fromUserId, message, postId, connectionId, ownerType = 'user' } = req.body;
             const db = (0, db_1.getDB)();
             // Validate required fields
             if (!userId || !type || !fromUserId || !message) {
@@ -272,10 +278,12 @@ exports.notificationsController = {
                 timestamp: Date.now(),
                 isRead: false,
                 postId: postId || undefined,
-                connectionId: connectionId || undefined
+                connectionId: connectionId || undefined,
+                ownerType
             };
+            const collectionName = ownerType === 'company' ? 'companies' : 'users';
             // Save to database
-            yield db.collection('users').updateOne({ id: userId }, {
+            yield db.collection(collectionName).updateOne({ id: userId }, {
                 $push: { notifications: { $each: [newNotification], $position: 0 } }
             });
             // Transform fromUser for response
@@ -302,14 +310,24 @@ exports.notificationsController = {
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
-            // Find user with this notification and update it
-            const result = yield db.collection('users').updateOne({ "notifications.id": id }, {
+            // Try updating in users collection first
+            let result = yield db.collection('users').updateOne({ "notifications.id": id }, {
                 $set: {
                     "notifications.$.isRead": true,
                     "notifications.$.readAt": new Date(),
                     "notifications.$.updatedAt": new Date()
                 }
             });
+            // If not found, try companies collection
+            if (result.matchedCount === 0) {
+                result = yield db.collection('companies').updateOne({ "notifications.id": id }, {
+                    $set: {
+                        "notifications.$.isRead": true,
+                        "notifications.$.readAt": new Date(),
+                        "notifications.$.updatedAt": new Date()
+                    }
+                });
+            }
             if (result.matchedCount === 0) {
                 return res.status(404).json({
                     success: false,
@@ -335,18 +353,19 @@ exports.notificationsController = {
     markAllAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { userId } = req.params;
+            const { ownerType = 'user' } = req.query;
+            const collectionName = ownerType === 'company' ? 'companies' : 'users';
             const db = (0, db_1.getDB)();
-            const user = yield db.collection('users').findOne({ id: userId });
-            if (!user) {
-                return res.status(404).json({ success: false, error: 'User not found' });
+            const doc = yield db.collection(collectionName).findOne({ id: userId });
+            if (!doc) {
+                return res.status(404).json({ success: false, error: `${ownerType === 'company' ? 'Company' : 'User'} not found` });
             }
-            if (!user.notifications || user.notifications.length === 0) {
+            if (!doc.notifications || doc.notifications.length === 0) {
                 return res.json({ success: true, message: 'No notifications to mark as read' });
             }
-            // Update all notifications in memory then save, or use array filters
-            // Simpler to just map and replace for now
-            const updatedNotifications = user.notifications.map((n) => (Object.assign(Object.assign({}, n), { isRead: true })));
-            yield db.collection('users').updateOne({ id: userId }, { $set: { notifications: updatedNotifications } });
+            // Update all notifications in memory then save
+            const updatedNotifications = doc.notifications.map((n) => (Object.assign(Object.assign({}, n), { isRead: true })));
+            yield db.collection(collectionName).updateOne({ id: userId }, { $set: { notifications: updatedNotifications } });
             res.json({
                 success: true,
                 message: 'All notifications marked as read'
