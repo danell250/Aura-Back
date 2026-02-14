@@ -15,11 +15,12 @@ export interface IUser {
   website?: string;
   joinDate?: string;
   acquaintances?: string[];
+  subscribedCompanyIds?: string[];
   sentAcquaintanceRequests?: string[];
   notifications?: any[];
   auraCredits?: number;
   isPrivate?: boolean;
-  userMode?: 'creator' | 'corporate' | 'hybrid';
+  userMode?: 'creator' | 'company' | 'hybrid' | 'corporate';
   googleId?: string;
   githubId?: string;
   linkedinId?: string;

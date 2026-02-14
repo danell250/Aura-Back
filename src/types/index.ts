@@ -16,6 +16,7 @@ export interface User {
   phone?: string;
   country?: string;
   acquaintances?: string[]; 
+  subscribedCompanyIds?: string[];
   sentAcquaintanceRequests?: string[];
   notifications?: Notification[];
   blockedUsers?: string[];
@@ -23,7 +24,7 @@ export interface User {
   profileViews?: string[];
   isPrivate?: boolean;
   isVerified?: boolean;
-  userMode?: 'creator' | 'corporate' | 'hybrid';
+  userMode?: 'creator' | 'company' | 'hybrid' | 'corporate';
   trustScore: number; 
   auraCredits: number;
   activeGlow?: 'emerald' | 'cyan' | 'amber' | 'gold' | 'silver' | 'bronze' | 'none';

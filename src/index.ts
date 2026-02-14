@@ -1163,6 +1163,6 @@ process.on('unhandledRejection', (reason, promise) => {
 
 export { app };
 
-if (require.main === module) {
+if (process.env.NODE_ENV !== 'test') {
   startServer();
 }
