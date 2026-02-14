@@ -18,7 +18,7 @@ const initializeMessageThreadCollection = (db) => __awaiter(void 0, void 0, void
     yield Promise.all([
         messageThreadsCollection.createIndex({ key: 1 }, { unique: true }),
         messageThreadsCollection.createIndex({ ownerType: 1, ownerId: 1, state: 1, updatedAt: -1 }),
-        messageThreadsCollection.createIndex({ ownerType: 1, ownerId: 1, peerId: 1 }),
+        messageThreadsCollection.createIndex({ ownerType: 1, ownerId: 1, peerType: 1, peerId: 1 }),
     ]);
 });
 exports.initializeMessageThreadCollection = initializeMessageThreadCollection;

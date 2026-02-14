@@ -18,6 +18,15 @@ const sendRateState = new Map<string, { count: number; startedAt: number }>();
 const MESSAGE_STATES: MessageThreadState[] = ['active', 'archived', 'requests', 'muted', 'blocked'];
 
 const actorMarker = (type: 'user' | 'company', id: string) => `${type}:${id}`;
+const peerMarker = (type: 'user' | 'company', id: string) => `${type}:${id}`;
+const actorDeleteMarkers = (actor: { type: 'user' | 'company'; id: string }) => {
+  const markers = [actorMarker(actor.type, actor.id)];
+  // Preserve old personal-only deletion markers for legacy user<->user message rows.
+  if (actor.type === 'user') {
+    markers.push(actor.id);
+  }
+  return markers;
+};
 
 const nowIso = () => new Date().toISOString();
 
@@ -40,41 +49,62 @@ const isActorSender = (message: any, actor: { type: 'user' | 'company'; id: stri
   if (message.senderOwnerId && message.senderOwnerType) {
     return message.senderOwnerId === actor.id && message.senderOwnerType === actor.type;
   }
-  return message.senderId === actor.id;
+  if (actor.type !== 'user') return false;
+  return (
+    message.senderId === actor.id &&
+    !message.senderOwnerType &&
+    !message.senderOwnerId &&
+    !message.receiverOwnerType &&
+    !message.receiverOwnerId
+  );
 };
 
 const isActorReceiver = (message: any, actor: { type: 'user' | 'company'; id: string }) => {
   if (message.receiverOwnerId && message.receiverOwnerType) {
     return message.receiverOwnerId === actor.id && message.receiverOwnerType === actor.type;
   }
-  return message.receiverId === actor.id;
+  if (actor.type !== 'user') return false;
+  return (
+    message.receiverId === actor.id &&
+    !message.senderOwnerType &&
+    !message.senderOwnerId &&
+    !message.receiverOwnerType &&
+    !message.receiverOwnerId
+  );
 };
 
 const messageAccessQuery = (actor: { type: 'user' | 'company'; id: string }, otherId: string, otherType?: 'user' | 'company') => {
+  const resolvedOtherType = otherType || 'user';
+  const deleteMarkers = actorDeleteMarkers(actor);
   const clauses: any[] = [
     {
-      senderId: actor.id,
-      receiverId: otherId,
+      senderOwnerType: actor.type,
+      senderOwnerId: actor.id,
+      receiverOwnerType: resolvedOtherType,
+      receiverOwnerId: otherId,
     },
     {
-      senderId: otherId,
-      receiverId: actor.id,
+      senderOwnerType: resolvedOtherType,
+      senderOwnerId: otherId,
+      receiverOwnerType: actor.type,
+      receiverOwnerId: actor.id,
     },
   ];
 
-  if (otherType) {
-    clauses.unshift(
+  // Backward-compatible legacy support for old personal<->personal messages
+  if (actor.type === 'user' && resolvedOtherType === 'user') {
+    clauses.push(
       {
-        senderOwnerType: actor.type,
-        senderOwnerId: actor.id,
-        receiverOwnerType: otherType,
-        receiverOwnerId: otherId,
+        senderId: actor.id,
+        receiverId: otherId,
+        senderOwnerType: { $exists: false },
+        receiverOwnerType: { $exists: false },
       },
       {
-        senderOwnerType: otherType,
-        senderOwnerId: otherId,
-        receiverOwnerType: actor.type,
-        receiverOwnerId: actor.id,
+        senderId: otherId,
+        receiverId: actor.id,
+        senderOwnerType: { $exists: false },
+        receiverOwnerType: { $exists: false },
       },
     );
   }
@@ -85,7 +115,7 @@ const messageAccessQuery = (actor: { type: 'user' | 'company'; id: string }, oth
       {
         $or: [
           { deletedFor: { $exists: false } },
-          { deletedFor: { $nin: [actor.id, actorMarker(actor.type, actor.id)] } },
+          { deletedFor: { $nin: deleteMarkers } },
         ],
       },
     ],
@@ -103,6 +133,26 @@ const resolveEntityTypeById = async (id: string): Promise<'user' | 'company' | n
   if (company) return 'company';
   if (user) return 'user';
   return null;
+};
+
+const resolvePeerType = async (
+  rawType: unknown,
+  id: string
+): Promise<'user' | 'company' | null> => {
+  const explicitType = rawType === 'company' || rawType === 'user' ? rawType : null;
+  const db = getDB();
+
+  if (explicitType === 'company') {
+    const company = await db.collection('companies').findOne({ id }, { projection: { id: 1 } });
+    return company ? 'company' : null;
+  }
+
+  if (explicitType === 'user') {
+    const user = await db.collection('users').findOne({ id }, { projection: { id: 1 } });
+    return user ? 'user' : null;
+  }
+
+  return resolveEntityTypeById(id);
 };
 
 const applyRateLimit = (actor: { type: 'user' | 'company'; id: string }) => {
@@ -345,22 +395,38 @@ export const messagesController = {
       const messagesCollection = getMessagesCollection();
       const threadsCollection = getMessageThreadsCollection();
 
-      const actorKey = actorMarker(actor.type, actor.id);
+      const deleteMarkers = actorDeleteMarkers(actor);
+      const actorMessageClauses: any[] =
+        actor.type === 'company'
+          ? [
+              { senderOwnerType: 'company', senderOwnerId: actor.id },
+              { receiverOwnerType: 'company', receiverOwnerId: actor.id },
+            ]
+          : [
+              { senderOwnerType: 'user', senderOwnerId: actor.id },
+              { receiverOwnerType: 'user', receiverOwnerId: actor.id },
+              {
+                senderId: actor.id,
+                senderOwnerType: { $exists: false },
+                receiverOwnerType: { $exists: false },
+              },
+              {
+                receiverId: actor.id,
+                senderOwnerType: { $exists: false },
+                receiverOwnerType: { $exists: false },
+              },
+            ];
+
       const messages = await messagesCollection
         .find({
           $and: [
             {
-              $or: [
-                { senderOwnerType: actor.type, senderOwnerId: actor.id },
-                { receiverOwnerType: actor.type, receiverOwnerId: actor.id },
-                { senderId: actor.id },
-                { receiverId: actor.id },
-              ],
+              $or: actorMessageClauses,
             },
             {
               $or: [
                 { deletedFor: { $exists: false } },
-                { deletedFor: { $nin: [actor.id, actorKey] } },
+                { deletedFor: { $nin: deleteMarkers } },
               ],
             },
           ],
@@ -383,11 +449,13 @@ export const messagesController = {
           ? ((message.receiverOwnerType as 'user' | 'company' | undefined) || 'user')
           : ((message.senderOwnerType as 'user' | 'company' | undefined) || 'user');
 
-        const existing = byPeer.get(otherId);
+        const peerKey = peerMarker(otherType, otherId);
+        const existing = byPeer.get(peerKey);
         if (!existing) {
-          byPeer.set(otherId, {
-            _id: otherId,
-            otherType,
+          byPeer.set(peerKey, {
+            peerId: otherId,
+            peerType: otherType,
+            conversationKey: peerKey,
             lastMessage: message,
             unreadCount: actorReceived && !message.isRead ? 1 : 0,
           });
@@ -396,48 +464,76 @@ export const messagesController = {
         }
       }
 
-      const peerIds = Array.from(byPeer.keys());
-      if (peerIds.length === 0) {
+      const peerEntries = Array.from(byPeer.values()) as Array<{
+        peerId: string;
+        peerType: 'user' | 'company';
+        conversationKey: string;
+        lastMessage: any;
+        unreadCount: number;
+      }>;
+      if (peerEntries.length === 0) {
         return res.json({ success: true, data: [], summary: threadStateSummary([]) });
       }
 
+      const userPeerIds = Array.from(
+        new Set(peerEntries.filter((entry) => entry.peerType === 'user').map((entry) => entry.peerId)),
+      );
+      const companyPeerIds = Array.from(
+        new Set(peerEntries.filter((entry) => entry.peerType === 'company').map((entry) => entry.peerId)),
+      );
+      const peerFilters = peerEntries.map((entry) => ({ peerType: entry.peerType, peerId: entry.peerId }));
+
       const [users, companies, actorDoc, threadDocs] = await Promise.all([
-        db.collection('users').find({ id: { $in: peerIds } }).toArray(),
-        db.collection('companies').find({ id: { $in: peerIds } }).toArray(),
+        userPeerIds.length > 0 ? db.collection('users').find({ id: { $in: userPeerIds } }).toArray() : Promise.resolve([]),
+        companyPeerIds.length > 0
+          ? db.collection('companies').find({ id: { $in: companyPeerIds } }).toArray()
+          : Promise.resolve([]),
         db.collection(actor.type === 'company' ? 'companies' : 'users').findOne({ id: actor.id }),
-        threadsCollection
-          .find({
-            ownerType: actor.type,
-            ownerId: actor.id,
-            peerId: { $in: peerIds },
-          })
-          .toArray(),
+        peerFilters.length > 0
+          ? threadsCollection
+              .find({
+                ownerType: actor.type,
+                ownerId: actor.id,
+                $or: peerFilters,
+              })
+              .toArray()
+          : Promise.resolve([]),
       ]);
 
       const userById = new Map(users.map((item: any) => [item.id, item]));
       const companyById = new Map(companies.map((item: any) => [item.id, item]));
-      const threadByPeer = new Map(threadDocs.map((item) => [item.peerId, item]));
+      const threadByPeer = new Map(threadDocs.map((item) => [peerMarker(item.peerType, item.peerId), item]));
       const archivedChats = Array.isArray((actorDoc as any)?.archivedChats) ? (actorDoc as any).archivedChats : [];
 
-      const conversations = peerIds
-        .map((peerId) => {
-          const base = byPeer.get(peerId);
-          const thread = threadByPeer.get(peerId);
+      const conversations = peerEntries
+        .map((base) => {
+          const peerId = base.peerId;
+          const peerType = base.peerType;
+          const thread = threadByPeer.get(base.conversationKey);
           const entity =
-            base.otherType === 'company'
+            peerType === 'company'
               ? companyById.get(peerId) || userById.get(peerId) || null
               : userById.get(peerId) || companyById.get(peerId) || null;
 
           if (!entity) return null;
 
           const normalized = thread || {
-            state: archivedChats.includes(peerId) ? ('archived' as MessageThreadState) : ('active' as MessageThreadState),
+            state:
+              archivedChats.includes(peerId) && peerType === 'user'
+                ? ('archived' as MessageThreadState)
+                : ('active' as MessageThreadState),
           };
 
           const state = normalized.state || 'active';
 
           return {
-            ...base,
+            _id: peerId,
+            conversationKey: base.conversationKey,
+            peerId,
+            peerType,
+            otherType: peerType,
+            lastMessage: base.lastMessage,
+            unreadCount: base.unreadCount,
             state,
             isArchived: state === 'archived',
             isMuted: state === 'muted',
@@ -479,7 +575,7 @@ export const messagesController = {
     try {
       const { userId: otherId } = req.params;
       const authenticatedUserId = (req.user as any)?.id;
-      const { page = 1, limit = 50, ownerType, currentUserId } = req.query;
+      const { page = 1, limit = 50, ownerType, currentUserId, otherType: requestedOtherType } = req.query;
 
       if (!authenticatedUserId) {
         return res.status(401).json({ success: false, message: 'Authentication required' });
@@ -502,11 +598,14 @@ export const messagesController = {
         return res.json({ success: true, data: [] });
       }
 
-      const otherType = await resolveEntityTypeById(otherId);
+      const otherType = await resolvePeerType(requestedOtherType, otherId);
+      if (!otherType) {
+        return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+      }
       const messagesCollection = getMessagesCollection();
 
       const messages = await messagesCollection
-        .find(messageAccessQuery(actor, otherId, otherType || undefined))
+        .find(messageAccessQuery(actor, otherId, otherType))
         .sort({ timestamp: -1 })
         .limit(Number(limit))
         .skip((Number(page) - 1) * Number(limit))
@@ -519,20 +618,22 @@ export const messagesController = {
 
       const markReadFilter: any = {
         isRead: false,
-        $or: [
-          {
-            senderId: otherId,
-            receiverId: actor.id,
-          },
-        ],
+        $or: [],
       };
 
-      if (otherType) {
-        markReadFilter.$or.unshift({
-          senderOwnerType: otherType,
-          senderOwnerId: otherId,
-          receiverOwnerType: actor.type,
-          receiverOwnerId: actor.id,
+      markReadFilter.$or.push({
+        senderOwnerType: otherType,
+        senderOwnerId: otherId,
+        receiverOwnerType: actor.type,
+        receiverOwnerId: actor.id,
+      });
+
+      if (actor.type === 'user' && otherType === 'user') {
+        markReadFilter.$or.push({
+          senderId: otherId,
+          receiverId: actor.id,
+          senderOwnerType: { $exists: false },
+          receiverOwnerType: { $exists: false },
         });
       }
 
@@ -560,6 +661,7 @@ export const messagesController = {
         receiverId,
         text,
         messageType = 'text',
+        receiverType: requestedReceiverType,
         mediaUrl,
         mediaKey,
         mediaMimeType,
@@ -611,7 +713,7 @@ export const messagesController = {
         });
       }
 
-      const receiverType = await resolveEntityTypeById(receiverId);
+      const receiverType = await resolvePeerType(requestedReceiverType, receiverId);
       if (!receiverType) {
         return res.status(404).json({ success: false, message: 'Receiver not found' });
       }
@@ -764,7 +866,7 @@ export const messagesController = {
   deleteConversation: async (req: Request, res: Response) => {
     try {
       const authenticatedUserId = (req.user as any)?.id;
-      const { userId: requestedActorId, ownerType, otherUserId } = req.body;
+      const { userId: requestedActorId, ownerType, otherUserId, otherType: requestedOtherType } = req.body;
 
       if (!authenticatedUserId) {
         return res.status(401).json({ success: false, message: 'Authentication required' });
@@ -787,13 +889,19 @@ export const messagesController = {
         return res.status(503).json({ success: false, message: 'Service unavailable' });
       }
 
-      const otherType = await resolveEntityTypeById(otherUserId);
+      const otherType = await resolvePeerType(requestedOtherType, otherUserId);
+      if (!otherType) {
+        return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+      }
       const messagesCollection = getMessagesCollection();
 
-      const conversationQuery = messageAccessQuery(actor, otherUserId, otherType || undefined);
-      await messagesCollection.updateMany(conversationQuery, { $addToSet: { deletedFor: actor.id } as any });
+      const conversationQuery = messageAccessQuery(actor, otherUserId, otherType);
+      const deleteMarkers =
+        actor.type === 'user' && otherType === 'user'
+          ? [actorMarker(actor.type, actor.id), actor.id]
+          : [actorMarker(actor.type, actor.id)];
       await messagesCollection.updateMany(conversationQuery, {
-        $addToSet: { deletedFor: actorMarker(actor.type, actor.id) } as any,
+        $addToSet: { deletedFor: { $each: deleteMarkers } } as any,
       });
 
       res.json({ success: true, message: 'Conversation deleted successfully' });
@@ -819,6 +927,7 @@ export const messagesController = {
         (req.query.userId as string);
 
       const ownerType = req.body.ownerType || (req.query.ownerType as string);
+      const requestedOtherType = req.body.otherType || (req.query.otherType as string);
 
       const actor = await resolveIdentityActor(authenticatedUserId, {
         ownerType,
@@ -840,32 +949,36 @@ export const messagesController = {
         return res.status(503).json({ success: false, message: 'Service unavailable' });
       }
 
-      const otherType = await resolveEntityTypeById(otherId);
+      const otherType = await resolvePeerType(requestedOtherType, otherId);
+      if (!otherType) {
+        return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+      }
       const messagesCollection = getMessagesCollection();
 
       const filter: any = {
         isRead: false,
-        $or: [
-          {
-            senderId: otherId,
-            receiverId: actor.id,
-          },
-        ],
+        $or: [],
       };
 
-      if (otherType) {
-        filter.$or.unshift({
-          senderOwnerType: otherType,
-          senderOwnerId: otherId,
-          receiverOwnerType: actor.type,
-          receiverOwnerId: actor.id,
+      filter.$or.push({
+        senderOwnerType: otherType,
+        senderOwnerId: otherId,
+        receiverOwnerType: actor.type,
+        receiverOwnerId: actor.id,
+      });
+
+      if (actor.type === 'user' && otherType === 'user') {
+        filter.$or.push({
+          senderId: otherId,
+          receiverId: actor.id,
+          senderOwnerType: { $exists: false },
+          receiverOwnerType: { $exists: false },
         });
       }
 
       await messagesCollection.updateMany(filter, { $set: { isRead: true } });
 
-      const peerType = otherType || 'user';
-      await upsertThread(actor.type, actor.id, peerType, otherId, { clearRequest: true });
+      await upsertThread(actor.type, actor.id, otherType, otherId, { clearRequest: true });
 
       res.json({ success: true, message: 'Messages marked as read' });
     } catch (error) {
@@ -881,7 +994,7 @@ export const messagesController = {
         return res.status(401).json({ success: false, message: 'Authentication required' });
       }
 
-      const { userId: requestedActorId, ownerType, otherUserId, archived } = req.body;
+      const { userId: requestedActorId, ownerType, otherUserId, otherType: requestedOtherType, archived } = req.body;
 
       const actor = await resolveIdentityActor(authenticatedUserId, {
         ownerType,
@@ -896,7 +1009,10 @@ export const messagesController = {
         return res.status(400).json({ success: false, message: 'Invalid parameters' });
       }
 
-      const peerType = (await resolveEntityTypeById(otherUserId)) || 'user';
+      const peerType = await resolvePeerType(requestedOtherType, otherUserId);
+      if (!peerType) {
+        return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+      }
       const nextState: MessageThreadState = archived ? 'archived' : 'active';
 
       await upsertThread(actor.type, actor.id, peerType, otherUserId, buildThreadStatePatch(nextState));
@@ -930,7 +1046,7 @@ export const messagesController = {
         return res.status(401).json({ success: false, message: 'Authentication required' });
       }
 
-      const { userId: requestedActorId, ownerType, otherUserId, state } = req.body;
+      const { userId: requestedActorId, ownerType, otherUserId, otherType: requestedOtherType, state } = req.body;
       const nextState = parseState(state);
 
       if (!otherUserId || !nextState) {
@@ -946,7 +1062,10 @@ export const messagesController = {
         return res.status(403).json({ success: false, message: 'Unauthorized' });
       }
 
-      const peerType = (await resolveEntityTypeById(otherUserId)) || 'user';
+      const peerType = await resolvePeerType(requestedOtherType, otherUserId);
+      if (!peerType) {
+        return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+      }
       const thread = await upsertThread(actor.type, actor.id, peerType, otherUserId, buildThreadStatePatch(nextState));
 
       // Keep archivedChats fallback synchronized for old clients.
@@ -986,6 +1105,7 @@ export const messagesController = {
       const requestedActorId = (req.query.userId as string) || (req.query.currentUserId as string);
       const ownerType = req.query.ownerType as string;
       const otherUserId = req.query.otherUserId as string;
+      const requestedOtherType = req.query.otherType as string;
 
       if (!otherUserId) {
         return res.status(400).json({ success: false, message: 'otherUserId is required' });
@@ -1004,7 +1124,10 @@ export const messagesController = {
         return res.status(403).json({ success: false, message: 'Unauthorized' });
       }
 
-      const peerType = (await resolveEntityTypeById(otherUserId)) || 'user';
+      const peerType = await resolvePeerType(requestedOtherType, otherUserId);
+      if (!peerType) {
+        return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+      }
       const key = buildMessageThreadKey(actor.type, actor.id, peerType, otherUserId);
       const thread = await getMessageThreadsCollection().findOne({ key });
 
@@ -1042,6 +1165,7 @@ export const messagesController = {
         userId: requestedActorId,
         ownerType,
         otherUserId,
+        otherType: requestedOtherType,
         assignmentUserId,
         internalNotes,
         cannedReplies,
@@ -1066,7 +1190,10 @@ export const messagesController = {
         return res.status(403).json({ success: false, message: 'Thread metadata is only available for company inboxes' });
       }
 
-      const peerType = (await resolveEntityTypeById(otherUserId)) || 'user';
+      const peerType = await resolvePeerType(requestedOtherType, otherUserId);
+      if (!peerType) {
+        return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+      }
 
       const patch: Partial<IMessageThread> = {};
 

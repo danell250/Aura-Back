@@ -34,6 +34,7 @@ import { migrateLegacyCompanies } from './services/migrationService';
 import { Server as SocketIOServer } from 'socket.io';
 import { transformUser } from './utils/userUtils';
 import { verifyAccessToken } from './utils/jwtUtils';
+import { validateIdentityAccess } from './utils/identityUtils';
 
 dotenv.config();
 
@@ -1011,9 +1012,24 @@ async function startServer() {
       next();
     });
 
+    const identityRoom = (identityType: 'user' | 'company', identityId: string) =>
+      `identity:${identityType}:${identityId}`;
+
     io.on('connection', socket => {
       const user = (socket as any).user;
       console.log(`🔌 Socket.IO client connected: ${socket.id} (User: ${user?.id})`);
+      const identityRooms = new Set<string>();
+
+      const joinIdentity = (identityType: 'user' | 'company', identityId: string) => {
+        const room = identityRoom(identityType, identityId);
+        identityRooms.add(room);
+        socket.join(room);
+        return room;
+      };
+
+      if (user?.id) {
+        joinIdentity('user', user.id);
+      }
 
       socket.on('join_user_room', (userId: string) => {
         // Security: Only allow users to join their own room
@@ -1025,11 +1041,137 @@ async function startServer() {
         }
       });
 
+      socket.on('join_company_room', async (companyId: string) => {
+        if (!user?.id || typeof companyId !== 'string' || !companyId.trim()) return;
+        try {
+          const hasAccess = await validateIdentityAccess(user.id, companyId);
+          if (!hasAccess) {
+            console.warn(`⚠️ User ${user.id} denied join_company_room for ${companyId}`);
+            return;
+          }
+          socket.join(`company_${companyId}`);
+          joinIdentity('company', companyId);
+          console.log(`🏢 User ${user.id} joined company room ${companyId}`);
+        } catch (error) {
+          console.error('Failed to join company room:', error);
+        }
+      });
+
       socket.on('leave_user_room', (userId: string) => {
         if (typeof userId === 'string' && userId.trim()) {
           socket.leave(userId);
         }
       });
+
+      socket.on('leave_company_room', (companyId: string) => {
+        if (typeof companyId !== 'string' || !companyId.trim()) return;
+        socket.leave(`company_${companyId}`);
+        identityRooms.delete(identityRoom('company', companyId));
+        socket.leave(identityRoom('company', companyId));
+      });
+
+      socket.on(
+        'join_identity_room',
+        async (payload: { identityType?: 'user' | 'company'; identityId?: string }, ack?: (result: any) => void) => {
+          const identityType = payload?.identityType;
+          const identityId = payload?.identityId;
+          if (!identityType || !identityId) {
+            ack?.({ success: false, error: 'identityType and identityId are required' });
+            return;
+          }
+
+          try {
+            if (identityType === 'user' && identityId !== user?.id) {
+              ack?.({ success: false, error: 'Unauthorized identity room' });
+              return;
+            }
+
+            if (identityType === 'company') {
+              const hasAccess = await validateIdentityAccess(user?.id, identityId);
+              if (!hasAccess) {
+                ack?.({ success: false, error: 'Unauthorized identity room' });
+                return;
+              }
+            }
+
+            const room = joinIdentity(identityType, identityId);
+            ack?.({ success: true, room });
+          } catch (error) {
+            console.error('Failed to join identity room:', error);
+            ack?.({ success: false, error: 'Failed to join identity room' });
+          }
+        }
+      );
+
+      socket.on(
+        'leave_identity_room',
+        (payload: { identityType?: 'user' | 'company'; identityId?: string }, ack?: (result: any) => void) => {
+          const identityType = payload?.identityType;
+          const identityId = payload?.identityId;
+          if (!identityType || !identityId) {
+            ack?.({ success: false, error: 'identityType and identityId are required' });
+            return;
+          }
+
+          // Keep personal room persistent while connected.
+          if (identityType === 'user' && identityId === user?.id) {
+            ack?.({ success: true });
+            return;
+          }
+
+          const room = identityRoom(identityType, identityId);
+          identityRooms.delete(room);
+          socket.leave(room);
+          ack?.({ success: true });
+        }
+      );
+
+      const routeCallEvent = (
+        eventName: string,
+        payload: {
+          callId?: string;
+          fromType?: 'user' | 'company';
+          fromId?: string;
+          toType?: 'user' | 'company';
+          toId?: string;
+          callType?: 'audio' | 'video';
+          offer?: any;
+          answer?: any;
+          candidate?: any;
+          reason?: string;
+        }
+      ) => {
+        const { callId, fromType, fromId, toType, toId } = payload || {};
+        if (!callId || !fromType || !fromId || !toType || !toId) return;
+
+        const fromRoom = identityRoom(fromType, fromId);
+        if (!identityRooms.has(fromRoom)) {
+          console.warn(`⚠️ Blocked call event from non-joined identity ${fromType}:${fromId}`);
+          return;
+        }
+
+        const targetRoom = identityRoom(toType, toId);
+        io.to(targetRoom).emit(eventName, {
+          callId,
+          fromType,
+          fromId,
+          toType,
+          toId,
+          callType: payload.callType,
+          offer: payload.offer,
+          answer: payload.answer,
+          candidate: payload.candidate,
+          reason: payload.reason,
+          fromUserId: user?.id,
+          timestamp: Date.now(),
+        });
+      };
+
+      socket.on('call:invite', (payload) => routeCallEvent('call:incoming', payload));
+      socket.on('call:accept', (payload) => routeCallEvent('call:accepted', payload));
+      socket.on('call:reject', (payload) => routeCallEvent('call:rejected', payload));
+      socket.on('call:ice-candidate', (payload) => routeCallEvent('call:ice-candidate', payload));
+      socket.on('call:end', (payload) => routeCallEvent('call:ended', payload));
 
       socket.on('disconnect', () => {
         console.log('❌ Socket.IO client disconnected', socket.id);
