@@ -7,7 +7,9 @@ const initializeMessageCollection = (db) => {
     messagesCollection = db.collection('messages');
     // Create indexes for better performance
     messagesCollection.createIndex({ senderId: 1, receiverId: 1, timestamp: -1 });
+    messagesCollection.createIndex({ senderOwnerType: 1, senderOwnerId: 1, receiverOwnerType: 1, receiverOwnerId: 1, timestamp: -1 });
     messagesCollection.createIndex({ receiverId: 1, isRead: 1 });
+    messagesCollection.createIndex({ receiverOwnerType: 1, receiverOwnerId: 1, isRead: 1 });
     messagesCollection.createIndex({ timestamp: -1 });
 };
 exports.initializeMessageCollection = initializeMessageCollection;

@@ -1,6 +1,7 @@
 import { MongoClient, Db } from "mongodb";
 import dotenv from "dotenv";
 import { initializeMessageCollection } from "./models/Message";
+import { initializeMessageThreadCollection } from "./models/MessageThread";
 import { initializeUserCollection } from "./models/User";
 import { initializeAdAnalyticsDailyCollection } from "./models/AdAnalyticsDaily";
 import { initializeAdEventDedupesCollection } from "./models/AdEventDedupe";
@@ -65,6 +66,9 @@ export async function connectDB(): Promise<Db | null> {
     try {
       initializeMessageCollection(db);
       console.log("✅ Message collection initialized");
+
+      await initializeMessageThreadCollection(db);
+      console.log("✅ Message thread collection initialized");
       
       await initializeUserCollection(db);
       

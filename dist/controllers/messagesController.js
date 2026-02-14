@@ -15,6 +15,249 @@ const mongodb_1 = require("mongodb");
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
 const identityUtils_1 = require("../utils/identityUtils");
+const MessageThread_1 = require("../models/MessageThread");
+const SEND_WINDOW_MS = 60000;
+const SEND_WINDOW_LIMIT = 45;
+const sendRateState = new Map();
+const MESSAGE_STATES = ['active', 'archived', 'requests', 'muted', 'blocked'];
+const actorMarker = (type, id) => `${type}:${id}`;
+const nowIso = () => new Date().toISOString();
+const trimTo = (value, max) => value.trim().slice(0, max);
+const sanitizeStringArray = (value, maxItems, maxLength) => {
+    if (!Array.isArray(value))
+        return [];
+    const next = [];
+    for (const item of value) {
+        if (typeof item !== 'string')
+            continue;
+        const trimmed = item.trim();
+        if (!trimmed)
+            continue;
+        next.push(trimmed.slice(0, maxLength));
+        if (next.length >= maxItems)
+            break;
+    }
+    return next;
+};
+const isActorSender = (message, actor) => {
+    if (message.senderOwnerId && message.senderOwnerType) {
+        return message.senderOwnerId === actor.id && message.senderOwnerType === actor.type;
+    }
+    return message.senderId === actor.id;
+};
+const isActorReceiver = (message, actor) => {
+    if (message.receiverOwnerId && message.receiverOwnerType) {
+        return message.receiverOwnerId === actor.id && message.receiverOwnerType === actor.type;
+    }
+    return message.receiverId === actor.id;
+};
+const messageAccessQuery = (actor, otherId, otherType) => {
+    const clauses = [
+        {
+            senderId: actor.id,
+            receiverId: otherId,
+        },
+        {
+            senderId: otherId,
+            receiverId: actor.id,
+        },
+    ];
+    if (otherType) {
+        clauses.unshift({
+            senderOwnerType: actor.type,
+            senderOwnerId: actor.id,
+            receiverOwnerType: otherType,
+            receiverOwnerId: otherId,
+        }, {
+            senderOwnerType: otherType,
+            senderOwnerId: otherId,
+            receiverOwnerType: actor.type,
+            receiverOwnerId: actor.id,
+        });
+    }
+    return {
+        $and: [
+            { $or: clauses },
+            {
+                $or: [
+                    { deletedFor: { $exists: false } },
+                    { deletedFor: { $nin: [actor.id, actorMarker(actor.type, actor.id)] } },
+                ],
+            },
+        ],
+    };
+};
+const resolveEntityTypeById = (id) => __awaiter(void 0, void 0, void 0, function* () {
+    const db = (0, db_1.getDB)();
+    const [company, user] = yield Promise.all([
+        db.collection('companies').findOne({ id }, { projection: { id: 1 } }),
+        db.collection('users').findOne({ id }, { projection: { id: 1 } }),
+    ]);
+    if (company)
+        return 'company';
+    if (user)
+        return 'user';
+    return null;
+});
+const applyRateLimit = (actor) => {
+    const key = actorMarker(actor.type, actor.id);
+    const now = Date.now();
+    const current = sendRateState.get(key);
+    if (!current || now - current.startedAt > SEND_WINDOW_MS) {
+        sendRateState.set(key, { count: 1, startedAt: now });
+        return { allowed: true, remaining: SEND_WINDOW_LIMIT - 1 };
+    }
+    if (current.count >= SEND_WINDOW_LIMIT) {
+        return { allowed: false, remaining: 0 };
+    }
+    current.count += 1;
+    sendRateState.set(key, current);
+    return { allowed: true, remaining: SEND_WINDOW_LIMIT - current.count };
+};
+const unsafeLinkReason = (text) => {
+    const lowered = text.toLowerCase();
+    if (/(javascript:|vbscript:|data:text\/html|file:)/i.test(lowered)) {
+        return 'Unsafe link protocol detected';
+    }
+    if (/(<script|onerror=|onload=|<iframe)/i.test(lowered)) {
+        return 'Potentially unsafe markup detected';
+    }
+    return null;
+};
+const computeThreadState = (thread) => {
+    if (thread.blocked)
+        return 'blocked';
+    if (thread.muted)
+        return 'muted';
+    if (thread.archived)
+        return 'archived';
+    if (thread.state === 'requests')
+        return 'requests';
+    return 'active';
+};
+const upsertThread = (ownerType, ownerId, peerType, peerId, patch) => __awaiter(void 0, void 0, void 0, function* () {
+    const threads = (0, MessageThread_1.getMessageThreadsCollection)();
+    const key = (0, MessageThread_1.buildMessageThreadKey)(ownerType, ownerId, peerType, peerId);
+    const existing = yield threads.findOne({ key });
+    const merged = Object.assign(Object.assign(Object.assign({}, (existing || {})), patch), { ownerType,
+        ownerId,
+        peerType,
+        peerId,
+        key });
+    if (patch.clearRequest) {
+        merged.state = 'active';
+    }
+    merged.state = computeThreadState(merged);
+    const updatePayload = {
+        ownerType,
+        ownerId,
+        peerType,
+        peerId,
+        state: merged.state,
+        archived: !!merged.archived,
+        muted: !!merged.muted,
+        blocked: !!merged.blocked,
+        assignmentUserId: merged.assignmentUserId,
+        assignedByUserId: merged.assignedByUserId,
+        assignedAt: merged.assignedAt,
+        internalNotes: merged.internalNotes,
+        cannedReplies: Array.isArray(merged.cannedReplies) ? merged.cannedReplies : [],
+        campaignTags: Array.isArray(merged.campaignTags) ? merged.campaignTags : [],
+        slaMinutes: typeof merged.slaMinutes === 'number' ? merged.slaMinutes : undefined,
+        updatedAt: new Date(),
+    };
+    yield threads.updateOne({ key }, {
+        $set: updatePayload,
+        $setOnInsert: { createdAt: new Date() },
+    }, { upsert: true });
+    const next = yield threads.findOne({ key });
+    return next;
+});
+const threadStateSummary = (conversations) => {
+    const summary = {
+        total: 0,
+        active: 0,
+        archived: 0,
+        requests: 0,
+        muted: 0,
+        blocked: 0,
+    };
+    for (const conv of conversations) {
+        summary.total += 1;
+        const state = MESSAGE_STATES.includes(conv.state)
+            ? conv.state
+            : 'active';
+        summary[state] += 1;
+    }
+    return summary;
+};
+const isTrustedConversation = (authenticatedUserId, sender, receiverId, receiverType) => __awaiter(void 0, void 0, void 0, function* () {
+    const db = (0, db_1.getDB)();
+    if (sender.id === receiverId && sender.type === receiverType)
+        return true;
+    if (sender.type === 'user' && receiverType === 'user') {
+        const senderDoc = yield db.collection('users').findOne({ id: sender.id }, { projection: { acquaintances: 1 } });
+        const acquaintances = Array.isArray(senderDoc === null || senderDoc === void 0 ? void 0 : senderDoc.acquaintances) ? senderDoc.acquaintances : [];
+        return acquaintances.includes(receiverId);
+    }
+    if (sender.type === 'user' && receiverType === 'company') {
+        const [senderDoc, membership] = yield Promise.all([
+            db.collection('users').findOne({ id: sender.id }, { projection: { subscribedCompanyIds: 1 } }),
+            db.collection('company_members').findOne({ companyId: receiverId, userId: sender.id }),
+        ]);
+        const subscriptions = Array.isArray(senderDoc === null || senderDoc === void 0 ? void 0 : senderDoc.subscribedCompanyIds) ? senderDoc.subscribedCompanyIds : [];
+        return subscriptions.includes(receiverId) || !!membership;
+    }
+    if (sender.type === 'company' && receiverType === 'user') {
+        const [receiverDoc, employeeMembership] = yield Promise.all([
+            db.collection('users').findOne({ id: receiverId }, { projection: { subscribedCompanyIds: 1 } }),
+            db.collection('company_members').findOne({ companyId: sender.id, userId: receiverId }),
+        ]);
+        const receiverSubscriptions = Array.isArray(receiverDoc === null || receiverDoc === void 0 ? void 0 : receiverDoc.subscribedCompanyIds)
+            ? receiverDoc.subscribedCompanyIds
+            : [];
+        return receiverSubscriptions.includes(sender.id) || !!employeeMembership;
+    }
+    // company -> company
+    if (sender.type === 'company' && receiverType === 'company') {
+        return (0, identityUtils_1.validateIdentityAccess)(authenticatedUserId, receiverId);
+    }
+    return false;
+});
+const isConversationBlocked = (actor, otherType, otherId) => __awaiter(void 0, void 0, void 0, function* () {
+    const threads = (0, MessageThread_1.getMessageThreadsCollection)();
+    const [actorThread, otherThread] = yield Promise.all([
+        threads.findOne({
+            key: (0, MessageThread_1.buildMessageThreadKey)(actor.type, actor.id, otherType, otherId),
+            blocked: true,
+        }),
+        threads.findOne({
+            key: (0, MessageThread_1.buildMessageThreadKey)(otherType, otherId, actor.type, actor.id),
+            blocked: true,
+        }),
+    ]);
+    return !!actorThread || !!otherThread;
+});
+const parseState = (raw) => {
+    if (typeof raw !== 'string')
+        return null;
+    return MESSAGE_STATES.includes(raw) ? raw : null;
+};
+const buildThreadStatePatch = (state) => {
+    switch (state) {
+        case 'archived':
+            return { archived: true, muted: false, blocked: false, state: 'archived' };
+        case 'muted':
+            return { archived: false, muted: true, blocked: false, state: 'muted' };
+        case 'blocked':
+            return { archived: false, muted: false, blocked: true, state: 'blocked' };
+        case 'requests':
+            return { archived: false, muted: false, blocked: false, state: 'requests' };
+        case 'active':
+        default:
+            return { archived: false, muted: false, blocked: false, state: 'active', clearRequest: true };
+    }
+};
 exports.messagesController = {
     // GET /api/messages/conversations - Get all conversations for an actor (personal or company)
     getConversations: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -24,119 +267,124 @@ exports.messagesController = {
             if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            // Resolve effective actor identity
             const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
                 ownerType: req.query.ownerType,
-                ownerId: req.query.userId
+                ownerId: req.query.userId,
             }, req.headers);
             if (!actor) {
                 return res.status(403).json({ success: false, message: 'Unauthorized access to this identity' });
             }
-            const actorId = actor.id;
-            const ownerType = actor.type;
             if (!(0, db_1.isDBConnected)()) {
-                return res.json({ success: true, data: [] });
+                return res.json({ success: true, data: [], summary: threadStateSummary([]) });
             }
-            const messagesCollection = (0, Message_1.getMessagesCollection)();
+            const stateFilter = parseState(req.query.state);
             const db = (0, db_1.getDB)();
-            // Get latest message for each conversation where actor is sender or receiver
-            const conversations = yield messagesCollection.aggregate([
-                {
-                    $match: {
+            const messagesCollection = (0, Message_1.getMessagesCollection)();
+            const threadsCollection = (0, MessageThread_1.getMessageThreadsCollection)();
+            const actorKey = actorMarker(actor.type, actor.id);
+            const messages = yield messagesCollection
+                .find({
+                $and: [
+                    {
                         $or: [
-                            { senderId: actorId },
-                            { receiverId: actorId }
-                        ]
-                    }
-                },
-                {
-                    $addFields: {
-                        conversationWith: {
-                            $cond: {
-                                if: { $eq: ['$senderId', actorId] },
-                                then: '$receiverId',
-                                else: '$senderId'
-                            }
-                        }
-                    }
-                },
-                {
-                    $sort: { timestamp: -1 }
-                },
-                {
-                    $group: {
-                        _id: '$conversationWith',
-                        lastMessage: { $first: '$$ROOT' },
-                        unreadCount: {
-                            $sum: {
-                                $cond: {
-                                    if: {
-                                        $and: [
-                                            { $eq: ['$receiverId', actorId] },
-                                            { $eq: ['$isRead', false] }
-                                        ]
-                                    },
-                                    then: 1,
-                                    else: 0
-                                }
-                            }
-                        }
-                    }
-                },
-                {
-                    $lookup: {
-                        from: 'users',
-                        localField: '_id',
-                        foreignField: 'id',
-                        as: 'otherUser'
-                    }
-                },
-                {
-                    $lookup: {
-                        from: 'companies',
-                        localField: '_id',
-                        foreignField: 'id',
-                        as: 'otherCompany'
-                    }
-                },
-                {
-                    $addFields: {
-                        otherEntity: {
-                            $cond: {
-                                if: { $gt: [{ $size: '$otherUser' }, 0] },
-                                then: { $arrayElemAt: ['$otherUser', 0] },
-                                else: { $arrayElemAt: ['$otherCompany', 0] }
-                            }
-                        }
-                    }
-                },
-                {
-                    $unwind: {
-                        path: '$otherEntity',
-                        preserveNullAndEmptyArrays: true
-                    }
-                },
-                {
-                    $sort: { 'lastMessage.timestamp': -1 }
+                            { senderOwnerType: actor.type, senderOwnerId: actor.id },
+                            { receiverOwnerType: actor.type, receiverOwnerId: actor.id },
+                            { senderId: actor.id },
+                            { receiverId: actor.id },
+                        ],
+                    },
+                    {
+                        $or: [
+                            { deletedFor: { $exists: false } },
+                            { deletedFor: { $nin: [actor.id, actorKey] } },
+                        ],
+                    },
+                ],
+            })
+                .sort({ timestamp: -1 })
+                .toArray();
+            const byPeer = new Map();
+            for (const message of messages) {
+                const actorSent = isActorSender(message, actor);
+                const actorReceived = isActorReceiver(message, actor);
+                if (!actorSent && !actorReceived)
+                    continue;
+                const otherId = actorSent ? message.receiverId : message.senderId;
+                if (!otherId)
+                    continue;
+                const otherType = actorSent
+                    ? (message.receiverOwnerType || 'user')
+                    : (message.senderOwnerType || 'user');
+                const existing = byPeer.get(otherId);
+                if (!existing) {
+                    byPeer.set(otherId, {
+                        _id: otherId,
+                        otherType,
+                        lastMessage: message,
+                        unreadCount: actorReceived && !message.isRead ? 1 : 0,
+                    });
                 }
-            ]).toArray();
-            const collectionName = ownerType === 'company' ? 'companies' : 'users';
-            const doc = yield db.collection(collectionName).findOne({ id: actorId });
-            const archivedChats = (doc === null || doc === void 0 ? void 0 : doc.archivedChats) || [];
-            const conversationsWithArchive = conversations.map(conv => {
-                const otherUser = conv.otherEntity ? (0, userUtils_1.transformUser)(conv.otherEntity) : null;
-                return Object.assign(Object.assign({}, conv), { otherUser, isArchived: archivedChats.includes(conv._id) });
-            });
+                else if (actorReceived && !message.isRead) {
+                    existing.unreadCount += 1;
+                }
+            }
+            const peerIds = Array.from(byPeer.keys());
+            if (peerIds.length === 0) {
+                return res.json({ success: true, data: [], summary: threadStateSummary([]) });
+            }
+            const [users, companies, actorDoc, threadDocs] = yield Promise.all([
+                db.collection('users').find({ id: { $in: peerIds } }).toArray(),
+                db.collection('companies').find({ id: { $in: peerIds } }).toArray(),
+                db.collection(actor.type === 'company' ? 'companies' : 'users').findOne({ id: actor.id }),
+                threadsCollection
+                    .find({
+                    ownerType: actor.type,
+                    ownerId: actor.id,
+                    peerId: { $in: peerIds },
+                })
+                    .toArray(),
+            ]);
+            const userById = new Map(users.map((item) => [item.id, item]));
+            const companyById = new Map(companies.map((item) => [item.id, item]));
+            const threadByPeer = new Map(threadDocs.map((item) => [item.peerId, item]));
+            const archivedChats = Array.isArray(actorDoc === null || actorDoc === void 0 ? void 0 : actorDoc.archivedChats) ? actorDoc.archivedChats : [];
+            const conversations = peerIds
+                .map((peerId) => {
+                const base = byPeer.get(peerId);
+                const thread = threadByPeer.get(peerId);
+                const entity = base.otherType === 'company'
+                    ? companyById.get(peerId) || userById.get(peerId) || null
+                    : userById.get(peerId) || companyById.get(peerId) || null;
+                if (!entity)
+                    return null;
+                const normalized = thread || {
+                    state: archivedChats.includes(peerId) ? 'archived' : 'active',
+                };
+                const state = normalized.state || 'active';
+                return Object.assign(Object.assign({}, base), { state, isArchived: state === 'archived', isMuted: state === 'muted', isBlocked: state === 'blocked', isRequest: state === 'requests', otherUser: (0, userUtils_1.transformUser)(entity), meta: {
+                        assignmentUserId: (thread === null || thread === void 0 ? void 0 : thread.assignmentUserId) || null,
+                        assignedByUserId: (thread === null || thread === void 0 ? void 0 : thread.assignedByUserId) || null,
+                        assignedAt: (thread === null || thread === void 0 ? void 0 : thread.assignedAt) || null,
+                        internalNotes: (thread === null || thread === void 0 ? void 0 : thread.internalNotes) || '',
+                        cannedReplies: Array.isArray(thread === null || thread === void 0 ? void 0 : thread.cannedReplies) ? thread === null || thread === void 0 ? void 0 : thread.cannedReplies : [],
+                        campaignTags: Array.isArray(thread === null || thread === void 0 ? void 0 : thread.campaignTags) ? thread === null || thread === void 0 ? void 0 : thread.campaignTags : [],
+                        slaMinutes: typeof (thread === null || thread === void 0 ? void 0 : thread.slaMinutes) === 'number' ? thread === null || thread === void 0 ? void 0 : thread.slaMinutes : null,
+                    } });
+            })
+                .filter((item) => Boolean(item))
+                .sort((a, b) => new Date(b.lastMessage.timestamp).getTime() - new Date(a.lastMessage.timestamp).getTime());
+            const filtered = stateFilter ? conversations.filter((conv) => conv.state === stateFilter) : conversations;
             res.json({
                 success: true,
-                data: conversationsWithArchive
+                data: filtered,
+                summary: threadStateSummary(conversations),
             });
         }
         catch (error) {
             console.error('Error fetching conversations:', error);
             res.status(500).json({
                 success: false,
-                message: 'Failed to fetch conversations'
+                message: 'Failed to fetch conversations',
             });
         }
     }),
@@ -144,57 +392,59 @@ exports.messagesController = {
     getMessages: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const { userId: otherId } = req.params; // The other person/company
+            const { userId: otherId } = req.params;
             const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             const { page = 1, limit = 50, ownerType, currentUserId } = req.query;
             if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            // Resolve effective actor identity
             const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
                 ownerType: ownerType,
-                ownerId: currentUserId
+                ownerId: currentUserId,
             }, req.headers);
             if (!actor) {
                 return res.status(403).json({ success: false, message: 'Unauthorized access to this identity' });
             }
-            const actorId = actor.id;
             if (!(0, db_1.isDBConnected)()) {
                 return res.json({ success: true, data: [] });
             }
+            const otherType = yield resolveEntityTypeById(otherId);
             const messagesCollection = (0, Message_1.getMessagesCollection)();
-            const messages = yield messagesCollection.find({
-                $and: [
-                    {
-                        $or: [
-                            { senderId: actorId, receiverId: otherId },
-                            { senderId: otherId, receiverId: actorId }
-                        ]
-                    },
-                    { deletedFor: { $ne: actorId } }
-                ]
-            })
+            const messages = yield messagesCollection
+                .find(messageAccessQuery(actor, otherId, otherType || undefined))
                 .sort({ timestamp: -1 })
                 .limit(Number(limit))
                 .skip((Number(page) - 1) * Number(limit))
                 .toArray();
             const mappedMessages = messages.map((message) => (Object.assign(Object.assign({}, message), { id: message.id || (message._id ? String(message._id) : undefined) })));
-            // Mark messages as read (only those sent by the other entity to the actor)
-            yield messagesCollection.updateMany({
-                senderId: otherId,
-                receiverId: actorId,
-                isRead: false
-            }, { $set: { isRead: true } });
+            const markReadFilter = {
+                isRead: false,
+                $or: [
+                    {
+                        senderId: otherId,
+                        receiverId: actor.id,
+                    },
+                ],
+            };
+            if (otherType) {
+                markReadFilter.$or.unshift({
+                    senderOwnerType: otherType,
+                    senderOwnerId: otherId,
+                    receiverOwnerType: actor.type,
+                    receiverOwnerId: actor.id,
+                });
+            }
+            yield messagesCollection.updateMany(markReadFilter, { $set: { isRead: true } });
             res.json({
                 success: true,
-                data: mappedMessages.reverse()
+                data: mappedMessages.reverse(),
             });
         }
         catch (error) {
             console.error('Error fetching messages:', error);
             res.status(500).json({
                 success: false,
-                message: 'Failed to fetch messages'
+                message: 'Failed to fetch messages',
             });
         }
     }),
@@ -202,39 +452,62 @@ exports.messagesController = {
     sendMessage: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const { senderId: requestedSenderId, // Actor ID from client
-            ownerType, receiverId, text, messageType = 'text', mediaUrl, mediaKey, mediaMimeType, mediaSize, replyTo } = req.body;
+            const { senderId: requestedSenderId, ownerType, receiverId, text, messageType = 'text', mediaUrl, mediaKey, mediaMimeType, mediaSize, replyTo, } = req.body;
             const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            // Resolve effective actor identity
             const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
                 ownerType,
-                ownerId: requestedSenderId
+                ownerId: requestedSenderId,
             });
             if (!actor) {
                 return res.status(403).json({ success: false, message: 'Unauthorized to send as this identity' });
             }
-            const senderId = actor.id;
-            if (!receiverId || !text) {
+            if (!receiverId || (!text && !mediaUrl)) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Receiver ID and text are required'
+                    message: 'Receiver ID and content are required',
                 });
             }
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({
                     success: false,
-                    message: 'Messaging service is temporarily unavailable'
+                    message: 'Messaging service is temporarily unavailable',
                 });
             }
+            const unsafeReason = text ? unsafeLinkReason(String(text)) : null;
+            if (unsafeReason) {
+                return res.status(400).json({
+                    success: false,
+                    message: unsafeReason,
+                });
+            }
+            const rate = applyRateLimit(actor);
+            if (!rate.allowed) {
+                return res.status(429).json({
+                    success: false,
+                    message: 'Too many messages sent from this identity. Please wait a moment.',
+                });
+            }
+            const receiverType = yield resolveEntityTypeById(receiverId);
+            if (!receiverType) {
+                return res.status(404).json({ success: false, message: 'Receiver not found' });
+            }
+            const blocked = yield isConversationBlocked(actor, receiverType, receiverId);
+            if (blocked) {
+                return res.status(403).json({ success: false, message: 'Messaging is blocked for this conversation' });
+            }
+            const trusted = yield isTrustedConversation(authenticatedUserId, actor, receiverId, receiverType);
             const messagesCollection = (0, Message_1.getMessagesCollection)();
-            const db = (0, db_1.getDB)();
             const message = {
-                senderId,
+                senderId: actor.id,
+                senderOwnerType: actor.type,
+                senderOwnerId: actor.id,
                 receiverId,
-                text,
+                receiverOwnerType: receiverType,
+                receiverOwnerId: receiverId,
+                text: String(text || ''),
                 timestamp: new Date(),
                 isRead: false,
                 messageType,
@@ -243,31 +516,32 @@ exports.messagesController = {
                 mediaMimeType,
                 mediaSize,
                 replyTo,
-                isEdited: false
+                isEdited: false,
             };
             const result = yield messagesCollection.insertOne(message);
             const insertedMessage = yield messagesCollection.findOne({ _id: result.insertedId });
+            yield upsertThread(actor.type, actor.id, receiverType, receiverId, {
+                archived: false,
+                muted: false,
+                blocked: false,
+                state: 'active',
+            });
+            yield upsertThread(receiverType, receiverId, actor.type, actor.id, {
+                state: trusted ? 'active' : 'requests',
+            });
             const responseMessage = insertedMessage
                 ? Object.assign(Object.assign({}, insertedMessage), { id: insertedMessage._id ? String(insertedMessage._id) : undefined }) : null;
-            // Auto-unarchive for receiver
-            const unarchiveUpdate = {
-                $pull: { archivedChats: senderId },
-                $set: { updatedAt: new Date().toISOString() }
-            };
-            yield Promise.all([
-                db.collection('users').updateOne({ id: receiverId }, unarchiveUpdate),
-                db.collection('companies').updateOne({ id: receiverId }, unarchiveUpdate)
-            ]);
             res.status(201).json({
                 success: true,
-                data: responseMessage
+                data: responseMessage,
+                threadState: trusted ? 'active' : 'requests',
             });
         }
         catch (error) {
             console.error('Error sending message:', error);
             res.status(500).json({
                 success: false,
-                message: 'Failed to send message'
+                message: 'Failed to send message',
             });
         }
     }),
@@ -276,7 +550,7 @@ exports.messagesController = {
         var _a;
         try {
             const { messageId } = req.params;
-            const { text, userId: requestedActorId } = req.body;
+            const { text } = req.body;
             const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             if (!text) {
                 return res.status(400).json({ success: false, message: 'Text is required' });
@@ -289,8 +563,7 @@ exports.messagesController = {
             if (!message) {
                 return res.status(404).json({ success: false, message: 'Message not found' });
             }
-            // Authorization: Must be the sender and have access to that identity
-            const actorId = message.senderId;
+            const actorId = message.senderOwnerId || message.senderId;
             const hasAccess = yield (0, identityUtils_1.validateIdentityAccess)(authenticatedUserId, actorId);
             if (!hasAccess) {
                 return res.status(403).json({ success: false, message: 'Unauthorized to edit this message' });
@@ -299,20 +572,14 @@ exports.messagesController = {
                 $set: {
                     text,
                     isEdited: true,
-                    editedAt: new Date()
-                }
+                    editedAt: new Date(),
+                },
             }, { returnDocument: 'after' });
-            res.json({
-                success: true,
-                data: result
-            });
+            res.json({ success: true, data: result });
         }
         catch (error) {
             console.error('Error editing message:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to edit message'
-            });
+            res.status(500).json({ success: false, message: 'Failed to edit message' });
         }
     }),
     // DELETE /api/messages/:messageId - Delete a message
@@ -329,24 +596,17 @@ exports.messagesController = {
             if (!message) {
                 return res.status(404).json({ success: false, message: 'Message not found' });
             }
-            // Authorization: Must be the sender and have access to that identity
-            const actorId = message.senderId;
+            const actorId = message.senderOwnerId || message.senderId;
             const hasAccess = yield (0, identityUtils_1.validateIdentityAccess)(authenticatedUserId, actorId);
             if (!hasAccess) {
                 return res.status(403).json({ success: false, message: 'Unauthorized to delete this message' });
             }
             yield messagesCollection.deleteOne({ _id: new mongodb_1.ObjectId(messageId) });
-            res.json({
-                success: true,
-                message: 'Message deleted successfully'
-            });
+            res.json({ success: true, message: 'Message deleted successfully' });
         }
         catch (error) {
             console.error('Error deleting message:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to delete message'
-            });
+            res.status(500).json({ success: false, message: 'Failed to delete message' });
         }
     }),
     // DELETE /api/messages/conversation - Delete all messages in a conversation
@@ -358,42 +618,31 @@ exports.messagesController = {
             if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            // Resolve effective actor identity
             const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
                 ownerType,
-                ownerId: requestedActorId
+                ownerId: requestedActorId,
             });
             if (!actor) {
                 return res.status(403).json({ success: false, message: 'Unauthorized' });
             }
-            const actorId = actor.id;
             if (!otherUserId) {
                 return res.status(400).json({ success: false, message: 'Other party is required' });
             }
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({ success: false, message: 'Service unavailable' });
             }
+            const otherType = yield resolveEntityTypeById(otherUserId);
             const messagesCollection = (0, Message_1.getMessagesCollection)();
-            // IMPORTANT: In a "delete conversation" for one side, we usually just clear it for THEM
-            // but the current schema seems to delete the messages globally for both. 
-            // Following existing logic but with auth.
-            yield messagesCollection.updateMany({
-                $or: [
-                    { senderId: actorId, receiverId: otherUserId },
-                    { senderId: otherUserId, receiverId: actorId }
-                ]
-            }, { $addToSet: { deletedFor: actorId } });
-            res.json({
-                success: true,
-                message: 'Conversation deleted successfully'
+            const conversationQuery = messageAccessQuery(actor, otherUserId, otherType || undefined);
+            yield messagesCollection.updateMany(conversationQuery, { $addToSet: { deletedFor: actor.id } });
+            yield messagesCollection.updateMany(conversationQuery, {
+                $addToSet: { deletedFor: actorMarker(actor.type, actor.id) },
             });
+            res.json({ success: true, message: 'Conversation deleted successfully' });
         }
         catch (error) {
             console.error('Error deleting conversation:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to delete conversation'
-            });
+            res.status(500).json({ success: false, message: 'Failed to delete conversation' });
         }
     }),
     markAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -403,19 +652,20 @@ exports.messagesController = {
             if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            // Actor is the receiver of the messages being marked as read
-            const requestedActorId = req.body.receiverId || req.body.currentUserId || req.body.userId || req.query.receiverId || req.query.currentUserId || req.query.userId;
+            const requestedActorId = req.body.receiverId ||
+                req.body.currentUserId ||
+                req.body.userId ||
+                req.query.receiverId ||
+                req.query.currentUserId ||
+                req.query.userId;
             const ownerType = req.body.ownerType || req.query.ownerType;
-            // Resolve effective actor identity
             const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
                 ownerType,
-                ownerId: requestedActorId
+                ownerId: requestedActorId,
             });
             if (!actor) {
                 return res.status(403).json({ success: false, message: 'Unauthorized' });
             }
-            const actorId = actor.id;
-            // Other party is the sender of the messages
             const otherId = req.body.senderId || req.body.otherUserId || req.query.senderId || req.query.otherUserId;
             if (!otherId) {
                 return res.json({ success: true, message: 'Missing sender parameters' });
@@ -423,23 +673,33 @@ exports.messagesController = {
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({ success: false, message: 'Service unavailable' });
             }
+            const otherType = yield resolveEntityTypeById(otherId);
             const messagesCollection = (0, Message_1.getMessagesCollection)();
-            yield messagesCollection.updateMany({
-                senderId: otherId,
-                receiverId: actorId,
-                isRead: false
-            }, { $set: { isRead: true } });
-            res.json({
-                success: true,
-                message: 'Messages marked as read'
-            });
+            const filter = {
+                isRead: false,
+                $or: [
+                    {
+                        senderId: otherId,
+                        receiverId: actor.id,
+                    },
+                ],
+            };
+            if (otherType) {
+                filter.$or.unshift({
+                    senderOwnerType: otherType,
+                    senderOwnerId: otherId,
+                    receiverOwnerType: actor.type,
+                    receiverOwnerId: actor.id,
+                });
+            }
+            yield messagesCollection.updateMany(filter, { $set: { isRead: true } });
+            const peerType = otherType || 'user';
+            yield upsertThread(actor.type, actor.id, peerType, otherId, { clearRequest: true });
+            res.json({ success: true, message: 'Messages marked as read' });
         }
         catch (error) {
             console.error('Error marking messages as read:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to mark messages as read'
-            });
+            res.status(500).json({ success: false, message: 'Failed to mark messages as read' });
         }
     }),
     archiveConversation: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -450,38 +710,189 @@ exports.messagesController = {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
             const { userId: requestedActorId, ownerType, otherUserId, archived } = req.body;
-            // Resolve effective actor identity
             const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
                 ownerType,
-                ownerId: requestedActorId
+                ownerId: requestedActorId,
             });
             if (!actor) {
                 return res.status(403).json({ success: false, message: 'Unauthorized' });
             }
-            const actorId = actor.id;
             if (!otherUserId || typeof archived !== 'boolean') {
                 return res.status(400).json({ success: false, message: 'Invalid parameters' });
             }
+            const peerType = (yield resolveEntityTypeById(otherUserId)) || 'user';
+            const nextState = archived ? 'archived' : 'active';
+            yield upsertThread(actor.type, actor.id, peerType, otherUserId, buildThreadStatePatch(nextState));
+            // Backward compatibility for existing archivedChats logic
             const db = (0, db_1.getDB)();
-            const update = archived
-                ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } }
-                : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } };
-            // Update in both collections to be safe
+            const legacyUpdate = archived
+                ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } }
+                : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } };
             yield Promise.all([
-                db.collection('users').updateOne({ id: actorId }, update),
-                db.collection('companies').updateOne({ id: actorId }, update)
+                db.collection('users').updateOne({ id: actor.id }, legacyUpdate),
+                db.collection('companies').updateOne({ id: actor.id }, legacyUpdate),
             ]);
             res.json({
                 success: true,
-                message: archived ? 'Conversation archived successfully' : 'Conversation unarchived successfully'
+                message: archived ? 'Conversation archived successfully' : 'Conversation unarchived successfully',
             });
         }
         catch (error) {
             console.error('Error archiving conversation:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to update archive state'
+            res.status(500).json({ success: false, message: 'Failed to update archive state' });
+        }
+    }),
+    // POST /api/messages/thread-state - Set conversation state
+    setThreadState: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, message: 'Authentication required' });
+            }
+            const { userId: requestedActorId, ownerType, otherUserId, state } = req.body;
+            const nextState = parseState(state);
+            if (!otherUserId || !nextState) {
+                return res.status(400).json({ success: false, message: 'otherUserId and valid state are required' });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId: requestedActorId,
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized' });
+            }
+            const peerType = (yield resolveEntityTypeById(otherUserId)) || 'user';
+            const thread = yield upsertThread(actor.type, actor.id, peerType, otherUserId, buildThreadStatePatch(nextState));
+            // Keep archivedChats fallback synchronized for old clients.
+            const db = (0, db_1.getDB)();
+            const legacyUpdate = nextState === 'archived'
+                ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } }
+                : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } };
+            yield Promise.all([
+                db.collection('users').updateOne({ id: actor.id }, legacyUpdate),
+                db.collection('companies').updateOne({ id: actor.id }, legacyUpdate),
+            ]);
+            res.json({
+                success: true,
+                data: {
+                    state: thread.state,
+                    archived: !!thread.archived,
+                    muted: !!thread.muted,
+                    blocked: !!thread.blocked,
+                },
             });
         }
-    })
+        catch (error) {
+            console.error('Error setting thread state:', error);
+            res.status(500).json({ success: false, message: 'Failed to update conversation state' });
+        }
+    }),
+    // GET /api/messages/thread-meta - Read conversation metadata
+    getThreadMeta: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, message: 'Authentication required' });
+            }
+            const requestedActorId = req.query.userId || req.query.currentUserId;
+            const ownerType = req.query.ownerType;
+            const otherUserId = req.query.otherUserId;
+            if (!otherUserId) {
+                return res.status(400).json({ success: false, message: 'otherUserId is required' });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId: requestedActorId,
+            }, req.headers);
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized' });
+            }
+            const peerType = (yield resolveEntityTypeById(otherUserId)) || 'user';
+            const key = (0, MessageThread_1.buildMessageThreadKey)(actor.type, actor.id, peerType, otherUserId);
+            const thread = yield (0, MessageThread_1.getMessageThreadsCollection)().findOne({ key });
+            res.json({
+                success: true,
+                data: {
+                    state: (thread === null || thread === void 0 ? void 0 : thread.state) || 'active',
+                    archived: !!(thread === null || thread === void 0 ? void 0 : thread.archived),
+                    muted: !!(thread === null || thread === void 0 ? void 0 : thread.muted),
+                    blocked: !!(thread === null || thread === void 0 ? void 0 : thread.blocked),
+                    assignmentUserId: (thread === null || thread === void 0 ? void 0 : thread.assignmentUserId) || '',
+                    assignedByUserId: (thread === null || thread === void 0 ? void 0 : thread.assignedByUserId) || '',
+                    assignedAt: (thread === null || thread === void 0 ? void 0 : thread.assignedAt) || null,
+                    internalNotes: (thread === null || thread === void 0 ? void 0 : thread.internalNotes) || '',
+                    cannedReplies: Array.isArray(thread === null || thread === void 0 ? void 0 : thread.cannedReplies) ? thread === null || thread === void 0 ? void 0 : thread.cannedReplies : [],
+                    campaignTags: Array.isArray(thread === null || thread === void 0 ? void 0 : thread.campaignTags) ? thread === null || thread === void 0 ? void 0 : thread.campaignTags : [],
+                    slaMinutes: typeof (thread === null || thread === void 0 ? void 0 : thread.slaMinutes) === 'number' ? thread.slaMinutes : null,
+                },
+            });
+        }
+        catch (error) {
+            console.error('Error reading thread meta:', error);
+            res.status(500).json({ success: false, message: 'Failed to load thread metadata' });
+        }
+    }),
+    // POST /api/messages/thread-meta - Update conversation metadata (company-focused)
+    updateThreadMeta: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, message: 'Authentication required' });
+            }
+            const { userId: requestedActorId, ownerType, otherUserId, assignmentUserId, internalNotes, cannedReplies, campaignTags, slaMinutes, } = req.body;
+            if (!otherUserId) {
+                return res.status(400).json({ success: false, message: 'otherUserId is required' });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId: requestedActorId,
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized' });
+            }
+            if (actor.type !== 'company') {
+                return res.status(403).json({ success: false, message: 'Thread metadata is only available for company inboxes' });
+            }
+            const peerType = (yield resolveEntityTypeById(otherUserId)) || 'user';
+            const patch = {};
+            if (typeof assignmentUserId === 'string') {
+                patch.assignmentUserId = trimTo(assignmentUserId, 120);
+                patch.assignedByUserId = authenticatedUserId;
+                patch.assignedAt = new Date();
+            }
+            if (typeof internalNotes === 'string') {
+                patch.internalNotes = trimTo(internalNotes, 3000);
+            }
+            if (Array.isArray(cannedReplies)) {
+                patch.cannedReplies = sanitizeStringArray(cannedReplies, 20, 240);
+            }
+            if (Array.isArray(campaignTags)) {
+                patch.campaignTags = sanitizeStringArray(campaignTags, 20, 50);
+            }
+            if (typeof slaMinutes === 'number' && Number.isFinite(slaMinutes) && slaMinutes >= 0) {
+                patch.slaMinutes = Math.min(Math.round(slaMinutes), 60 * 24 * 30);
+            }
+            const thread = yield upsertThread(actor.type, actor.id, peerType, otherUserId, patch);
+            res.json({
+                success: true,
+                data: {
+                    state: thread.state,
+                    assignmentUserId: thread.assignmentUserId || '',
+                    assignedByUserId: thread.assignedByUserId || '',
+                    assignedAt: thread.assignedAt || null,
+                    internalNotes: thread.internalNotes || '',
+                    cannedReplies: Array.isArray(thread.cannedReplies) ? thread.cannedReplies : [],
+                    campaignTags: Array.isArray(thread.campaignTags) ? thread.campaignTags : [],
+                    slaMinutes: typeof thread.slaMinutes === 'number' ? thread.slaMinutes : null,
+                },
+            });
+        }
+        catch (error) {
+            console.error('Error updating thread meta:', error);
+            res.status(500).json({ success: false, message: 'Failed to update thread metadata' });
+        }
+    }),
 };

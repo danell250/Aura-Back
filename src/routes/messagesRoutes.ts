@@ -21,6 +21,15 @@ router.delete('/conversation', messagesController.deleteConversation);
 // POST /api/messages/archive - Archive or unarchive a conversation
 router.post('/archive', messagesController.archiveConversation);
 
+// POST /api/messages/thread-state - Set thread state (active|archived|requests|muted|blocked)
+router.post('/thread-state', messagesController.setThreadState);
+
+// GET /api/messages/thread-meta - Read thread metadata
+router.get('/thread-meta', messagesController.getThreadMeta);
+
+// POST /api/messages/thread-meta - Update thread metadata
+router.post('/thread-meta', messagesController.updateThreadMeta);
+
 // POST /api/messages - Send a new message
 router.post('/', messagesController.sendMessage);
 

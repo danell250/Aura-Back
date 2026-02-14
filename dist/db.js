@@ -21,6 +21,7 @@ exports.closeDB = closeDB;
 const mongodb_1 = require("mongodb");
 const dotenv_1 = __importDefault(require("dotenv"));
 const Message_1 = require("./models/Message");
+const MessageThread_1 = require("./models/MessageThread");
 const User_1 = require("./models/User");
 const AdAnalyticsDaily_1 = require("./models/AdAnalyticsDaily");
 const AdEventDedupe_1 = require("./models/AdEventDedupe");
@@ -76,6 +77,8 @@ function connectDB() {
             try {
                 (0, Message_1.initializeMessageCollection)(db);
                 console.log("✅ Message collection initialized");
+                yield (0, MessageThread_1.initializeMessageThreadCollection)(db);
+                console.log("✅ Message thread collection initialized");
                 yield (0, User_1.initializeUserCollection)(db);
                 yield (0, AdAnalyticsDaily_1.initializeAdAnalyticsDailyCollection)(db);
                 console.log("✅ AdAnalyticsDaily collection initialized");

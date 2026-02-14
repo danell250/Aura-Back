@@ -19,6 +19,12 @@ router.put('/mark-read', messagesController_1.messagesController.markAsRead);
 router.delete('/conversation', messagesController_1.messagesController.deleteConversation);
 // POST /api/messages/archive - Archive or unarchive a conversation
 router.post('/archive', messagesController_1.messagesController.archiveConversation);
+// POST /api/messages/thread-state - Set thread state (active|archived|requests|muted|blocked)
+router.post('/thread-state', messagesController_1.messagesController.setThreadState);
+// GET /api/messages/thread-meta - Read thread metadata
+router.get('/thread-meta', messagesController_1.messagesController.getThreadMeta);
+// POST /api/messages/thread-meta - Update thread metadata
+router.post('/thread-meta', messagesController_1.messagesController.updateThreadMeta);
 // POST /api/messages - Send a new message
 router.post('/', messagesController_1.messagesController.sendMessage);
 // GET /api/messages/:userId - Get messages between current user and another user
