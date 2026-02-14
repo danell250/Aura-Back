@@ -27,6 +27,139 @@ const broadcastPostViewUpdate = (payload: { postId: string; viewCount: number })
   }
 };
 
+interface ViewerAccessContext {
+  acquaintances: string[];
+  subscribedCompanyIds: string[];
+  memberCompanyIds: string[];
+  ownedCompanyIds: string[];
+  accessibleCompanyIds: string[];
+}
+
+const getViewerAccessContext = async (db: any, viewerUserId?: string): Promise<ViewerAccessContext> => {
+  if (!viewerUserId) {
+    return {
+      acquaintances: [],
+      subscribedCompanyIds: [],
+      memberCompanyIds: [],
+      ownedCompanyIds: [],
+      accessibleCompanyIds: []
+    };
+  }
+
+  const [viewer, memberships, ownedCompanies] = await Promise.all([
+    db.collection(USERS_COLLECTION).findOne(
+      { id: viewerUserId },
+      { projection: { acquaintances: 1, subscribedCompanyIds: 1 } }
+    ),
+    db.collection('company_members')
+      .find({ userId: viewerUserId })
+      .project({ companyId: 1 })
+      .toArray(),
+    db.collection('companies')
+      .find({ ownerId: viewerUserId })
+      .project({ id: 1 })
+      .toArray()
+  ]);
+
+  const acquaintances = Array.isArray(viewer?.acquaintances) ? viewer.acquaintances : [];
+  const subscribedCompanyIds = Array.isArray(viewer?.subscribedCompanyIds) ? viewer.subscribedCompanyIds : [];
+  const memberCompanyIds = memberships
+    .map((m: any) => m?.companyId)
+    .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
+  const ownedCompanyIds = ownedCompanies
+    .map((c: any) => c?.id)
+    .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
+
+  const accessibleCompanyIds = Array.from(new Set([...subscribedCompanyIds, ...memberCompanyIds, ...ownedCompanyIds]));
+
+  return {
+    acquaintances,
+    subscribedCompanyIds,
+    memberCompanyIds,
+    ownedCompanyIds,
+    accessibleCompanyIds
+  };
+};
+
+const buildVisibilityConditions = (viewerUserId: string | undefined, context: ViewerAccessContext): any[] => {
+  const conditions: any[] = [
+    { visibility: { $exists: false } },
+    { visibility: 'public' }
+  ];
+
+  if (!viewerUserId) {
+    return conditions;
+  }
+
+  conditions.push(
+    { visibility: 'private', 'author.id': viewerUserId },
+    { visibility: 'acquaintances', 'author.id': viewerUserId },
+    { visibility: 'subscribers', 'author.id': viewerUserId }
+  );
+
+  if (context.memberCompanyIds.length > 0) {
+    conditions.push({
+      visibility: 'private',
+      'author.id': { $in: context.memberCompanyIds }
+    });
+  }
+
+  if (context.acquaintances.length > 0) {
+    conditions.push({
+      visibility: 'acquaintances',
+      'author.id': { $in: context.acquaintances }
+    });
+  }
+
+  if (context.accessibleCompanyIds.length > 0) {
+    conditions.push({
+      visibility: 'subscribers',
+      'author.id': { $in: context.accessibleCompanyIds }
+    });
+    // Backward compatibility for older company posts saved as acquaintances visibility.
+    conditions.push({
+      visibility: 'acquaintances',
+      'author.id': { $in: context.accessibleCompanyIds },
+      'author.type': 'company'
+    });
+  }
+
+  return conditions;
+};
+
+const buildAuthorPrivacyConditions = (viewerUserId: string | undefined, context: ViewerAccessContext): any[] => {
+  const conditions: any[] = [
+    { authorType: 'user', 'authorDetails.isPrivate': { $ne: true } },
+    { authorType: 'company', 'authorDetails.isPrivate': { $ne: true } }
+  ];
+
+  if (!viewerUserId) {
+    return conditions;
+  }
+
+  conditions.push(
+    { authorType: 'user', 'author.id': viewerUserId },
+    { authorType: 'company', 'authorDetails.ownerId': viewerUserId },
+    { authorType: 'company', 'author.id': viewerUserId }
+  );
+
+  if (context.acquaintances.length > 0) {
+    conditions.push({
+      authorType: 'user',
+      'author.id': { $in: context.acquaintances }
+    });
+  }
+
+  if (context.accessibleCompanyIds.length > 0) {
+    conditions.push({
+      authorType: 'company',
+      'author.id': { $in: context.accessibleCompanyIds }
+    });
+  }
+
+  return conditions;
+};
+
 export const emitAuthorInsightsUpdate = async (app: any, authorId: string) => {
   try {
     if (!authorId) return;
@@ -146,32 +279,9 @@ export const postsController = {
       const db = getDB();
       const query = q.toLowerCase().trim();
       const currentUserId = (req as any).user?.id;
-
-      // Get current user's acquaintances for privacy filtering
-      let currentUserAcquaintances: string[] = [];
-      if (currentUserId) {
-        const currentUser = await db.collection(USERS_COLLECTION).findOne({ id: currentUserId });
-        currentUserAcquaintances = currentUser?.acquaintances || [];
-      }
-
-      const visibilityConditions: any[] = [
-        { visibility: { $exists: false } },
-        { visibility: 'public' }
-      ];
-
-      if (currentUserId) {
-        visibilityConditions.push(
-          { visibility: 'private', 'author.id': currentUserId },
-          { visibility: 'acquaintances', 'author.id': currentUserId }
-        );
-
-        if (currentUserAcquaintances.length > 0) {
-          visibilityConditions.push({
-            visibility: 'acquaintances',
-            'author.id': { $in: currentUserAcquaintances }
-          });
-        }
-      }
+      const viewerAccess = await getViewerAccessContext(db, currentUserId);
+      const visibilityConditions = buildVisibilityConditions(currentUserId, viewerAccess);
+      const authorPrivacyConditions = buildAuthorPrivacyConditions(currentUserId, viewerAccess);
 
       // Basic search across content, author fields, and hashtags with privacy filtering
       const pipeline = [
@@ -221,15 +331,7 @@ export const postsController = {
         },
         {
           $match: {
-            $or: [
-              { 'authorDetails.isPrivate': { $ne: true } },
-              {
-                'authorDetails.isPrivate': true,
-                'author.id': { $in: currentUserAcquaintances }
-              },
-              { 'author.id': currentUserId },
-              { authorType: 'company' } // Companies are always public in this context
-            ]
+            $or: authorPrivacyConditions
           }
         },
         {
@@ -307,32 +409,9 @@ export const postsController = {
 
       const pageNum = Math.max(parseInt(String(page), 10) || 1, 1);
       const limitNum = Math.min(Math.max(parseInt(String(limit), 10) || 20, 1), 100);
-
-      // Get current user's acquaintances for privacy filtering
-      let currentUserAcquaintances: string[] = [];
-      if (currentUserId) {
-        const currentUser = await db.collection(USERS_COLLECTION).findOne({ id: currentUserId });
-        currentUserAcquaintances = currentUser?.acquaintances || [];
-      }
-
-      const visibilityConditions: any[] = [
-        { visibility: { $exists: false } },
-        { visibility: 'public' }
-      ];
-
-      if (currentUserId) {
-        visibilityConditions.push(
-          { visibility: 'private', 'author.id': currentUserId },
-          { visibility: 'acquaintances', 'author.id': currentUserId }
-        );
-
-        if (currentUserAcquaintances.length > 0) {
-          visibilityConditions.push({
-            visibility: 'acquaintances',
-            'author.id': { $in: currentUserAcquaintances }
-          });
-        }
-      }
+      const viewerAccess = await getViewerAccessContext(db, currentUserId);
+      const visibilityConditions = buildVisibilityConditions(currentUserId, viewerAccess);
+      const authorPrivacyConditions = buildAuthorPrivacyConditions(currentUserId, viewerAccess);
 
       const visibilityMatchStage = {
         $match: {
@@ -379,15 +458,7 @@ export const postsController = {
         },
         {
           $match: {
-            $or: [
-              { 'authorDetails.isPrivate': { $ne: true } },
-              {
-                'authorDetails.isPrivate': true,
-                'author.id': { $in: currentUserAcquaintances }
-              },
-              { 'author.id': currentUserId },
-              { authorType: 'company' }
-            ]
+            $or: authorPrivacyConditions
           }
         },
         ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : [])
@@ -497,19 +568,38 @@ export const postsController = {
             from: USERS_COLLECTION,
             localField: 'author.id',
             foreignField: 'id',
-            as: 'authorDetails'
+            as: 'authorUserDetails'
+          }
+        },
+        {
+          $lookup: {
+            from: 'companies',
+            localField: 'author.id',
+            foreignField: 'id',
+            as: 'authorCompanyDetails'
+          }
+        },
+        {
+          $addFields: {
+            authorDetails: {
+              $cond: {
+                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
+                then: { $arrayElemAt: ['$authorUserDetails', 0] },
+                else: { $arrayElemAt: ['$authorCompanyDetails', 0] }
+              }
+            },
+            authorType: {
+              $cond: {
+                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
+                then: 'user',
+                else: 'company'
+              }
+            }
           }
         },
         {
           $match: {
-            $or: [
-              { 'authorDetails.isPrivate': { $ne: true } },
-              {
-                'authorDetails.isPrivate': true,
-                'author.id': { $in: currentUserAcquaintances }
-              },
-              { 'author.id': currentUserId }
-            ]
+            $or: authorPrivacyConditions
           }
         },
         { $count: 'total' }
@@ -521,7 +611,12 @@ export const postsController = {
       // Post-process to add userReactions for the current user
       const transformedData = data.map((post: any) => {
         // Use fresh author details from lookup if available
-        if (post.authorDetails && post.authorDetails[0]) {
+        if (post.authorDetails && !Array.isArray(post.authorDetails)) {
+          post.author = {
+            ...transformUser({ ...post.author, ...post.authorDetails }),
+            type: post.authorType || 'user'
+          };
+        } else if (post.authorDetails && post.authorDetails[0]) {
           post.author = {
             ...transformUser({ ...post.author, ...post.authorDetails[0] }),
             type: post.authorType || 'user'
@@ -573,6 +668,7 @@ export const postsController = {
       const { id } = req.params;
       const db = getDB();
       const currentUserId = (req as any).user?.id;
+      const viewerAccess = await getViewerAccessContext(db, currentUserId);
 
       const pipeline = [
         { $match: { id } },
@@ -582,7 +678,15 @@ export const postsController = {
             from: USERS_COLLECTION,
             localField: 'author.id',
             foreignField: 'id',
-            as: 'authorDetails'
+            as: 'authorUserDetails'
+          }
+        },
+        {
+          $lookup: {
+            from: 'companies',
+            localField: 'author.id',
+            foreignField: 'id',
+            as: 'authorCompanyDetails'
           }
         },
         {
@@ -595,6 +699,20 @@ export const postsController = {
         },
         {
           $addFields: {
+            authorDetails: {
+              $cond: {
+                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
+                then: { $arrayElemAt: ['$authorUserDetails', 0] },
+                else: { $arrayElemAt: ['$authorCompanyDetails', 0] }
+              }
+            },
+            authorType: {
+              $cond: {
+                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
+                then: 'user',
+                else: 'company'
+              }
+            },
             commentCount: { $size: '$fetchedComments' },
             comments: '$fetchedComments',
             // Calculate if time capsule is unlocked
@@ -607,7 +725,7 @@ export const postsController = {
             }
           }
         },
-        { $project: { fetchedComments: 0 } }
+        { $project: { fetchedComments: 0, authorUserDetails: 0, authorCompanyDetails: 0 } }
       ];
 
       const posts = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
@@ -635,31 +753,63 @@ export const postsController = {
       }
 
       // Check privacy settings
-      const authorDetails = post.authorDetails?.[0];
-      if (authorDetails?.isPrivate && currentUserId !== post.author.id) {
-        // Check if current user is an acquaintance of the author
-        const currentUser = currentUserId ? await db.collection(USERS_COLLECTION).findOne({ id: currentUserId }) : null;
-        const currentUserAcquaintances = currentUser?.acquaintances || [];
+      const authorDetails = post.authorDetails;
+      const authorType: 'user' | 'company' = post.authorType === 'company' ? 'company' : 'user';
 
-        if (!currentUserAcquaintances.includes(post.author.id)) {
+      if (authorDetails?.isPrivate && currentUserId !== post.author.id) {
+        if (!currentUserId) {
           return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+        }
+
+        if (authorType === 'user') {
+          if (!viewerAccess.acquaintances.includes(post.author.id)) {
+            return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+          }
+        } else {
+          const isOwner = authorDetails?.ownerId === currentUserId;
+          const isSubscriber = viewerAccess.accessibleCompanyIds.includes(post.author.id);
+          if (!isOwner && !isSubscriber) {
+            return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+          }
         }
       }
 
       if (post.visibility === 'private' && currentUserId !== post.author.id) {
-        return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+        if (authorType !== 'company') {
+          return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+        }
+        if (!currentUserId) {
+          return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+        }
+        const isCompanyOwner = authorDetails?.ownerId === currentUserId;
+        const isCompanyMember = viewerAccess.memberCompanyIds.includes(post.author.id);
+        if (!isCompanyOwner && !isCompanyMember) {
+          return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
+        }
       }
 
       if (post.visibility === 'acquaintances') {
         if (!currentUserId) {
-          return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to acquaintances' });
+          return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited access' });
         }
         if (currentUserId !== post.author.id) {
-          const currentUser = await db.collection(USERS_COLLECTION).findOne({ id: currentUserId });
-          const currentUserAcquaintances = currentUser?.acquaintances || [];
-          if (!currentUserAcquaintances.includes(post.author.id)) {
+          // Backward compatibility: older company posts may still use acquaintances visibility.
+          if (authorType === 'company') {
+            if (!viewerAccess.accessibleCompanyIds.includes(post.author.id)) {
+              return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to subscribers' });
+            }
+          } else if (!viewerAccess.acquaintances.includes(post.author.id)) {
             return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to acquaintances' });
           }
+        }
+      }
+
+      if (post.visibility === 'subscribers') {
+        if (!currentUserId) {
+          return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to subscribers' });
+        }
+        if (currentUserId !== post.author.id && !viewerAccess.accessibleCompanyIds.includes(post.author.id)) {
+          return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to subscribers' });
         }
       }
 
@@ -674,8 +824,8 @@ export const postsController = {
       }
 
       // Post-process to add userReactions for the current user
-      if (post.authorDetails && post.authorDetails[0]) {
-        post.author = transformUser({ ...post.author, ...post.authorDetails[0] });
+      if (post.authorDetails) {
+        post.author = transformUser({ ...post.author, ...post.authorDetails });
       } else if (post.author) {
         post.author = transformUser(post.author);
       }
@@ -953,7 +1103,13 @@ export const postsController = {
       };
 
       const safeContent = typeof content === 'string' ? content : '';
-      const normalizedVisibility = visibility === 'private' || visibility === 'acquaintances' ? visibility : 'public';
+      const requestedVisibility = typeof visibility === 'string' ? visibility : 'public';
+      const allowedVisibility = new Set(['public', 'private', 'acquaintances', 'subscribers']);
+      const clampedVisibility = allowedVisibility.has(requestedVisibility) ? requestedVisibility : 'public';
+      const normalizedVisibility =
+        authorType === 'company'
+          ? (clampedVisibility === 'acquaintances' ? 'subscribers' : clampedVisibility)
+          : (clampedVisibility === 'subscribers' ? 'acquaintances' : clampedVisibility);
       const hashtags = getHashtagsFromText(safeContent);
       const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];
       // Use provided ID if available, otherwise generate one
@@ -1044,13 +1200,13 @@ export const postsController = {
       // Emit real-time event for new post if it's public and visible
       const io = req.app.get('io');
       if (io) {
-        const isPublic = !visibility || visibility === 'public';
+        const isPublic = normalizedVisibility === 'public';
         const isLockedTimeCapsule = isTimeCapsule && unlockDate && new Date(unlockDate) > new Date();
 
         if (isPublic && !isLockedTimeCapsule) {
           io.emit('new_post', newPost);
-        } else if (visibility === 'acquaintances') {
-          // TODO: Efficiently emit to acquaintances only
+        } else if (normalizedVisibility === 'acquaintances' || normalizedVisibility === 'subscribers') {
+          // TODO: Efficiently emit to limited audiences only
           // For now, we don't emit to avoid leaking to public
         }
 

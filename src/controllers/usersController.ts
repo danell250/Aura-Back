@@ -317,12 +317,14 @@ export const usersController = {
           name: company.name,
           companyName: company.name,
           companyWebsite: company.website,
-          userMode: 'corporate',
+          userMode: 'company',
           isVerified: company.isVerified || false,
           trustScore: 100,
           auraCredits: 0,
-          acquaintances: [],
-          sentAcquaintanceRequests: [],
+          subscribers: Array.isArray(company.subscribers) ? company.subscribers : [],
+          subscriberCount: typeof company.subscriberCount === 'number'
+            ? company.subscriberCount
+            : (Array.isArray(company.subscribers) ? company.subscribers.length : 0),
           notifications: [],
           blockedUsers: [],
           profileViews: [],
@@ -397,12 +399,14 @@ export const usersController = {
           name: company.name,
           companyName: company.name,
           companyWebsite: company.website,
-          userMode: 'corporate',
+          userMode: 'company',
           isVerified: company.isVerified || false,
           trustScore: 100, // Default trust score for companies
           auraCredits: 0,
-          acquaintances: [], // Companies don't have acquaintances in the same way yet
-          sentAcquaintanceRequests: [],
+          subscribers: Array.isArray(company.subscribers) ? company.subscribers : [],
+          subscriberCount: typeof company.subscriberCount === 'number'
+            ? company.subscriberCount
+            : (Array.isArray(company.subscribers) ? company.subscribers.length : 0),
           notifications: [],
           blockedUsers: [],
           profileViews: [],
@@ -1273,7 +1277,7 @@ export const usersController = {
           ...c,
           type: 'company',
           bio: c.description, // Map description to bio for consistent UI
-          userMode: 'corporate'
+          userMode: 'company'
         }))
       ];
 

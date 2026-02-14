@@ -64,6 +64,9 @@ router.get('/me', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, 
                     name: u.companyName || u.name,
                     website: u.companyWebsite,
                     industry: u.industry,
+                    location: u.location || '',
+                    employeeCount: u.employeeCount,
+                    email: u.companyEmail || '',
                     bio: u.bio,
                     isVerified: u.isVerified,
                     ownerId: u.id,
@@ -88,10 +91,17 @@ router.get('/me', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, 
 router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const currentUser = req.user;
-        const { name, industry, bio, website, handle: providedHandle } = req.body;
+        const { name, industry, bio, website, location, employeeCount, email, handle: providedHandle } = req.body;
         const db = (0, db_1.getDB)();
         if (!name) {
             return res.status(400).json({ success: false, error: 'Identity name is required' });
+        }
+        const normalizedEmployeeCount = Number.isFinite(Number(employeeCount)) && Number(employeeCount) > 0
+            ? Math.floor(Number(employeeCount))
+            : undefined;
+        const normalizedCompanyEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+        if (normalizedCompanyEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedCompanyEmail)) {
+            return res.status(400).json({ success: false, error: 'Company email is invalid' });
         }
         // Handle validation if provided
         let handle = providedHandle;
@@ -129,6 +139,9 @@ router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, v
             industry: industry || 'Technology',
             bio: bio || '',
             website: website || '',
+            location: location || '',
+            employeeCount: normalizedEmployeeCount,
+            email: normalizedCompanyEmail || '',
             ownerId: currentUser.id,
             isVerified: !!website,
             createdAt: new Date(),
@@ -157,8 +170,15 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
     try {
         const { companyId } = req.params;
         const currentUser = req.user;
-        const updates = req.body;
+        const rawUpdates = req.body || {};
+        const updates = {};
         const db = (0, db_1.getDB)();
+        const allowedFields = ['name', 'industry', 'bio', 'website', 'location', 'employeeCount', 'email', 'handle'];
+        for (const field of allowedFields) {
+            if (rawUpdates[field] !== undefined) {
+                updates[field] = rawUpdates[field];
+            }
+        }
         // Verify currentUser is owner/admin
         const membership = yield db.collection('company_members').findOne({
             companyId,
@@ -167,6 +187,25 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
         });
         if (!membership && currentUser.id !== companyId) {
             return res.status(403).json({ success: false, error: 'Unauthorized to update this corporate identity' });
+        }
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ success: false, error: 'No valid fields provided for update' });
+        }
+        if (updates.employeeCount !== undefined) {
+            const normalizedEmployeeCount = Number.isFinite(Number(updates.employeeCount)) && Number(updates.employeeCount) > 0
+                ? Math.floor(Number(updates.employeeCount))
+                : null;
+            if (normalizedEmployeeCount === null) {
+                return res.status(400).json({ success: false, error: 'Employee count must be a positive number' });
+            }
+            updates.employeeCount = normalizedEmployeeCount;
+        }
+        if (updates.email !== undefined) {
+            const normalizedCompanyEmail = typeof updates.email === 'string' ? updates.email.trim().toLowerCase() : '';
+            if (normalizedCompanyEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedCompanyEmail)) {
+                return res.status(400).json({ success: false, error: 'Company email is invalid' });
+            }
+            updates.email = normalizedCompanyEmail;
         }
         // Auto-verify if website is added
         if (updates.website) {
@@ -198,6 +237,9 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
                     companyName: updates.name,
                     companyWebsite: updates.website,
                     industry: updates.industry,
+                    location: updates.location,
+                    employeeCount: updates.employeeCount,
+                    companyEmail: updates.email,
                     bio: updates.bio,
                     isVerified: updates.isVerified,
                     updatedAt: new Date().toISOString()

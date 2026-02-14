@@ -298,7 +298,9 @@ exports.usersController = {
             const company = yield db.collection('companies').findOne({ id });
             if (company) {
                 // Map company fields to user-like structure for profile view compatibility
-                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'corporate', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
+                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'company', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, subscribers: Array.isArray(company.subscribers) ? company.subscribers : [], subscriberCount: typeof company.subscriberCount === 'number'
+                        ? company.subscriberCount
+                        : (Array.isArray(company.subscribers) ? company.subscribers.length : 0), notifications: [], blockedUsers: [], profileViews: [] });
                 return res.json({
                     success: true,
                     type: 'company',
@@ -349,7 +351,9 @@ exports.usersController = {
             });
             if (company) {
                 // Map company fields to user-like structure for profile view compatibility
-                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'corporate', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, acquaintances: [], sentAcquaintanceRequests: [], notifications: [], blockedUsers: [], profileViews: [] });
+                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'company', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, subscribers: Array.isArray(company.subscribers) ? company.subscribers : [], subscriberCount: typeof company.subscriberCount === 'number'
+                        ? company.subscriberCount
+                        : (Array.isArray(company.subscribers) ? company.subscribers.length : 0), notifications: [], blockedUsers: [], profileViews: [] });
                 return res.json({
                     success: true,
                     type: 'company',
@@ -1051,7 +1055,7 @@ exports.usersController = {
             // Transform and combine results
             const searchResults = [
                 ...usersResults.map(u => (Object.assign(Object.assign({}, u), { type: 'user' }))),
-                ...companiesResults.map(c => (Object.assign(Object.assign({}, c), { type: 'company', bio: c.description, userMode: 'corporate' })))
+                ...companiesResults.map(c => (Object.assign(Object.assign({}, c), { type: 'company', bio: c.description, userMode: 'company' })))
             ];
             res.json({
                 success: true,
