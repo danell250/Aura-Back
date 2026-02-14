@@ -64,7 +64,7 @@ router.get('/me', requireAuth, async (req, res) => {
           employeeCount: u.employeeCount,
           email: u.companyEmail || '',
           bio: u.bio,
-          isVerified: u.isVerified,
+          isVerified: !!u.companyWebsite,
           ownerId: u.id,
           createdAt: u.createdAt || new Date(),
           updatedAt: u.updatedAt || new Date()

@@ -28,9 +28,44 @@ const broadcastPostViewUpdate = (payload) => {
         client.res.write(msg);
     }
 };
-const getViewerAccessContext = (db, viewerUserId) => __awaiter(void 0, void 0, void 0, function* () {
-    if (!viewerUserId) {
+const readHeaderString = (value) => {
+    if (typeof value === 'string')
+        return value;
+    if (Array.isArray(value) && typeof value[0] === 'string')
+        return value[0];
+    return undefined;
+};
+const resolveViewerActor = (req) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+    if (!authenticatedUserId)
+        return undefined;
+    const headerOwnerType = readHeaderString(req.headers['x-identity-type']);
+    const headerOwnerId = readHeaderString(req.headers['x-identity-id']);
+    const queryOwnerType = typeof req.query.ownerType === 'string' ? req.query.ownerType : undefined;
+    const queryOwnerId = typeof req.query.ownerId === 'string' ? req.query.ownerId : undefined;
+    const requestedOwnerType = headerOwnerType || queryOwnerType;
+    const requestedOwnerId = headerOwnerId || queryOwnerId;
+    const hasExplicitIdentity = Boolean(requestedOwnerType || requestedOwnerId);
+    if (!hasExplicitIdentity) {
+        return { type: 'user', id: authenticatedUserId };
+    }
+    if (requestedOwnerType === 'company' && !requestedOwnerId) {
+        return null;
+    }
+    const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+        ownerType: requestedOwnerType,
+        ownerId: requestedOwnerId,
+    }, req.headers);
+    if (!actor)
+        return null;
+    return actor;
+});
+const getViewerAccessContext = (db, viewerActor) => __awaiter(void 0, void 0, void 0, function* () {
+    if (!viewerActor) {
         return {
+            actorType: 'anonymous',
+            actorId: undefined,
             acquaintances: [],
             subscribedCompanyIds: [],
             memberCompanyIds: [],
@@ -38,6 +73,18 @@ const getViewerAccessContext = (db, viewerUserId) => __awaiter(void 0, void 0, v
             accessibleCompanyIds: []
         };
     }
+    if (viewerActor.type === 'company') {
+        return {
+            actorType: 'company',
+            actorId: viewerActor.id,
+            acquaintances: [],
+            subscribedCompanyIds: [],
+            memberCompanyIds: [viewerActor.id],
+            ownedCompanyIds: [viewerActor.id],
+            accessibleCompanyIds: [viewerActor.id],
+        };
+    }
+    const viewerUserId = viewerActor.id;
     const [viewer, memberships, ownedCompanies] = yield Promise.all([
         db.collection(USERS_COLLECTION).findOne({ id: viewerUserId }, { projection: { acquaintances: 1, subscribedCompanyIds: 1 } }),
         db.collection('company_members')
@@ -59,6 +106,8 @@ const getViewerAccessContext = (db, viewerUserId) => __awaiter(void 0, void 0, v
         .filter((id) => typeof id === 'string' && id.length > 0);
     const accessibleCompanyIds = Array.from(new Set([...subscribedCompanyIds, ...memberCompanyIds, ...ownedCompanyIds]));
     return {
+        actorType: 'user',
+        actorId: viewerUserId,
         acquaintances,
         subscribedCompanyIds,
         memberCompanyIds,
@@ -66,15 +115,17 @@ const getViewerAccessContext = (db, viewerUserId) => __awaiter(void 0, void 0, v
         accessibleCompanyIds
     };
 });
-const buildVisibilityConditions = (viewerUserId, context) => {
+const buildVisibilityConditions = (context) => {
     const conditions = [
         { visibility: { $exists: false } },
         { visibility: 'public' }
     ];
-    if (!viewerUserId) {
+    if (context.actorType === 'anonymous' || !context.actorId) {
         return conditions;
     }
-    conditions.push({ visibility: 'private', 'author.id': viewerUserId }, { visibility: 'acquaintances', 'author.id': viewerUserId }, { visibility: 'subscribers', 'author.id': viewerUserId });
+    const viewerIdentityId = context.actorId;
+    const viewerIsCompany = context.actorType === 'company';
+    conditions.push({ visibility: 'private', 'author.id': viewerIdentityId }, Object.assign({ visibility: 'acquaintances', 'author.id': viewerIdentityId }, (viewerIsCompany ? { 'author.type': 'company' } : {})), { visibility: 'subscribers', 'author.id': viewerIdentityId });
     if (context.memberCompanyIds.length > 0) {
         conditions.push({
             visibility: 'private',
@@ -101,15 +152,21 @@ const buildVisibilityConditions = (viewerUserId, context) => {
     }
     return conditions;
 };
-const buildAuthorPrivacyConditions = (viewerUserId, context) => {
+const buildAuthorPrivacyConditions = (context) => {
     const conditions = [
         { authorType: 'user', 'authorDetails.isPrivate': { $ne: true } },
         { authorType: 'company', 'authorDetails.isPrivate': { $ne: true } }
     ];
-    if (!viewerUserId) {
+    if (context.actorType === 'anonymous' || !context.actorId) {
         return conditions;
     }
-    conditions.push({ authorType: 'user', 'author.id': viewerUserId }, { authorType: 'company', 'authorDetails.ownerId': viewerUserId }, { authorType: 'company', 'author.id': viewerUserId });
+    if (context.actorType === 'user') {
+        const viewerUserId = context.actorId;
+        conditions.push({ authorType: 'user', 'author.id': viewerUserId }, { authorType: 'company', 'authorDetails.ownerId': viewerUserId }, { authorType: 'company', 'author.id': viewerUserId });
+    }
+    else {
+        conditions.push({ authorType: 'company', 'author.id': context.actorId });
+    }
     if (context.acquaintances.length > 0) {
         conditions.push({
             authorType: 'user',
@@ -236,10 +293,18 @@ exports.postsController = {
             }
             const db = (0, db_1.getDB)();
             const query = q.toLowerCase().trim();
-            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            const viewerAccess = yield getViewerAccessContext(db, currentUserId);
-            const visibilityConditions = buildVisibilityConditions(currentUserId, viewerAccess);
-            const authorPrivacyConditions = buildAuthorPrivacyConditions(currentUserId, viewerAccess);
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const viewerActor = yield resolveViewerActor(req);
+            if (authenticatedUserId && viewerActor === null) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized identity context'
+                });
+            }
+            const viewerAccess = yield getViewerAccessContext(db, viewerActor || undefined);
+            const visibilityConditions = buildVisibilityConditions(viewerAccess);
+            const authorPrivacyConditions = buildAuthorPrivacyConditions(viewerAccess);
             // Basic search across content, author fields, and hashtags with privacy filtering
             const pipeline = [
                 {
@@ -324,7 +389,16 @@ exports.postsController = {
         try {
             const { page = 1, limit = 20, userId, energy, hashtags, sort } = req.query;
             const db = (0, db_1.getDB)();
-            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const viewerActor = yield resolveViewerActor(req);
+            if (authenticatedUserId && viewerActor === null) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized identity context'
+                });
+            }
+            const viewerIdentityId = (viewerActor === null || viewerActor === void 0 ? void 0 : viewerActor.id) || authenticatedUserId;
             const query = {};
             if (userId)
                 query['author.id'] = userId;
@@ -336,15 +410,15 @@ exports.postsController = {
             }
             // Filter out locked Time Capsules (unless viewing own profile)
             const now = Date.now();
-            if (!userId || userId !== currentUserId) {
+            if (!userId || userId !== viewerIdentityId) {
                 // For public feed or other users' profiles, hide locked time capsules
                 const orConditions = [
                     { isTimeCapsule: { $ne: true } }, // Regular posts
                     { isTimeCapsule: true, unlockDate: { $lte: now } } // Unlocked time capsules
                 ];
-                if (currentUserId) {
-                    orConditions.push({ isTimeCapsule: true, 'author.id': currentUserId }, // Own time capsules (always visible to author)
-                    { isTimeCapsule: true, invitedUsers: currentUserId } // Invited users can see group time capsules
+                if (authenticatedUserId) {
+                    orConditions.push({ isTimeCapsule: true, 'author.id': viewerIdentityId }, // Own time capsules for active identity
+                    { isTimeCapsule: true, invitedUsers: authenticatedUserId } // Invited users remain personal-user scoped
                     );
                 }
                 query.$or = orConditions;
@@ -355,9 +429,9 @@ exports.postsController = {
             }
             const pageNum = Math.max(parseInt(String(page), 10) || 1, 1);
             const limitNum = Math.min(Math.max(parseInt(String(limit), 10) || 20, 1), 100);
-            const viewerAccess = yield getViewerAccessContext(db, currentUserId);
-            const visibilityConditions = buildVisibilityConditions(currentUserId, viewerAccess);
-            const authorPrivacyConditions = buildAuthorPrivacyConditions(currentUserId, viewerAccess);
+            const viewerAccess = yield getViewerAccessContext(db, viewerActor || undefined);
+            const visibilityConditions = buildVisibilityConditions(viewerAccess);
+            const authorPrivacyConditions = buildAuthorPrivacyConditions(viewerAccess);
             const visibilityMatchStage = {
                 $match: {
                     $or: visibilityConditions
@@ -365,7 +439,7 @@ exports.postsController = {
             };
             const pipeline = [
                 { $match: query },
-                ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : []),
+                ...(!userId || userId !== viewerIdentityId ? [visibilityMatchStage] : []),
                 {
                     $lookup: {
                         from: USERS_COLLECTION,
@@ -405,7 +479,7 @@ exports.postsController = {
                         $or: authorPrivacyConditions
                     }
                 },
-                ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : [])
+                ...(!userId || userId !== viewerIdentityId ? [visibilityMatchStage] : [])
             ];
             // Move privacy filtering match earlier if possible
             // However, authorDetails.isPrivate depends on the lookup
@@ -487,7 +561,7 @@ exports.postsController = {
             // Get total count with privacy filtering
             const countPipeline = [
                 { $match: query },
-                ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : []),
+                ...(!userId || userId !== viewerIdentityId ? [visibilityMatchStage] : []),
                 {
                     $lookup: {
                         from: USERS_COLLECTION,
@@ -544,9 +618,9 @@ exports.postsController = {
                     post.author = Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(post.author)), { type: post.authorType || 'user' });
                 }
                 delete post.authorDetails; // Clean up
-                if (currentUserId) {
+                if (authenticatedUserId) {
                     if (post.reactionUsers) {
-                        post.userReactions = Object.keys(post.reactionUsers).filter(emoji => Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId));
+                        post.userReactions = Object.keys(post.reactionUsers).filter(emoji => Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(authenticatedUserId));
                     }
                     else {
                         post.userReactions = [];
@@ -578,8 +652,17 @@ exports.postsController = {
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
-            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            const viewerAccess = yield getViewerAccessContext(db, currentUserId);
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const viewerActor = yield resolveViewerActor(req);
+            if (authenticatedUserId && viewerActor === null) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized identity context'
+                });
+            }
+            const viewerIdentityId = (viewerActor === null || viewerActor === void 0 ? void 0 : viewerActor.id) || authenticatedUserId;
+            const viewerAccess = yield getViewerAccessContext(db, viewerActor || undefined);
             const pipeline = [
                 { $match: { id } },
                 // Lookup author details to check privacy settings
@@ -643,7 +726,7 @@ exports.postsController = {
                 return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
             }
             // Increment view count if not the author
-            if (currentUserId !== post.author.id) {
+            if (viewerIdentityId !== post.author.id) {
                 yield db.collection(POSTS_COLLECTION).updateOne({ id }, {
                     $inc: { viewCount: 1 },
                     $setOnInsert: { viewCount: 1 }
@@ -657,65 +740,65 @@ exports.postsController = {
             // Check privacy settings
             const authorDetails = post.authorDetails;
             const authorType = post.authorType === 'company' ? 'company' : 'user';
-            if ((authorDetails === null || authorDetails === void 0 ? void 0 : authorDetails.isPrivate) && currentUserId !== post.author.id) {
-                if (!currentUserId) {
+            if ((authorDetails === null || authorDetails === void 0 ? void 0 : authorDetails.isPrivate) && viewerIdentityId !== post.author.id) {
+                if (!viewerIdentityId) {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
                 }
                 if (authorType === 'user') {
-                    if (!viewerAccess.acquaintances.includes(post.author.id)) {
+                    if ((viewerActor === null || viewerActor === void 0 ? void 0 : viewerActor.type) !== 'user' || !viewerAccess.acquaintances.includes(post.author.id)) {
                         return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
                     }
                 }
                 else {
-                    const isOwner = (authorDetails === null || authorDetails === void 0 ? void 0 : authorDetails.ownerId) === currentUserId;
-                    const isSubscriber = viewerAccess.accessibleCompanyIds.includes(post.author.id);
-                    if (!isOwner && !isSubscriber) {
+                    const hasCompanyMemberAccess = viewerAccess.memberCompanyIds.includes(post.author.id) ||
+                        viewerAccess.ownedCompanyIds.includes(post.author.id);
+                    if (!hasCompanyMemberAccess) {
                         return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
                     }
                 }
             }
-            if (post.visibility === 'private' && currentUserId !== post.author.id) {
+            if (post.visibility === 'private' && viewerIdentityId !== post.author.id) {
                 if (authorType !== 'company') {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
                 }
-                if (!currentUserId) {
+                if (!viewerIdentityId) {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
                 }
-                const isCompanyOwner = (authorDetails === null || authorDetails === void 0 ? void 0 : authorDetails.ownerId) === currentUserId;
-                const isCompanyMember = viewerAccess.memberCompanyIds.includes(post.author.id);
-                if (!isCompanyOwner && !isCompanyMember) {
+                const hasCompanyMemberAccess = viewerAccess.memberCompanyIds.includes(post.author.id) ||
+                    viewerAccess.ownedCompanyIds.includes(post.author.id);
+                if (!hasCompanyMemberAccess) {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
                 }
             }
             if (post.visibility === 'acquaintances') {
-                if (!currentUserId) {
+                if (!viewerIdentityId) {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited access' });
                 }
-                if (currentUserId !== post.author.id) {
+                if (viewerIdentityId !== post.author.id) {
                     // Backward compatibility: older company posts may still use acquaintances visibility.
                     if (authorType === 'company') {
                         if (!viewerAccess.accessibleCompanyIds.includes(post.author.id)) {
                             return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to subscribers' });
                         }
                     }
-                    else if (!viewerAccess.acquaintances.includes(post.author.id)) {
+                    else if ((viewerActor === null || viewerActor === void 0 ? void 0 : viewerActor.type) !== 'user' || !viewerAccess.acquaintances.includes(post.author.id)) {
                         return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to acquaintances' });
                     }
                 }
             }
             if (post.visibility === 'subscribers') {
-                if (!currentUserId) {
+                if (!viewerIdentityId) {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to subscribers' });
                 }
-                if (currentUserId !== post.author.id && !viewerAccess.accessibleCompanyIds.includes(post.author.id)) {
+                if (viewerIdentityId !== post.author.id && !viewerAccess.accessibleCompanyIds.includes(post.author.id)) {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is limited to subscribers' });
                 }
             }
             // Check if this is a locked Time Capsule that the user shouldn't see
             if (post.isTimeCapsule && post.unlockDate && Date.now() < post.unlockDate) {
                 // Only allow the author or invited users to see locked time capsules
-                const isAuthor = currentUserId && currentUserId === post.author.id;
-                const isInvited = currentUserId && Array.isArray(post.invitedUsers) && post.invitedUsers.includes(currentUserId);
+                const isAuthor = viewerIdentityId && viewerIdentityId === post.author.id;
+                const isInvited = authenticatedUserId && Array.isArray(post.invitedUsers) && post.invitedUsers.includes(authenticatedUserId);
                 if (!isAuthor && !isInvited) {
                     return res.status(404).json({ success: false, error: 'Post not found', message: 'Time Capsule is not yet unlocked' });
                 }
@@ -728,9 +811,9 @@ exports.postsController = {
                 post.author = (0, userUtils_1.transformUser)(post.author);
             }
             delete post.authorDetails;
-            if (currentUserId) {
+            if (authenticatedUserId) {
                 if (post.reactionUsers) {
-                    post.userReactions = Object.keys(post.reactionUsers).filter(emoji => Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId));
+                    post.userReactions = Object.keys(post.reactionUsers).filter(emoji => Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(authenticatedUserId));
                 }
                 else {
                     post.userReactions = [];
@@ -762,9 +845,9 @@ exports.postsController = {
                         else if (c.author) {
                             c.author = (0, userUtils_1.transformUser)(c.author);
                         }
-                        if (currentUserId) {
+                        if (authenticatedUserId) {
                             if (c.reactionUsers) {
-                                c.userReactions = Object.keys(c.reactionUsers).filter(emoji => Array.isArray(c.reactionUsers[emoji]) && c.reactionUsers[emoji].includes(currentUserId));
+                                c.userReactions = Object.keys(c.reactionUsers).filter(emoji => Array.isArray(c.reactionUsers[emoji]) && c.reactionUsers[emoji].includes(authenticatedUserId));
                             }
                             else {
                                 c.userReactions = [];
@@ -791,7 +874,16 @@ exports.postsController = {
                 });
             }
             const db = (0, db_1.getDB)();
-            const viewerId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const viewerActor = yield resolveViewerActor(req);
+            if (authenticatedUserId && viewerActor === null) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized identity context'
+                });
+            }
+            const viewerIdentityId = (viewerActor === null || viewerActor === void 0 ? void 0 : viewerActor.id) || authenticatedUserId;
             // Find the post first to check the author
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
@@ -800,7 +892,7 @@ exports.postsController = {
             const authorId = (_b = post.author) === null || _b === void 0 ? void 0 : _b.id;
             let updatedPost = post;
             // Only increment if viewer is NOT the author
-            if (!viewerId || viewerId !== authorId) {
+            if (!viewerIdentityId || viewerIdentityId !== authorId) {
                 const result = yield db.collection(POSTS_COLLECTION).findOneAndUpdate({ id }, {
                     $inc: { viewCount: 1 },
                     $setOnInsert: { viewCount: 1 }
@@ -837,7 +929,7 @@ exports.postsController = {
         var _a;
         try {
             const { content, mediaUrl, mediaType, mediaKey, mediaMimeType, mediaSize, mediaItems, energy, authorId: rawAuthorId, // Rename to rawAuthorId as we won't trust it
-            taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle, timezone, visibility, isSystemPost, systemType, ownerId, createdByUserId, id // Allow frontend to provide ID (e.g. for S3 key consistency)
+            taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle, timezone, visibility, isSystemPost, systemType, createdByUserId, id // Allow frontend to provide ID (e.g. for S3 key consistency)
              } = req.body;
             const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             if (!authenticatedUserId) {
@@ -955,7 +1047,7 @@ exports.postsController = {
             // Use provided ID if available, otherwise generate one
             const postId = id || (isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`);
             const currentYear = new Date().getFullYear();
-            const newPost = Object.assign(Object.assign({ id: postId, author: authorEmbed, authorId: authorEmbed.id, ownerId: ownerId || authorEmbed.id, content: safeContent, mediaUrl: finalMediaUrl || undefined, mediaType: finalMediaType || undefined, mediaKey: mediaKey || undefined, mediaMimeType: mediaMimeType || undefined, mediaSize: mediaSize || undefined, mediaItems: finalMediaItems || undefined, sharedFrom: req.body.sharedFrom || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), visibility: normalizedVisibility, reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
+            const newPost = Object.assign(Object.assign({ id: postId, author: authorEmbed, authorId: authorEmbed.id, ownerId: authorEmbed.id, content: safeContent, mediaUrl: finalMediaUrl || undefined, mediaType: finalMediaType || undefined, mediaKey: mediaKey || undefined, mediaMimeType: mediaMimeType || undefined, mediaSize: mediaSize || undefined, mediaItems: finalMediaItems || undefined, sharedFrom: req.body.sharedFrom || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), visibility: normalizedVisibility, reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
                 isTimeCapsule: true,
                 unlockDate: unlockDate || null,
                 isUnlocked: unlockDate ? Date.now() >= unlockDate : true,
@@ -1011,7 +1103,7 @@ exports.postsController = {
     }),
     // PUT /api/posts/:id - Update post (author only)
     updatePost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const { id } = req.params;
             const updates = req.body || {};
@@ -1038,6 +1130,14 @@ exports.postsController = {
             delete updates.timestamp;
             if (typeof updates.content === 'string') {
                 updates.hashtags = (0, hashtagUtils_1.getHashtagsFromText)(updates.content);
+            }
+            if (typeof updates.visibility === 'string') {
+                const allowedVisibility = new Set(['public', 'private', 'acquaintances', 'subscribers']);
+                const clampedVisibility = allowedVisibility.has(updates.visibility) ? updates.visibility : 'public';
+                const authorType = ((_b = post.author) === null || _b === void 0 ? void 0 : _b.type) === 'company' ? 'company' : 'user';
+                updates.visibility = authorType === 'company'
+                    ? (clampedVisibility === 'acquaintances' ? 'subscribers' : clampedVisibility)
+                    : (clampedVisibility === 'subscribers' ? 'acquaintances' : clampedVisibility);
             }
             yield db.collection(POSTS_COLLECTION).updateOne({ id }, { $set: Object.assign(Object.assign({}, updates), { updatedAt: new Date().toISOString() }) });
             const updatedDoc = yield db.collection(POSTS_COLLECTION).findOne({ id });
@@ -1097,12 +1197,12 @@ exports.postsController = {
         try {
             const { id } = req.params;
             const { reaction, action: forceAction } = req.body;
-            const userId = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id) || req.body.userId; // Prefer authenticated user
+            const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             if (!reaction) {
                 return res.status(400).json({ success: false, error: 'Missing reaction' });
             }
             if (!userId) {
-                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
             }
             const db = (0, db_1.getDB)();
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
@@ -1174,14 +1274,30 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/boost - Boost post and deduct credits server-side
     boostPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const { id } = req.params;
-            const { userId, credits } = req.body;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const { credits } = req.body;
             const db = (0, db_1.getDB)();
-            if (!userId) {
-                return res.status(400).json({ success: false, error: 'Missing userId' });
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
             }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: req.body.ownerType,
+                ownerId: req.body.userId
+            }, req.headers);
+            if (!actor) {
+                return res.status(403).json({ success: false, error: 'Forbidden', message: 'Unauthorized boost identity' });
+            }
+            if (actor.type !== 'user') {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Credit boosting is available only in Personal identity context'
+                });
+            }
+            const userId = actor.id;
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found' });
@@ -1232,7 +1348,7 @@ exports.postsController = {
                 }
                 try {
                     const appInstance = req.app;
-                    const authorId = ((_a = boostedDoc.author) === null || _a === void 0 ? void 0 : _a.id) || post.author.id;
+                    const authorId = ((_b = boostedDoc.author) === null || _b === void 0 ? void 0 : _b.id) || post.author.id;
                     if (authorId) {
                         yield (0, exports.emitAuthorInsightsUpdate)(appInstance, authorId);
                     }
@@ -1254,10 +1370,14 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/share - Share a post
     sharePost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
-            const { userId } = req.body;
+            const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             const db = (0, db_1.getDB)();
+            if (!userId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+            }
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found' });
@@ -1425,7 +1545,7 @@ exports.postsController = {
     }),
     // GET /api/posts/:id/analytics - Get detailed analytics for a post
     getPostAnalytics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c;
+        var _a, _b, _c, _d, _e, _f;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
@@ -1433,11 +1553,27 @@ exports.postsController = {
             if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found' });
             }
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: req.query.ownerType,
+                ownerId: req.query.ownerId
+            }, req.headers);
+            if (!actor) {
+                return res.status(403).json({ success: false, error: 'Forbidden', message: 'Unauthorized identity context' });
+            }
+            const postAuthorId = (_b = post.author) === null || _b === void 0 ? void 0 : _b.id;
+            const postAuthorType = ((_c = post.author) === null || _c === void 0 ? void 0 : _c.type) === 'company' ? 'company' : 'user';
+            if (!postAuthorId || actor.id !== postAuthorId || actor.type !== postAuthorType) {
+                return res.status(403).json({ success: false, error: 'Forbidden', message: 'You can only view analytics for your active identity posts' });
+            }
             // Calculate totals from media items if not present on post
             const mediaItems = post.mediaItems || [];
-            let totalViews = ((_a = post.metrics) === null || _a === void 0 ? void 0 : _a.totalViews) || post.viewCount || 0;
-            let totalClicks = ((_b = post.metrics) === null || _b === void 0 ? void 0 : _b.totalClicks) || 0;
-            let totalSaves = ((_c = post.metrics) === null || _c === void 0 ? void 0 : _c.totalSaves) || 0;
+            let totalViews = ((_d = post.metrics) === null || _d === void 0 ? void 0 : _d.totalViews) || post.viewCount || 0;
+            let totalClicks = ((_e = post.metrics) === null || _e === void 0 ? void 0 : _e.totalClicks) || 0;
+            let totalSaves = ((_f = post.metrics) === null || _f === void 0 ? void 0 : _f.totalSaves) || 0;
             // If metrics are missing on post level (legacy), aggregate from items
             if (!post.metrics && mediaItems.length > 0) {
                 totalViews = 0; // Reset to recalculate from items if metrics obj missing
@@ -1502,17 +1638,33 @@ exports.postsController = {
             res.status(500).json({ success: false, error: 'Failed to fetch analytics' });
         }
     }),
-    // GET /api/posts/insights/me - Get personal post insights
+    // GET /api/posts/insights/me - Get identity-scoped post insights
     getMyInsights: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
             const db = (0, db_1.getDB)();
-            const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!userId) {
-                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
             }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: req.query.ownerType,
+                ownerId: req.query.ownerId
+            }, req.headers);
+            if (!actor) {
+                return res.status(403).json({ success: false, error: 'Forbidden', message: 'Unauthorized identity context' });
+            }
+            const postFilter = actor.type === 'company'
+                ? { 'author.id': actor.id, 'author.type': 'company' }
+                : {
+                    'author.id': actor.id,
+                    $or: [
+                        { 'author.type': 'user' },
+                        { 'author.type': { $exists: false } }
+                    ]
+                };
             const posts = yield db.collection(POSTS_COLLECTION)
-                .find({ 'author.id': userId })
+                .find(postFilter)
                 .toArray();
             const totalPosts = posts.length;
             const totalViews = posts.reduce((sum, p) => sum + (p.viewCount || 0), 0);

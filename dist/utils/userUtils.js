@@ -19,6 +19,16 @@ const transformUser = (user) => {
         delete transformed.companyName;
         delete transformed.companyWebsite;
         delete transformed.industry;
+        delete transformed.subscribers;
+        delete transformed.subscriberCount;
+        // Product rule: verification badge is company-only.
+        transformed.isVerified = false;
+    }
+    else {
+        // Keep company payload clean from personal graph fields.
+        delete transformed.acquaintances;
+        delete transformed.sentAcquaintanceRequests;
+        delete transformed.sentConnectionRequests;
     }
     if (transformed.avatarKey) {
         transformed.avatar = `${s3BaseUrl}/${transformed.avatarKey}`;

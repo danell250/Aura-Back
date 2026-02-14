@@ -68,7 +68,7 @@ router.get('/me', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, 
                     employeeCount: u.employeeCount,
                     email: u.companyEmail || '',
                     bio: u.bio,
-                    isVerified: u.isVerified,
+                    isVerified: !!u.companyWebsite,
                     ownerId: u.id,
                     createdAt: u.createdAt || new Date(),
                     updatedAt: u.updatedAt || new Date()

@@ -368,7 +368,7 @@ app.get('/api/auth/logout', (req, res) => {
 // Get current user info (legacy - moved to /auth)
 app.get('/auth/user', (req, res) => {
     if (req.isAuthenticated && req.isAuthenticated()) {
-        res.json({ user: req.user });
+        res.json({ user: (0, userUtils_1.transformUser)(req.user) });
     }
     else {
         res.status(401).json({ error: 'Not authenticated' });

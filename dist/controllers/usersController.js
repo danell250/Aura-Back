@@ -108,8 +108,15 @@ exports.usersController = {
                 return res.status(401).json({ success: false, error: 'Unauthorized' });
             }
             const authorId = currentUser.id;
+            const personalPostMatch = {
+                'author.id': authorId,
+                $or: [
+                    { 'author.type': 'user' },
+                    { 'author.type': { $exists: false } }
+                ]
+            };
             const [agg] = yield db.collection('posts').aggregate([
-                { $match: { 'author.id': authorId } },
+                { $match: personalPostMatch },
                 {
                     $group: {
                         _id: null,
@@ -121,7 +128,7 @@ exports.usersController = {
                 }
             ]).toArray();
             const topPosts = yield db.collection('posts')
-                .find({ 'author.id': authorId })
+                .find(personalPostMatch)
                 .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
                 .sort({ viewCount: -1 })
                 .limit(5)
@@ -456,7 +463,7 @@ exports.usersController = {
                     message: `User with ID ${id} does not exist`
                 });
             }
-            const { googleId, id: _ignoredId, companyName, companyWebsite, industry } = updates, mutableUpdates = __rest(updates, ["googleId", "id", "companyName", "companyWebsite", "industry"]);
+            const { googleId, id: _ignoredId, companyName, companyWebsite, industry, isVerified: _ignoredIsVerified } = updates, mutableUpdates = __rest(updates, ["googleId", "id", "companyName", "companyWebsite", "industry", "isVerified"]);
             const updateData = Object.assign({}, mutableUpdates);
             if (typeof mutableUpdates.handle === 'string') {
                 const handleValidation = validateHandleFormat(mutableUpdates.handle);
@@ -1770,9 +1777,17 @@ exports.usersController = {
     }),
     // POST /api/users/:id/record-profile-view - Record that a user viewed another user's profile
     recordProfileView: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
-            const { viewerId } = req.body;
+            const viewerId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!viewerId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Unauthorized',
+                    message: 'Authentication required'
+                });
+            }
             const db = (0, db_1.getDB)();
             // Find the user whose profile was viewed
             const user = yield db.collection('users').findOne({ id });
@@ -1853,17 +1868,13 @@ exports.usersController = {
         var _a;
         try {
             const { id } = req.params;
-            let { fromUserId } = req.body;
+            const fromUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             const db = (0, db_1.getDB)();
-            // Fallback to authenticated user if fromUserId is not provided
-            if (!fromUserId && ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id)) {
-                fromUserId = req.user.id;
-            }
             if (!fromUserId) {
-                return res.status(400).json({
+                return res.status(401).json({
                     success: false,
-                    error: 'Missing requester',
-                    message: 'fromUserId is required to send a connection request'
+                    error: 'Unauthorized',
+                    message: 'Authentication required'
                 });
             }
             if (id === fromUserId) {

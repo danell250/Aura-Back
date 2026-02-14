@@ -91,9 +91,16 @@ export const usersController = {
       }
 
       const authorId = currentUser.id;
+      const personalPostMatch = {
+        'author.id': authorId,
+        $or: [
+          { 'author.type': 'user' },
+          { 'author.type': { $exists: false } }
+        ]
+      };
 
       const [agg] = await db.collection('posts').aggregate([
-        { $match: { 'author.id': authorId } },
+        { $match: personalPostMatch },
         {
           $group: {
             _id: null,
@@ -106,7 +113,7 @@ export const usersController = {
       ]).toArray();
 
       const topPosts = await db.collection('posts')
-        .find({ 'author.id': authorId })
+        .find(personalPostMatch)
         .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
         .sort({ viewCount: -1 })
         .limit(5)
@@ -534,7 +541,7 @@ export const usersController = {
         });
       }
 
-      const { googleId, id: _ignoredId, companyName, companyWebsite, industry, ...mutableUpdates } = updates;
+      const { googleId, id: _ignoredId, companyName, companyWebsite, industry, isVerified: _ignoredIsVerified, ...mutableUpdates } = updates;
       const updateData: any = {
         ...mutableUpdates
       };
@@ -2079,7 +2086,14 @@ export const usersController = {
   recordProfileView: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { viewerId } = req.body;
+      const viewerId = (req as any).user?.id;
+      if (!viewerId) {
+        return res.status(401).json({
+          success: false,
+          error: 'Unauthorized',
+          message: 'Authentication required'
+        });
+      }
       const db = getDB();
 
       // Find the user whose profile was viewed
@@ -2174,19 +2188,14 @@ export const usersController = {
   sendConnectionRequest: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      let { fromUserId } = req.body as { fromUserId?: string };
+      const fromUserId = (req as any).user?.id as string | undefined;
       const db = getDB();
 
-      // Fallback to authenticated user if fromUserId is not provided
-      if (!fromUserId && (req as any).user?.id) {
-        fromUserId = (req as any).user.id;
-      }
-
       if (!fromUserId) {
-        return res.status(400).json({
+        return res.status(401).json({
           success: false,
-          error: 'Missing requester',
-          message: 'fromUserId is required to send a connection request'
+          error: 'Unauthorized',
+          message: 'Authentication required'
         });
       }
 

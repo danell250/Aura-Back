@@ -75,42 +75,75 @@ function calculateActivityLevel(postsCount: number): number {
   return clampScore(score * 20);
 }
 
+const getMessageParty = (
+  message: any,
+  side: 'sender' | 'receiver'
+): { type: 'user' | 'company'; id: string } | null => {
+  const ownerTypeKey = side === 'sender' ? 'senderOwnerType' : 'receiverOwnerType';
+  const ownerIdKey = side === 'sender' ? 'senderOwnerId' : 'receiverOwnerId';
+  const legacyIdKey = side === 'sender' ? 'senderId' : 'receiverId';
+
+  const ownerType = message?.[ownerTypeKey];
+  const ownerId = message?.[ownerIdKey];
+  if (
+    (ownerType === 'user' || ownerType === 'company') &&
+    typeof ownerId === 'string' &&
+    ownerId.trim().length > 0
+  ) {
+    return { type: ownerType, id: ownerId };
+  }
+
+  const legacyId = message?.[legacyIdKey];
+  if (typeof legacyId === 'string' && legacyId.trim().length > 0) {
+    return { type: 'user', id: legacyId };
+  }
+
+  return null;
+};
+
+const getMessageTimestampMs = (message: any): number => {
+  if (typeof message?.timestamp === 'number') return message.timestamp;
+  const parsed = Date.parse(message?.timestamp);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
 function calculateResponseRate(messages: any[], userId: string): number {
   if (!Array.isArray(messages) || messages.length === 0) return 0;
 
+  const incomingPersonalMessages = messages.filter((message) => {
+    const sender = getMessageParty(message, 'sender');
+    const receiver = getMessageParty(message, 'receiver');
+    const timestamp = getMessageTimestampMs(message);
+    if (!sender || !receiver || !timestamp) return false;
+    // Trust response rate is personal-only and user<->user only.
+    return receiver.type === 'user' && receiver.id === userId && sender.type === 'user' && sender.id !== userId;
+  });
+
+  if (incomingPersonalMessages.length === 0) return 0;
+
   let responded = 0;
-  let totalRelevant = 0;
 
-  for (const msg of messages) {
-    const senderId = msg.senderId;
-    const receiverId = msg.receiverId;
-    const timestamp = typeof msg.timestamp === 'number' ? msg.timestamp : Date.parse(msg.timestamp);
-
-    if (!senderId || !receiverId || !timestamp) continue;
-
-    if (receiverId === userId) {
-      totalRelevant += 1;
-      const thread = messages.filter(
-        m =>
-          ((m.senderId === senderId && m.receiverId === receiverId) ||
-            (m.senderId === receiverId && m.receiverId === senderId)) &&
-          typeof m.timestamp !== 'undefined'
+  for (const incoming of incomingPersonalMessages) {
+    const incomingSender = getMessageParty(incoming, 'sender');
+    if (!incomingSender) continue;
+    const incomingTs = getMessageTimestampMs(incoming);
+    const hasReply = messages.some((candidate) => {
+      const sender = getMessageParty(candidate, 'sender');
+      const receiver = getMessageParty(candidate, 'receiver');
+      const timestamp = getMessageTimestampMs(candidate);
+      if (!sender || !receiver || !timestamp) return false;
+      return (
+        sender.type === 'user' &&
+        sender.id === userId &&
+        receiver.type === 'user' &&
+        receiver.id === incomingSender.id &&
+        timestamp > incomingTs
       );
-      const replies = thread.filter(
-        m =>
-          m.senderId === userId &&
-          (typeof m.timestamp === 'number'
-            ? m.timestamp
-            : Date.parse(m.timestamp)) > timestamp
-      );
-      if (replies.length > 0) {
-        responded += 1;
-      }
-    }
+    });
+    if (hasReply) responded += 1;
   }
 
-  if (totalRelevant === 0) return 0;
-  const ratio = responded / totalRelevant;
+  const ratio = responded / incomingPersonalMessages.length;
   return clampScore(ratio * 20);
 }
 
@@ -205,6 +238,14 @@ function buildHashtagSet(posts: any[]): Set<string> {
   return tags;
 }
 
+const buildPersonalPostFilter = (authorId: string) => ({
+  'author.id': authorId,
+  $or: [
+    { 'author.type': 'user' },
+    { 'author.type': { $exists: false } },
+  ],
+});
+
 function calculateHashtagOverlapScore(baseTags: Set<string>, candidateTags: Set<string>): { score: number; shared: string[] } {
   if (!baseTags.size || !candidateTags.size) {
     return { score: 0, shared: [] };
@@ -235,10 +276,31 @@ export async function calculateUserTrust(userId: string): Promise<TrustBreakdown
   const user = await db.collection('users').findOne({ id: userId });
   if (!user) return null;
 
-  const posts = await db.collection('posts').find({ 'author.id': userId }).toArray();
+  const posts = await db.collection('posts').find(buildPersonalPostFilter(userId)).toArray();
 
   const messagesCursor = db.collection('messages').find({
-    $or: [{ senderId: userId }, { receiverId: userId }]
+    $or: [
+      {
+        senderOwnerType: 'user',
+        senderOwnerId: userId,
+        receiverOwnerType: 'user',
+      },
+      {
+        receiverOwnerType: 'user',
+        receiverOwnerId: userId,
+        senderOwnerType: 'user',
+      },
+      {
+        senderId: userId,
+        senderOwnerType: { $exists: false },
+        receiverOwnerType: { $exists: false },
+      },
+      {
+        receiverId: userId,
+        senderOwnerType: { $exists: false },
+        receiverOwnerType: { $exists: false },
+      },
+    ]
   });
   const messages = await messagesCursor.toArray();
 
@@ -307,7 +369,7 @@ export async function getSerendipityMatchesForUser(userId: string, limit: number
 
   const currentUserPosts = await db
     .collection('posts')
-    .find({ 'author.id': userId })
+    .find(buildPersonalPostFilter(userId))
     .project({ hashtags: 1 })
     .toArray();
 
@@ -353,7 +415,7 @@ export async function getSerendipityMatchesForUser(userId: string, limit: number
     limitedCandidates.map(candidate =>
       db
         .collection('posts')
-        .find({ 'author.id': candidate.id })
+        .find(buildPersonalPostFilter(candidate.id))
         .project({ hashtags: 1 })
         .toArray()
     )
