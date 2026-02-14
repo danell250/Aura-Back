@@ -18,6 +18,7 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const emailService_1 = require("../services/emailService");
 const notificationsController_1 = require("../controllers/notificationsController");
 const crypto_1 = __importDefault(require("crypto"));
+const userUtils_1 = require("../utils/userUtils");
 // Helper to generate unique handle for company
 const generateCompanyHandle = (name) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
@@ -643,5 +644,44 @@ router.delete('/:companyId/members/:userId', authMiddleware_1.requireAuth, (req,
         console.error('Remove member error:', error);
         res.status(500).json({ success: false, error: 'Failed to remove member' });
     }
+}));
+router.post('/:companyId/subscribe', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { companyId } = req.params;
+    const currentUser = req.user;
+    const db = (0, db_1.getDB)();
+    const company = yield db.collection('companies').findOne({ id: companyId });
+    if (!company)
+        return res.status(404).json({ success: false, error: 'Company not found' });
+    yield db.collection('users').updateOne({ id: currentUser.id }, { $addToSet: { subscribedCompanyIds: companyId }, $set: { updatedAt: new Date().toISOString() } });
+    yield db.collection('companies').updateOne({ id: companyId }, { $addToSet: { subscribers: currentUser.id }, $set: { updatedAt: new Date() } });
+    const refreshed = yield db.collection('companies').findOne({ id: companyId });
+    const subscribers = Array.isArray(refreshed === null || refreshed === void 0 ? void 0 : refreshed.subscribers) ? [...new Set(refreshed.subscribers)] : [];
+    yield db.collection('companies').updateOne({ id: companyId }, { $set: { subscriberCount: subscribers.length, subscribers } });
+    return res.json({ success: true, data: { subscribed: true, subscriberCount: subscribers.length } });
+}));
+router.post('/:companyId/unsubscribe', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { companyId } = req.params;
+    const currentUser = req.user;
+    const db = (0, db_1.getDB)();
+    yield db.collection('users').updateOne({ id: currentUser.id }, { $pull: { subscribedCompanyIds: companyId }, $set: { updatedAt: new Date().toISOString() } });
+    yield db.collection('companies').updateOne({ id: companyId }, { $pull: { subscribers: currentUser.id }, $set: { updatedAt: new Date() } });
+    const refreshed = yield db.collection('companies').findOne({ id: companyId });
+    const subscribers = Array.isArray(refreshed === null || refreshed === void 0 ? void 0 : refreshed.subscribers) ? [...new Set(refreshed.subscribers)] : [];
+    yield db.collection('companies').updateOne({ id: companyId }, { $set: { subscriberCount: subscribers.length, subscribers } });
+    return res.json({ success: true, data: { subscribed: false, subscriberCount: subscribers.length } });
+}));
+router.get('/:companyId/subscribers', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { companyId } = req.params;
+    const db = (0, db_1.getDB)();
+    const company = yield db.collection('companies').findOne({ id: companyId });
+    if (!company)
+        return res.status(404).json({ success: false, error: 'Company not found' });
+    const ids = Array.isArray(company.subscribers) ? company.subscribers : [];
+    const users = ids.length ? yield db.collection('users').find({ id: { $in: ids } }).toArray() : [];
+    return res.json({
+        success: true,
+        data: users.map(u => (0, userUtils_1.transformUser)(u)),
+        count: ids.length
+    });
 }));
 exports.default = router;

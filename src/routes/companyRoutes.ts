@@ -5,6 +5,7 @@ import { sendCompanyInviteEmail } from '../services/emailService';
 import { createNotificationInDB } from '../controllers/notificationsController';
 import crypto from 'crypto';
 import { Company } from '../types';
+import { transformUser } from '../utils/userUtils';
 
 // Helper to generate unique handle for company
 const generateCompanyHandle = async (name: string): Promise<string> => {
@@ -783,6 +784,74 @@ router.delete('/:companyId/members/:userId', requireAuth, async (req, res) => {
     console.error('Remove member error:', error);
     res.status(500).json({ success: false, error: 'Failed to remove member' });
   }
+});
+
+router.post('/:companyId/subscribe', requireAuth, async (req, res) => {
+  const { companyId } = req.params;
+  const currentUser = (req as any).user;
+  const db = getDB();
+
+  const company = await db.collection('companies').findOne({ id: companyId });
+  if (!company) return res.status(404).json({ success: false, error: 'Company not found' });
+
+  await db.collection('users').updateOne(
+    { id: currentUser.id },
+    { $addToSet: { subscribedCompanyIds: companyId }, $set: { updatedAt: new Date().toISOString() } }
+  );
+
+  await db.collection('companies').updateOne(
+    { id: companyId },
+    { $addToSet: { subscribers: currentUser.id }, $set: { updatedAt: new Date() } }
+  );
+
+  const refreshed = await db.collection('companies').findOne({ id: companyId });
+  const subscribers = Array.isArray(refreshed?.subscribers) ? [...new Set(refreshed.subscribers)] : [];
+  await db.collection('companies').updateOne(
+    { id: companyId },
+    { $set: { subscriberCount: subscribers.length, subscribers } }
+  );
+
+  return res.json({ success: true, data: { subscribed: true, subscriberCount: subscribers.length } });
+});
+
+router.post('/:companyId/unsubscribe', requireAuth, async (req, res) => {
+  const { companyId } = req.params;
+  const currentUser = (req as any).user;
+  const db = getDB();
+
+  await db.collection('users').updateOne(
+    { id: currentUser.id },
+    ({ $pull: { subscribedCompanyIds: companyId }, $set: { updatedAt: new Date().toISOString() } } as any)
+  );
+
+  await db.collection('companies').updateOne(
+    { id: companyId },
+    ({ $pull: { subscribers: currentUser.id }, $set: { updatedAt: new Date() } } as any)
+  );
+
+  const refreshed = await db.collection('companies').findOne({ id: companyId });
+  const subscribers = Array.isArray(refreshed?.subscribers) ? [...new Set(refreshed.subscribers)] : [];
+  await db.collection('companies').updateOne(
+    { id: companyId },
+    { $set: { subscriberCount: subscribers.length, subscribers } }
+  );
+
+  return res.json({ success: true, data: { subscribed: false, subscriberCount: subscribers.length } });
+});
+
+router.get('/:companyId/subscribers', requireAuth, async (req, res) => {
+  const { companyId } = req.params;
+  const db = getDB();
+  const company = await db.collection('companies').findOne({ id: companyId });
+  if (!company) return res.status(404).json({ success: false, error: 'Company not found' });
+
+  const ids: string[] = Array.isArray(company.subscribers) ? company.subscribers : [];
+  const users = ids.length ? await db.collection('users').find({ id: { $in: ids } }).toArray() : [];
+  return res.json({
+    success: true,
+    data: users.map(u => transformUser(u)),
+    count: ids.length
+  });
 });
 
 export default router;

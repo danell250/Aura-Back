@@ -1096,6 +1096,6 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
     // Don't exit immediately, log and continue
 });
-if (require.main === module) {
+if (process.env.NODE_ENV !== 'test') {
     startServer();
 }
