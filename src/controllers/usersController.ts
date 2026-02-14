@@ -6,6 +6,7 @@ import { transformUser, transformUsers } from '../utils/userUtils';
 import { calculateUserTrust, recalculateAllTrustScores, getSerendipityMatchesForUser } from '../services/trustService';
 import { emitAuthorInsightsUpdate } from './postsController';
 import { logSecurityEvent } from '../utils/securityLogger';
+import { emitToIdentity } from '../realtime/socketHub';
 
 const generateUniqueHandle = async (firstName: string, lastName: string): Promise<string> => {
   const db = getDB();
@@ -1046,6 +1047,12 @@ export const usersController = {
           } as any
         }
       );
+
+      emitToIdentity('user', requesterId, 'notification:new', {
+        ownerType: 'user',
+        ownerId: requesterId,
+        notification: acceptanceNotification
+      });
 
       res.json({
         success: true,
@@ -2206,6 +2213,13 @@ export const usersController = {
         });
       }
 
+      if (id === viewerId) {
+        return res.json({
+          success: true,
+          message: 'Skipped profile view tracking for self-view'
+        });
+      }
+
       // Initialize profileViews array if it doesn't exist
       const profileViews = user.profileViews || [];
 
@@ -2236,7 +2250,7 @@ export const usersController = {
           avatarType: viewer.avatarType
         },
         message: 'viewed your profile',
-        timestamp: new Date().toISOString(),
+        timestamp: Date.now(),
         isRead: false
       };
 
@@ -2253,6 +2267,12 @@ export const usersController = {
           }
         }
       );
+
+      emitToIdentity('user', id, 'notification:new', {
+        ownerType: 'user',
+        ownerId: id,
+        notification: newNotification
+      });
 
       res.json({
         success: true,
@@ -2356,6 +2376,12 @@ export const usersController = {
           }
         }
       );
+
+      emitToIdentity('user', id, 'notification:new', {
+        ownerType: 'user',
+        ownerId: id,
+        notification: newNotification
+      });
 
       // Update requester's sentAcquaintanceRequests
       await db.collection('users').updateOne(
@@ -2462,6 +2488,12 @@ export const usersController = {
           } as any
         }
       );
+
+      emitToIdentity('user', requesterId, 'notification:new', {
+        ownerType: 'user',
+        ownerId: requesterId,
+        notification: rejectionNotification
+      });
 
       res.json({
         success: true,

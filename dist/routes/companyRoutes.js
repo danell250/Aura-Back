@@ -158,7 +158,16 @@ router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, v
     }
     catch (error) {
         console.error('Create company error:', error);
-        res.status(500).json({ success: false, error: 'Failed to create corporate identity' });
+        if ((error === null || error === void 0 ? void 0 : error.code) === 11000) {
+            return res.status(409).json({
+                success: false,
+                error: 'Duplicate company field detected (handle/email already in use)',
+            });
+        }
+        res.status(500).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Failed to create corporate identity',
+        });
     }
 }));
 // PATCH /api/companies/:companyId - Update company details
@@ -236,6 +245,42 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
     catch (error) {
         console.error('Update company error:', error);
         res.status(500).json({ success: false, error: 'Failed to update corporate identity' });
+    }
+}));
+// DELETE /api/companies/:companyId - Archive/delete a company identity (owner only)
+router.delete('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { companyId } = req.params;
+        const currentUser = req.user;
+        const db = (0, db_1.getDB)();
+        const company = yield db.collection('companies').findOne({
+            id: companyId,
+            legacyArchived: { $ne: true }
+        });
+        if (!company) {
+            return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+        }
+        if (company.ownerId !== currentUser.id) {
+            return res.status(403).json({ success: false, error: 'Only the company owner can delete this identity' });
+        }
+        const now = new Date();
+        yield Promise.all([
+            db.collection('companies').updateOne({ id: companyId }, {
+                $set: {
+                    legacyArchived: true,
+                    archivedAt: now,
+                    updatedAt: now
+                }
+            }),
+            db.collection('company_members').deleteMany({ companyId }),
+            db.collection('company_invites').updateMany({ companyId, status: 'pending' }, { $set: { status: 'cancelled', updatedAt: now } }),
+            db.collection('users').updateMany({ subscribedCompanyIds: companyId }, { $pull: { subscribedCompanyIds: companyId } })
+        ]);
+        res.json({ success: true, message: 'Corporate identity deleted successfully' });
+    }
+    catch (error) {
+        console.error('Delete company error:', error);
+        res.status(500).json({ success: false, error: 'Failed to delete corporate identity' });
     }
 }));
 // GET /api/companies/:id - Get a specific company

@@ -35,6 +35,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { transformUser } from './utils/userUtils';
 import { verifyAccessToken } from './utils/jwtUtils';
 import { validateIdentityAccess } from './utils/identityUtils';
+import { registerSocketServer } from './realtime/socketHub';
 import { CallType, getCallLogsCollection } from './models/CallLog';
 
 dotenv.config();
@@ -995,6 +996,7 @@ async function startServer() {
     });
 
     app.set('io', io);
+    registerSocketServer(io);
 
     // Socket authentication middleware
     io.use((socket, next) => {
@@ -1336,12 +1338,14 @@ async function startServer() {
         payload: SocketCallPayload,
       ) => {
         const call = normalizeCallPayload(payload);
-        if (!call) return null;
+        if (!call) {
+          return { call: null, error: 'Invalid call payload' as string };
+        }
 
         const fromRoom = identityRoom(call.fromType, call.fromId);
         if (!identityRooms.has(fromRoom)) {
           console.warn(`⚠️ Blocked call event from non-joined identity ${call.fromType}:${call.fromId}`);
-          return null;
+          return { call: null, error: 'Identity room is not joined' as string };
         }
 
         const targetRoom = identityRoom(call.toType, call.toId);
@@ -1360,25 +1364,52 @@ async function startServer() {
           timestamp: Date.now(),
         });
 
-        return call;
+        return { call, error: null as string | null };
       };
 
-      socket.on('call:invite', async (payload) => {
-        const call = routeCallEvent('call:incoming', payload);
+      socket.on('call:invite', async (payload, ack?: (result: any) => void) => {
+        const { call, error } = routeCallEvent('call:incoming', payload);
+        if (!call) {
+          ack?.({ success: false, error: error || 'Unable to route call invite' });
+          return;
+        }
         await recordCallInvite(call);
+        ack?.({ success: true });
       });
-      socket.on('call:accept', async (payload) => {
-        const call = routeCallEvent('call:accepted', payload);
+      socket.on('call:accept', async (payload, ack?: (result: any) => void) => {
+        const { call, error } = routeCallEvent('call:accepted', payload);
+        if (!call) {
+          ack?.({ success: false, error: error || 'Unable to route call accept' });
+          return;
+        }
         await recordCallAccepted(call);
+        ack?.({ success: true });
       });
-      socket.on('call:reject', async (payload) => {
-        const call = routeCallEvent('call:rejected', payload);
+      socket.on('call:reject', async (payload, ack?: (result: any) => void) => {
+        const { call, error } = routeCallEvent('call:rejected', payload);
+        if (!call) {
+          ack?.({ success: false, error: error || 'Unable to route call reject' });
+          return;
+        }
         await recordCallRejected(call);
+        ack?.({ success: true });
       });
-      socket.on('call:ice-candidate', (payload) => routeCallEvent('call:ice-candidate', payload));
-      socket.on('call:end', async (payload) => {
-        const call = routeCallEvent('call:ended', payload);
+      socket.on('call:ice-candidate', (payload, ack?: (result: any) => void) => {
+        const { call, error } = routeCallEvent('call:ice-candidate', payload);
+        if (!call) {
+          ack?.({ success: false, error: error || 'Unable to route ICE candidate' });
+          return;
+        }
+        ack?.({ success: true });
+      });
+      socket.on('call:end', async (payload, ack?: (result: any) => void) => {
+        const { call, error } = routeCallEvent('call:ended', payload);
+        if (!call) {
+          ack?.({ success: false, error: error || 'Unable to route call end' });
+          return;
+        }
         await recordCallEnded(call);
+        ack?.({ success: true });
       });
 
       socket.on('disconnect', () => {

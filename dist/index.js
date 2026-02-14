@@ -84,6 +84,7 @@ const socket_io_1 = require("socket.io");
 const userUtils_1 = require("./utils/userUtils");
 const jwtUtils_1 = require("./utils/jwtUtils");
 const identityUtils_1 = require("./utils/identityUtils");
+const socketHub_1 = require("./realtime/socketHub");
 const CallLog_1 = require("./models/CallLog");
 dotenv_1.default.config();
 // Debug: Check SendGrid Config
@@ -961,6 +962,7 @@ function startServer() {
                 pingTimeout: 20000,
             });
             app.set('io', io);
+            (0, socketHub_1.registerSocketServer)(io);
             // Socket authentication middleware
             io.use((socket, next) => {
                 var _a;
@@ -1237,12 +1239,13 @@ function startServer() {
                 });
                 const routeCallEvent = (eventName, payload) => {
                     const call = normalizeCallPayload(payload);
-                    if (!call)
-                        return null;
+                    if (!call) {
+                        return { call: null, error: 'Invalid call payload' };
+                    }
                     const fromRoom = identityRoom(call.fromType, call.fromId);
                     if (!identityRooms.has(fromRoom)) {
                         console.warn(`⚠️ Blocked call event from non-joined identity ${call.fromType}:${call.fromId}`);
-                        return null;
+                        return { call: null, error: 'Identity room is not joined' };
                     }
                     const targetRoom = identityRoom(call.toType, call.toId);
                     io.to(targetRoom).emit(eventName, {
@@ -1259,24 +1262,51 @@ function startServer() {
                         fromUserId: user === null || user === void 0 ? void 0 : user.id,
                         timestamp: Date.now(),
                     });
-                    return call;
+                    return { call, error: null };
                 };
-                socket.on('call:invite', (payload) => __awaiter(this, void 0, void 0, function* () {
-                    const call = routeCallEvent('call:incoming', payload);
+                socket.on('call:invite', (payload, ack) => __awaiter(this, void 0, void 0, function* () {
+                    const { call, error } = routeCallEvent('call:incoming', payload);
+                    if (!call) {
+                        ack === null || ack === void 0 ? void 0 : ack({ success: false, error: error || 'Unable to route call invite' });
+                        return;
+                    }
                     yield recordCallInvite(call);
+                    ack === null || ack === void 0 ? void 0 : ack({ success: true });
                 }));
-                socket.on('call:accept', (payload) => __awaiter(this, void 0, void 0, function* () {
-                    const call = routeCallEvent('call:accepted', payload);
+                socket.on('call:accept', (payload, ack) => __awaiter(this, void 0, void 0, function* () {
+                    const { call, error } = routeCallEvent('call:accepted', payload);
+                    if (!call) {
+                        ack === null || ack === void 0 ? void 0 : ack({ success: false, error: error || 'Unable to route call accept' });
+                        return;
+                    }
                     yield recordCallAccepted(call);
+                    ack === null || ack === void 0 ? void 0 : ack({ success: true });
                 }));
-                socket.on('call:reject', (payload) => __awaiter(this, void 0, void 0, function* () {
-                    const call = routeCallEvent('call:rejected', payload);
+                socket.on('call:reject', (payload, ack) => __awaiter(this, void 0, void 0, function* () {
+                    const { call, error } = routeCallEvent('call:rejected', payload);
+                    if (!call) {
+                        ack === null || ack === void 0 ? void 0 : ack({ success: false, error: error || 'Unable to route call reject' });
+                        return;
+                    }
                     yield recordCallRejected(call);
+                    ack === null || ack === void 0 ? void 0 : ack({ success: true });
                 }));
-                socket.on('call:ice-candidate', (payload) => routeCallEvent('call:ice-candidate', payload));
-                socket.on('call:end', (payload) => __awaiter(this, void 0, void 0, function* () {
-                    const call = routeCallEvent('call:ended', payload);
+                socket.on('call:ice-candidate', (payload, ack) => {
+                    const { call, error } = routeCallEvent('call:ice-candidate', payload);
+                    if (!call) {
+                        ack === null || ack === void 0 ? void 0 : ack({ success: false, error: error || 'Unable to route ICE candidate' });
+                        return;
+                    }
+                    ack === null || ack === void 0 ? void 0 : ack({ success: true });
+                });
+                socket.on('call:end', (payload, ack) => __awaiter(this, void 0, void 0, function* () {
+                    const { call, error } = routeCallEvent('call:ended', payload);
+                    if (!call) {
+                        ack === null || ack === void 0 ? void 0 : ack({ success: false, error: error || 'Unable to route call end' });
+                        return;
+                    }
                     yield recordCallEnded(call);
+                    ack === null || ack === void 0 ? void 0 : ack({ success: true });
                 }));
                 socket.on('disconnect', () => {
                     console.log('❌ Socket.IO client disconnected', socket.id);

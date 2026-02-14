@@ -4,6 +4,7 @@ import { ObjectId } from 'mongodb';
 import { getDB, isDBConnected } from '../db';
 import { transformUser } from '../utils/userUtils';
 import { resolveIdentityActor, validateIdentityAccess } from '../utils/identityUtils';
+import { emitToIdentity } from '../realtime/socketHub';
 import {
   buildMessageThreadKey,
   getMessageThreadsCollection,
@@ -136,27 +137,83 @@ const resolveEntityTypeById = async (id: string): Promise<'user' | 'company' | n
   return null;
 };
 
-const resolvePeerType = async (
+const extractUserEmailAlias = (rawId: string): string | null => {
+  const value = rawId.trim().toLowerCase();
+  if (!value) return null;
+
+  // Legacy support alias generated in frontend for Aura Support.
+  if (value.startsWith('support-')) {
+    const candidate = value.slice('support-'.length);
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    return value;
+  }
+
+  return null;
+};
+
+const resolvePeerIdentity = async (
   rawType: unknown,
-  id: string
-): Promise<'user' | 'company' | null> => {
+  rawId: string
+): Promise<{ type: 'user' | 'company'; id: string } | null> => {
+  const id = String(rawId || '').trim();
+  if (!id) return null;
+
   const explicitType = rawType === 'company' || rawType === 'user' ? rawType : null;
   const db = getDB();
+  const aliasedEmail = extractUserEmailAlias(id);
+
+  const resolveUserId = async (): Promise<string | null> => {
+    const directUser = await db.collection('users').findOne({ id }, { projection: { id: 1 } });
+    if (directUser?.id) return directUser.id as string;
+
+    if (aliasedEmail) {
+      const byEmail = await db.collection('users').findOne(
+        { email: aliasedEmail },
+        { projection: { id: 1 } }
+      );
+      if (byEmail?.id) return byEmail.id as string;
+    }
+
+    return null;
+  };
 
   if (explicitType === 'company') {
     const company = await db.collection('companies').findOne(
       { id, legacyArchived: { $ne: true } },
       { projection: { id: 1 } }
     );
-    return company ? 'company' : null;
+    return company ? { type: 'company', id: company.id as string } : null;
   }
 
   if (explicitType === 'user') {
-    const user = await db.collection('users').findOne({ id }, { projection: { id: 1 } });
-    return user ? 'user' : null;
+    const userId = await resolveUserId();
+    return userId ? { type: 'user', id: userId } : null;
   }
 
-  return resolveEntityTypeById(id);
+  const [company, userId] = await Promise.all([
+    db.collection('companies').findOne(
+      { id, legacyArchived: { $ne: true } },
+      { projection: { id: 1 } }
+    ),
+    resolveUserId(),
+  ]);
+
+  if (company?.id) return { type: 'company', id: company.id as string };
+  if (userId) return { type: 'user', id: userId };
+  return null;
+};
+
+const resolvePeerType = async (
+  rawType: unknown,
+  id: string
+): Promise<'user' | 'company' | null> => {
+  const peer = await resolvePeerIdentity(rawType, id);
+  return peer?.type || null;
 };
 
 const applyRateLimit = (actor: { type: 'user' | 'company'; id: string }) => {
@@ -705,14 +762,17 @@ export const messagesController = {
         return res.json({ success: true, data: [] });
       }
 
-      const otherType = await resolvePeerType(requestedOtherType, otherId);
-      if (!otherType) {
-        return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+      const peer = await resolvePeerIdentity(requestedOtherType, otherId);
+      if (!peer) {
+        // Treat unknown peers as empty conversations to avoid noisy 404 loops from stale client aliases.
+        return res.json({ success: true, data: [] });
       }
+      const otherType = peer.type;
+      const resolvedOtherId = peer.id;
       const messagesCollection = getMessagesCollection();
 
       const messages = await messagesCollection
-        .find(messageAccessQuery(actor, otherId, otherType))
+        .find(messageAccessQuery(actor, resolvedOtherId, otherType))
         .sort({ timestamp: -1 })
         .limit(Number(limit))
         .skip((Number(page) - 1) * Number(limit))
@@ -730,14 +790,14 @@ export const messagesController = {
 
       markReadFilter.$or.push({
         senderOwnerType: otherType,
-        senderOwnerId: otherId,
+        senderOwnerId: resolvedOtherId,
         receiverOwnerType: actor.type,
         receiverOwnerId: actor.id,
       });
 
       if (actor.type === 'user' && otherType === 'user') {
         markReadFilter.$or.push({
-          senderId: otherId,
+          senderId: resolvedOtherId,
           receiverId: actor.id,
           senderOwnerType: { $exists: false },
           receiverOwnerType: { $exists: false },
@@ -820,17 +880,19 @@ export const messagesController = {
         });
       }
 
-      const receiverType = await resolvePeerType(requestedReceiverType, receiverId);
-      if (!receiverType) {
+      const receiverPeer = await resolvePeerIdentity(requestedReceiverType, receiverId);
+      if (!receiverPeer) {
         return res.status(404).json({ success: false, message: 'Receiver not found' });
       }
+      const receiverType = receiverPeer.type;
+      const resolvedReceiverId = receiverPeer.id;
 
-      const blocked = await isConversationBlocked(actor, receiverType, receiverId);
+      const blocked = await isConversationBlocked(actor, receiverType, resolvedReceiverId);
       if (blocked) {
         return res.status(403).json({ success: false, message: 'Messaging is blocked for this conversation' });
       }
 
-      const trusted = await isTrustedConversation(authenticatedUserId, actor, receiverId, receiverType);
+      const trusted = await isTrustedConversation(authenticatedUserId, actor, resolvedReceiverId, receiverType);
 
       const messagesCollection = getMessagesCollection();
 
@@ -838,9 +900,9 @@ export const messagesController = {
         senderId: actor.id,
         senderOwnerType: actor.type,
         senderOwnerId: actor.id,
-        receiverId,
+        receiverId: resolvedReceiverId,
         receiverOwnerType: receiverType,
-        receiverOwnerId: receiverId,
+        receiverOwnerId: resolvedReceiverId,
         text: String(text || ''),
         timestamp: new Date(),
         isRead: false,
@@ -856,14 +918,14 @@ export const messagesController = {
       const result = await messagesCollection.insertOne(message);
       const insertedMessage = await messagesCollection.findOne({ _id: result.insertedId });
 
-      await upsertThread(actor.type, actor.id, receiverType, receiverId, {
+      await upsertThread(actor.type, actor.id, receiverType, resolvedReceiverId, {
         archived: false,
         muted: false,
         blocked: false,
         state: 'active',
       });
 
-      await upsertThread(receiverType, receiverId, actor.type, actor.id, {
+      await upsertThread(receiverType, resolvedReceiverId, actor.type, actor.id, {
         state: trusted ? 'active' : 'requests',
       });
 
@@ -873,6 +935,17 @@ export const messagesController = {
             id: (insertedMessage as any)._id ? String((insertedMessage as any)._id) : undefined,
           }
         : null;
+
+      if (responseMessage) {
+        const eventPayload = {
+          message: responseMessage,
+          threadState: trusted ? 'active' : 'requests',
+        };
+        emitToIdentity(actor.type, actor.id, 'message:new', eventPayload);
+        if (actor.type !== receiverType || actor.id !== resolvedReceiverId) {
+          emitToIdentity(receiverType, resolvedReceiverId, 'message:new', eventPayload);
+        }
+      }
 
       res.status(201).json({
         success: true,
@@ -996,13 +1069,15 @@ export const messagesController = {
         return res.status(503).json({ success: false, message: 'Service unavailable' });
       }
 
-      const otherType = await resolvePeerType(requestedOtherType, otherUserId);
-      if (!otherType) {
+      const peer = await resolvePeerIdentity(requestedOtherType, otherUserId);
+      if (!peer) {
         return res.status(404).json({ success: false, message: 'Conversation peer not found' });
       }
+      const otherType = peer.type;
+      const resolvedOtherId = peer.id;
       const messagesCollection = getMessagesCollection();
 
-      const conversationQuery = messageAccessQuery(actor, otherUserId, otherType);
+      const conversationQuery = messageAccessQuery(actor, resolvedOtherId, otherType);
       const deleteMarkers =
         actor.type === 'user' && otherType === 'user'
           ? [actorMarker(actor.type, actor.id), actor.id]
@@ -1056,10 +1131,12 @@ export const messagesController = {
         return res.status(503).json({ success: false, message: 'Service unavailable' });
       }
 
-      const otherType = await resolvePeerType(requestedOtherType, otherId);
-      if (!otherType) {
-        return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+      const peer = await resolvePeerIdentity(requestedOtherType, otherId);
+      if (!peer) {
+        return res.json({ success: true, message: 'Conversation peer not found' });
       }
+      const otherType = peer.type;
+      const resolvedOtherId = peer.id;
       const messagesCollection = getMessagesCollection();
 
       const filter: any = {
@@ -1069,14 +1146,14 @@ export const messagesController = {
 
       filter.$or.push({
         senderOwnerType: otherType,
-        senderOwnerId: otherId,
+        senderOwnerId: resolvedOtherId,
         receiverOwnerType: actor.type,
         receiverOwnerId: actor.id,
       });
 
       if (actor.type === 'user' && otherType === 'user') {
         filter.$or.push({
-          senderId: otherId,
+          senderId: resolvedOtherId,
           receiverId: actor.id,
           senderOwnerType: { $exists: false },
           receiverOwnerType: { $exists: false },
@@ -1085,7 +1162,7 @@ export const messagesController = {
 
       await messagesCollection.updateMany(filter, { $set: { isRead: true } });
 
-      await upsertThread(actor.type, actor.id, otherType, otherId, { clearRequest: true });
+      await upsertThread(actor.type, actor.id, otherType, resolvedOtherId, { clearRequest: true });
 
       res.json({ success: true, message: 'Messages marked as read' });
     } catch (error) {
@@ -1116,23 +1193,25 @@ export const messagesController = {
         return res.status(400).json({ success: false, message: 'Invalid parameters' });
       }
 
-      const peerType = await resolvePeerType(requestedOtherType, otherUserId);
-      if (!peerType) {
+      const peer = await resolvePeerIdentity(requestedOtherType, otherUserId);
+      if (!peer) {
         return res.status(404).json({ success: false, message: 'Conversation peer not found' });
       }
+      const peerType = peer.type;
+      const resolvedOtherId = peer.id;
       const nextState: MessageThreadState = archived ? 'archived' : 'active';
 
-      await upsertThread(actor.type, actor.id, peerType, otherUserId, buildThreadStatePatch(nextState));
+      await upsertThread(actor.type, actor.id, peerType, resolvedOtherId, buildThreadStatePatch(nextState));
 
       // Backward compatibility for existing archivedChats logic
       const db = getDB();
       const legacyUpdate = archived
-        ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } }
-        : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } };
+        ? { $addToSet: { archivedChats: resolvedOtherId }, $set: { updatedAt: nowIso() } }
+        : { $pull: { archivedChats: resolvedOtherId }, $set: { updatedAt: nowIso() } };
 
       await Promise.all([
-        db.collection('users').updateOne({ id: actor.id }, legacyUpdate),
-        db.collection('companies').updateOne({ id: actor.id }, legacyUpdate),
+        db.collection('users').updateOne({ id: actor.id }, legacyUpdate as any),
+        db.collection('companies').updateOne({ id: actor.id }, legacyUpdate as any),
       ]);
 
       res.json({
@@ -1169,21 +1248,23 @@ export const messagesController = {
         return res.status(403).json({ success: false, message: 'Unauthorized' });
       }
 
-      const peerType = await resolvePeerType(requestedOtherType, otherUserId);
-      if (!peerType) {
+      const peer = await resolvePeerIdentity(requestedOtherType, otherUserId);
+      if (!peer) {
         return res.status(404).json({ success: false, message: 'Conversation peer not found' });
       }
-      const thread = await upsertThread(actor.type, actor.id, peerType, otherUserId, buildThreadStatePatch(nextState));
+      const peerType = peer.type;
+      const resolvedOtherId = peer.id;
+      const thread = await upsertThread(actor.type, actor.id, peerType, resolvedOtherId, buildThreadStatePatch(nextState));
 
       // Keep archivedChats fallback synchronized for old clients.
       const db = getDB();
       const legacyUpdate = nextState === 'archived'
-        ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } }
-        : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } };
+        ? { $addToSet: { archivedChats: resolvedOtherId }, $set: { updatedAt: nowIso() } }
+        : { $pull: { archivedChats: resolvedOtherId }, $set: { updatedAt: nowIso() } };
 
       await Promise.all([
-        db.collection('users').updateOne({ id: actor.id }, legacyUpdate),
-        db.collection('companies').updateOne({ id: actor.id }, legacyUpdate),
+        db.collection('users').updateOne({ id: actor.id }, legacyUpdate as any),
+        db.collection('companies').updateOne({ id: actor.id }, legacyUpdate as any),
       ]);
 
       res.json({
@@ -1231,11 +1312,13 @@ export const messagesController = {
         return res.status(403).json({ success: false, message: 'Unauthorized' });
       }
 
-      const peerType = await resolvePeerType(requestedOtherType, otherUserId);
-      if (!peerType) {
+      const peer = await resolvePeerIdentity(requestedOtherType, otherUserId);
+      if (!peer) {
         return res.status(404).json({ success: false, message: 'Conversation peer not found' });
       }
-      const key = buildMessageThreadKey(actor.type, actor.id, peerType, otherUserId);
+      const peerType = peer.type;
+      const resolvedOtherId = peer.id;
+      const key = buildMessageThreadKey(actor.type, actor.id, peerType, resolvedOtherId);
       const thread = await getMessageThreadsCollection().findOne({ key });
 
       res.json({
@@ -1297,10 +1380,12 @@ export const messagesController = {
         return res.status(403).json({ success: false, message: 'Thread metadata is only available for company inboxes' });
       }
 
-      const peerType = await resolvePeerType(requestedOtherType, otherUserId);
-      if (!peerType) {
+      const peer = await resolvePeerIdentity(requestedOtherType, otherUserId);
+      if (!peer) {
         return res.status(404).json({ success: false, message: 'Conversation peer not found' });
       }
+      const peerType = peer.type;
+      const resolvedOtherId = peer.id;
 
       const patch: Partial<IMessageThread> = {};
 
@@ -1326,7 +1411,7 @@ export const messagesController = {
         patch.slaMinutes = Math.min(Math.round(slaMinutes), 60 * 24 * 30);
       }
 
-      const thread = await upsertThread(actor.type, actor.id, peerType, otherUserId, patch);
+      const thread = await upsertThread(actor.type, actor.id, peerType, resolvedOtherId, patch);
 
       res.json({
         success: true,

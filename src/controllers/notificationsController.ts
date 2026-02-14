@@ -2,6 +2,52 @@ import { Request, Response } from 'express';
 import { getDB, isDBConnected } from '../db';
 import { transformUser } from '../utils/userUtils';
 import { resolveIdentityActor } from '../utils/identityUtils';
+import { emitToIdentity } from '../realtime/socketHub';
+
+const resolveTargetCollection = async (
+  db: any,
+  targetId: string,
+  requestedOwnerType: 'user' | 'company',
+): Promise<{ collectionName: 'users' | 'companies'; ownerType: 'user' | 'company' } | null> => {
+  const preferred = requestedOwnerType === 'company' ? 'companies' : 'users';
+  const fallback = preferred === 'companies' ? 'users' : 'companies';
+
+  const preferredQuery =
+    preferred === 'companies'
+      ? { id: targetId, legacyArchived: { $ne: true } }
+      : { id: targetId };
+  const preferredDoc = await db.collection(preferred).findOne(preferredQuery, { projection: { id: 1 } });
+  if (preferredDoc) {
+    return {
+      collectionName: preferred as 'users' | 'companies',
+      ownerType: preferred === 'companies' ? 'company' : 'user',
+    };
+  }
+
+  const fallbackQuery =
+    fallback === 'companies'
+      ? { id: targetId, legacyArchived: { $ne: true } }
+      : { id: targetId };
+  const fallbackDoc = await db.collection(fallback).findOne(fallbackQuery, { projection: { id: 1 } });
+  if (fallbackDoc) {
+    return {
+      collectionName: fallback as 'users' | 'companies',
+      ownerType: fallback === 'companies' ? 'company' : 'user',
+    };
+  }
+
+  return null;
+};
+
+const resolveFromIdentityDoc = async (db: any, fromId: string): Promise<any | null> => {
+  const userDoc = await db.collection('users').findOne({ id: fromId });
+  if (userDoc) return userDoc;
+
+  return db.collection('companies').findOne({
+    id: fromId,
+    legacyArchived: { $ne: true },
+  });
+};
 
 export const createNotificationInDB = async (
   userId: string,
@@ -24,20 +70,28 @@ export const createNotificationInDB = async (
   }
 
   let fromUserDoc: any = null;
+  let targetCollectionName: 'users' | 'companies' = ownerType === 'company' ? 'companies' : 'users';
+  let targetOwnerType: 'user' | 'company' = ownerType;
+
   if (db) {
     try {
-      fromUserDoc = await db.collection('users').findOne({ id: fromUserId });
+      const [resolvedFromUser, resolvedTarget] = await Promise.all([
+        resolveFromIdentityDoc(db, fromUserId),
+        resolveTargetCollection(db, userId, ownerType),
+      ]);
+      fromUserDoc = resolvedFromUser;
+      if (resolvedTarget) {
+        targetCollectionName = resolvedTarget.collectionName;
+        targetOwnerType = resolvedTarget.ownerType;
+      }
     } catch (error) {
-      console.error('Error fetching notification fromUser in DB:', error);
+      console.error('Error resolving notification identities in DB:', error);
     }
   }
 
-  // Determine collection based on ownerType
-  const collectionName = ownerType === 'company' ? 'companies' : 'users';
-
   if (db && yearKey) {
     try {
-      const existingDoc = await db.collection(collectionName).findOne({
+      const existingDoc = await db.collection(targetCollectionName).findOne({
         id: userId,
         notifications: { $elemMatch: { yearKey, type } }
       });
@@ -58,7 +112,7 @@ export const createNotificationInDB = async (
     id: fromUserDoc.id,
     firstName: fromUserDoc.firstName || '',
     lastName: fromUserDoc.lastName || '',
-    name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
+    name: fromUserDoc.name || `${fromUserDoc.firstName || ''} ${fromUserDoc.lastName || ''}`.trim(),
     handle: fromUserDoc.handle,
     avatar: fromUserDoc.avatar,
     avatarKey: fromUserDoc.avatarKey,
@@ -92,21 +146,30 @@ export const createNotificationInDB = async (
     meta: meta || undefined,
     data: meta || undefined, // Alias for 'data' as requested
     yearKey: yearKey || undefined,
-    ownerType // Store ownerType in notification too
+    ownerType: targetOwnerType // Store resolved ownerType in notification
   };
 
   if (db) {
     try {
-      await db.collection(collectionName).updateOne(
+      await db.collection(targetCollectionName).updateOne(
         { id: userId },
         { 
           $push: { notifications: { $each: [newNotification], $position: 0 } }
         } as any
       );
     } catch (error) {
-      console.error(`Error creating notification in DB (${collectionName}):`, error);
+      console.error(`Error creating notification in DB (${targetCollectionName}):`, error);
     }
   }
+
+  emitToIdentity(targetOwnerType, userId, 'notification:new', {
+    ownerType: targetOwnerType,
+    ownerId: userId,
+    notification: {
+      ...newNotification,
+      fromUser: newNotification.fromUser ? transformUser(newNotification.fromUser) : newNotification.fromUser,
+    },
+  });
 
   return newNotification;
 };

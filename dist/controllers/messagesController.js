@@ -15,6 +15,7 @@ const mongodb_1 = require("mongodb");
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
 const identityUtils_1 = require("../utils/identityUtils");
+const socketHub_1 = require("../realtime/socketHub");
 const MessageThread_1 = require("../models/MessageThread");
 const CallLog_1 = require("../models/CallLog");
 const SEND_WINDOW_MS = 60000;
@@ -128,18 +129,61 @@ const resolveEntityTypeById = (id) => __awaiter(void 0, void 0, void 0, function
         return 'user';
     return null;
 });
-const resolvePeerType = (rawType, id) => __awaiter(void 0, void 0, void 0, function* () {
+const extractUserEmailAlias = (rawId) => {
+    const value = rawId.trim().toLowerCase();
+    if (!value)
+        return null;
+    // Legacy support alias generated in frontend for Aura Support.
+    if (value.startsWith('support-')) {
+        const candidate = value.slice('support-'.length);
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate)) {
+            return candidate;
+        }
+    }
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+        return value;
+    }
+    return null;
+};
+const resolvePeerIdentity = (rawType, rawId) => __awaiter(void 0, void 0, void 0, function* () {
+    const id = String(rawId || '').trim();
+    if (!id)
+        return null;
     const explicitType = rawType === 'company' || rawType === 'user' ? rawType : null;
     const db = (0, db_1.getDB)();
+    const aliasedEmail = extractUserEmailAlias(id);
+    const resolveUserId = () => __awaiter(void 0, void 0, void 0, function* () {
+        const directUser = yield db.collection('users').findOne({ id }, { projection: { id: 1 } });
+        if (directUser === null || directUser === void 0 ? void 0 : directUser.id)
+            return directUser.id;
+        if (aliasedEmail) {
+            const byEmail = yield db.collection('users').findOne({ email: aliasedEmail }, { projection: { id: 1 } });
+            if (byEmail === null || byEmail === void 0 ? void 0 : byEmail.id)
+                return byEmail.id;
+        }
+        return null;
+    });
     if (explicitType === 'company') {
         const company = yield db.collection('companies').findOne({ id, legacyArchived: { $ne: true } }, { projection: { id: 1 } });
-        return company ? 'company' : null;
+        return company ? { type: 'company', id: company.id } : null;
     }
     if (explicitType === 'user') {
-        const user = yield db.collection('users').findOne({ id }, { projection: { id: 1 } });
-        return user ? 'user' : null;
+        const userId = yield resolveUserId();
+        return userId ? { type: 'user', id: userId } : null;
     }
-    return resolveEntityTypeById(id);
+    const [company, userId] = yield Promise.all([
+        db.collection('companies').findOne({ id, legacyArchived: { $ne: true } }, { projection: { id: 1 } }),
+        resolveUserId(),
+    ]);
+    if (company === null || company === void 0 ? void 0 : company.id)
+        return { type: 'company', id: company.id };
+    if (userId)
+        return { type: 'user', id: userId };
+    return null;
+});
+const resolvePeerType = (rawType, id) => __awaiter(void 0, void 0, void 0, function* () {
+    const peer = yield resolvePeerIdentity(rawType, id);
+    return (peer === null || peer === void 0 ? void 0 : peer.type) || null;
 });
 const applyRateLimit = (actor) => {
     const key = actorMarker(actor.type, actor.id);
@@ -579,13 +623,16 @@ exports.messagesController = {
             if (!(0, db_1.isDBConnected)()) {
                 return res.json({ success: true, data: [] });
             }
-            const otherType = yield resolvePeerType(requestedOtherType, otherId);
-            if (!otherType) {
-                return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+            const peer = yield resolvePeerIdentity(requestedOtherType, otherId);
+            if (!peer) {
+                // Treat unknown peers as empty conversations to avoid noisy 404 loops from stale client aliases.
+                return res.json({ success: true, data: [] });
             }
+            const otherType = peer.type;
+            const resolvedOtherId = peer.id;
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const messages = yield messagesCollection
-                .find(messageAccessQuery(actor, otherId, otherType))
+                .find(messageAccessQuery(actor, resolvedOtherId, otherType))
                 .sort({ timestamp: -1 })
                 .limit(Number(limit))
                 .skip((Number(page) - 1) * Number(limit))
@@ -597,13 +644,13 @@ exports.messagesController = {
             };
             markReadFilter.$or.push({
                 senderOwnerType: otherType,
-                senderOwnerId: otherId,
+                senderOwnerId: resolvedOtherId,
                 receiverOwnerType: actor.type,
                 receiverOwnerId: actor.id,
             });
             if (actor.type === 'user' && otherType === 'user') {
                 markReadFilter.$or.push({
-                    senderId: otherId,
+                    senderId: resolvedOtherId,
                     receiverId: actor.id,
                     senderOwnerType: { $exists: false },
                     receiverOwnerType: { $exists: false },
@@ -665,23 +712,25 @@ exports.messagesController = {
                     message: 'Too many messages sent from this identity. Please wait a moment.',
                 });
             }
-            const receiverType = yield resolvePeerType(requestedReceiverType, receiverId);
-            if (!receiverType) {
+            const receiverPeer = yield resolvePeerIdentity(requestedReceiverType, receiverId);
+            if (!receiverPeer) {
                 return res.status(404).json({ success: false, message: 'Receiver not found' });
             }
-            const blocked = yield isConversationBlocked(actor, receiverType, receiverId);
+            const receiverType = receiverPeer.type;
+            const resolvedReceiverId = receiverPeer.id;
+            const blocked = yield isConversationBlocked(actor, receiverType, resolvedReceiverId);
             if (blocked) {
                 return res.status(403).json({ success: false, message: 'Messaging is blocked for this conversation' });
             }
-            const trusted = yield isTrustedConversation(authenticatedUserId, actor, receiverId, receiverType);
+            const trusted = yield isTrustedConversation(authenticatedUserId, actor, resolvedReceiverId, receiverType);
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const message = {
                 senderId: actor.id,
                 senderOwnerType: actor.type,
                 senderOwnerId: actor.id,
-                receiverId,
+                receiverId: resolvedReceiverId,
                 receiverOwnerType: receiverType,
-                receiverOwnerId: receiverId,
+                receiverOwnerId: resolvedReceiverId,
                 text: String(text || ''),
                 timestamp: new Date(),
                 isRead: false,
@@ -695,17 +744,27 @@ exports.messagesController = {
             };
             const result = yield messagesCollection.insertOne(message);
             const insertedMessage = yield messagesCollection.findOne({ _id: result.insertedId });
-            yield upsertThread(actor.type, actor.id, receiverType, receiverId, {
+            yield upsertThread(actor.type, actor.id, receiverType, resolvedReceiverId, {
                 archived: false,
                 muted: false,
                 blocked: false,
                 state: 'active',
             });
-            yield upsertThread(receiverType, receiverId, actor.type, actor.id, {
+            yield upsertThread(receiverType, resolvedReceiverId, actor.type, actor.id, {
                 state: trusted ? 'active' : 'requests',
             });
             const responseMessage = insertedMessage
                 ? Object.assign(Object.assign({}, insertedMessage), { id: insertedMessage._id ? String(insertedMessage._id) : undefined }) : null;
+            if (responseMessage) {
+                const eventPayload = {
+                    message: responseMessage,
+                    threadState: trusted ? 'active' : 'requests',
+                };
+                (0, socketHub_1.emitToIdentity)(actor.type, actor.id, 'message:new', eventPayload);
+                if (actor.type !== receiverType || actor.id !== resolvedReceiverId) {
+                    (0, socketHub_1.emitToIdentity)(receiverType, resolvedReceiverId, 'message:new', eventPayload);
+                }
+            }
             res.status(201).json({
                 success: true,
                 data: responseMessage,
@@ -806,12 +865,14 @@ exports.messagesController = {
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({ success: false, message: 'Service unavailable' });
             }
-            const otherType = yield resolvePeerType(requestedOtherType, otherUserId);
-            if (!otherType) {
+            const peer = yield resolvePeerIdentity(requestedOtherType, otherUserId);
+            if (!peer) {
                 return res.status(404).json({ success: false, message: 'Conversation peer not found' });
             }
+            const otherType = peer.type;
+            const resolvedOtherId = peer.id;
             const messagesCollection = (0, Message_1.getMessagesCollection)();
-            const conversationQuery = messageAccessQuery(actor, otherUserId, otherType);
+            const conversationQuery = messageAccessQuery(actor, resolvedOtherId, otherType);
             const deleteMarkers = actor.type === 'user' && otherType === 'user'
                 ? [actorMarker(actor.type, actor.id), actor.id]
                 : [actorMarker(actor.type, actor.id)];
@@ -854,10 +915,12 @@ exports.messagesController = {
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({ success: false, message: 'Service unavailable' });
             }
-            const otherType = yield resolvePeerType(requestedOtherType, otherId);
-            if (!otherType) {
-                return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+            const peer = yield resolvePeerIdentity(requestedOtherType, otherId);
+            if (!peer) {
+                return res.json({ success: true, message: 'Conversation peer not found' });
             }
+            const otherType = peer.type;
+            const resolvedOtherId = peer.id;
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const filter = {
                 isRead: false,
@@ -865,20 +928,20 @@ exports.messagesController = {
             };
             filter.$or.push({
                 senderOwnerType: otherType,
-                senderOwnerId: otherId,
+                senderOwnerId: resolvedOtherId,
                 receiverOwnerType: actor.type,
                 receiverOwnerId: actor.id,
             });
             if (actor.type === 'user' && otherType === 'user') {
                 filter.$or.push({
-                    senderId: otherId,
+                    senderId: resolvedOtherId,
                     receiverId: actor.id,
                     senderOwnerType: { $exists: false },
                     receiverOwnerType: { $exists: false },
                 });
             }
             yield messagesCollection.updateMany(filter, { $set: { isRead: true } });
-            yield upsertThread(actor.type, actor.id, otherType, otherId, { clearRequest: true });
+            yield upsertThread(actor.type, actor.id, otherType, resolvedOtherId, { clearRequest: true });
             res.json({ success: true, message: 'Messages marked as read' });
         }
         catch (error) {
@@ -904,17 +967,19 @@ exports.messagesController = {
             if (!otherUserId || typeof archived !== 'boolean') {
                 return res.status(400).json({ success: false, message: 'Invalid parameters' });
             }
-            const peerType = yield resolvePeerType(requestedOtherType, otherUserId);
-            if (!peerType) {
+            const peer = yield resolvePeerIdentity(requestedOtherType, otherUserId);
+            if (!peer) {
                 return res.status(404).json({ success: false, message: 'Conversation peer not found' });
             }
+            const peerType = peer.type;
+            const resolvedOtherId = peer.id;
             const nextState = archived ? 'archived' : 'active';
-            yield upsertThread(actor.type, actor.id, peerType, otherUserId, buildThreadStatePatch(nextState));
+            yield upsertThread(actor.type, actor.id, peerType, resolvedOtherId, buildThreadStatePatch(nextState));
             // Backward compatibility for existing archivedChats logic
             const db = (0, db_1.getDB)();
             const legacyUpdate = archived
-                ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } }
-                : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } };
+                ? { $addToSet: { archivedChats: resolvedOtherId }, $set: { updatedAt: nowIso() } }
+                : { $pull: { archivedChats: resolvedOtherId }, $set: { updatedAt: nowIso() } };
             yield Promise.all([
                 db.collection('users').updateOne({ id: actor.id }, legacyUpdate),
                 db.collection('companies').updateOne({ id: actor.id }, legacyUpdate),
@@ -949,16 +1014,18 @@ exports.messagesController = {
             if (!actor) {
                 return res.status(403).json({ success: false, message: 'Unauthorized' });
             }
-            const peerType = yield resolvePeerType(requestedOtherType, otherUserId);
-            if (!peerType) {
+            const peer = yield resolvePeerIdentity(requestedOtherType, otherUserId);
+            if (!peer) {
                 return res.status(404).json({ success: false, message: 'Conversation peer not found' });
             }
-            const thread = yield upsertThread(actor.type, actor.id, peerType, otherUserId, buildThreadStatePatch(nextState));
+            const peerType = peer.type;
+            const resolvedOtherId = peer.id;
+            const thread = yield upsertThread(actor.type, actor.id, peerType, resolvedOtherId, buildThreadStatePatch(nextState));
             // Keep archivedChats fallback synchronized for old clients.
             const db = (0, db_1.getDB)();
             const legacyUpdate = nextState === 'archived'
-                ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } }
-                : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: nowIso() } };
+                ? { $addToSet: { archivedChats: resolvedOtherId }, $set: { updatedAt: nowIso() } }
+                : { $pull: { archivedChats: resolvedOtherId }, $set: { updatedAt: nowIso() } };
             yield Promise.all([
                 db.collection('users').updateOne({ id: actor.id }, legacyUpdate),
                 db.collection('companies').updateOne({ id: actor.id }, legacyUpdate),
@@ -1000,11 +1067,13 @@ exports.messagesController = {
             if (!actor) {
                 return res.status(403).json({ success: false, message: 'Unauthorized' });
             }
-            const peerType = yield resolvePeerType(requestedOtherType, otherUserId);
-            if (!peerType) {
+            const peer = yield resolvePeerIdentity(requestedOtherType, otherUserId);
+            if (!peer) {
                 return res.status(404).json({ success: false, message: 'Conversation peer not found' });
             }
-            const key = (0, MessageThread_1.buildMessageThreadKey)(actor.type, actor.id, peerType, otherUserId);
+            const peerType = peer.type;
+            const resolvedOtherId = peer.id;
+            const key = (0, MessageThread_1.buildMessageThreadKey)(actor.type, actor.id, peerType, resolvedOtherId);
             const thread = yield (0, MessageThread_1.getMessageThreadsCollection)().findOne({ key });
             res.json({
                 success: true,
@@ -1050,10 +1119,12 @@ exports.messagesController = {
             if (actor.type !== 'company') {
                 return res.status(403).json({ success: false, message: 'Thread metadata is only available for company inboxes' });
             }
-            const peerType = yield resolvePeerType(requestedOtherType, otherUserId);
-            if (!peerType) {
+            const peer = yield resolvePeerIdentity(requestedOtherType, otherUserId);
+            if (!peer) {
                 return res.status(404).json({ success: false, message: 'Conversation peer not found' });
             }
+            const peerType = peer.type;
+            const resolvedOtherId = peer.id;
             const patch = {};
             if (typeof assignmentUserId === 'string') {
                 patch.assignmentUserId = trimTo(assignmentUserId, 120);
@@ -1072,7 +1143,7 @@ exports.messagesController = {
             if (typeof slaMinutes === 'number' && Number.isFinite(slaMinutes) && slaMinutes >= 0) {
                 patch.slaMinutes = Math.min(Math.round(slaMinutes), 60 * 24 * 30);
             }
-            const thread = yield upsertThread(actor.type, actor.id, peerType, otherUserId, patch);
+            const thread = yield upsertThread(actor.type, actor.id, peerType, resolvedOtherId, patch);
             res.json({
                 success: true,
                 data: {

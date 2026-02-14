@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.privacyController = void 0;
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
+const socketHub_1 = require("../realtime/socketHub");
 exports.privacyController = {
     // GET /api/privacy/settings/:userId - Get user's privacy settings
     getPrivacySettings: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -301,24 +302,29 @@ exports.privacyController = {
                     message: 'profileOwnerId is required'
                 });
             }
-            if (profileOwnerId === authenticatedUserId) {
-                return res.json({
-                    success: true,
-                    message: 'Skipped profile view tracking for self-view'
-                });
-            }
             const db = (0, db_1.getDB)();
-            // Get profile owner
-            const profileOwner = yield db.collection('users').findOne({ id: profileOwnerId });
+            const [userOwner, companyOwner] = yield Promise.all([
+                db.collection('users').findOne({ id: profileOwnerId }),
+                db.collection('companies').findOne({ id: profileOwnerId, legacyArchived: { $ne: true } }),
+            ]);
+            const ownerType = userOwner ? 'user' : 'company';
+            const ownerCollection = ownerType === 'user' ? 'users' : 'companies';
+            const profileOwner = userOwner || companyOwner;
             if (!profileOwner) {
                 return res.status(404).json({
                     success: false,
                     error: 'Profile owner not found'
                 });
             }
+            if (ownerType === 'user' && profileOwnerId === authenticatedUserId) {
+                return res.json({
+                    success: true,
+                    message: 'Skipped profile view tracking for self-view'
+                });
+            }
             // Check if profile owner allows profile view tracking
-            const privacySettings = profileOwner.privacySettings || {};
-            if (!privacySettings.showProfileViews && privacySettings.showProfileViews !== undefined) {
+            const privacySettings = ownerType === 'user' ? (profileOwner.privacySettings || {}) : {};
+            if (ownerType === 'user' && !privacySettings.showProfileViews && privacySettings.showProfileViews !== undefined) {
                 return res.json({
                     success: true,
                     message: 'Profile view not recorded - user has disabled profile view tracking'
@@ -336,7 +342,7 @@ exports.privacyController = {
             const profileViews = profileOwner.profileViews || [];
             if (!profileViews.includes(authenticatedUserId)) {
                 profileViews.push(authenticatedUserId);
-                yield db.collection('users').updateOne({ id: profileOwnerId }, {
+                yield db.collection(ownerCollection).updateOne({ id: profileOwnerId }, {
                     $set: {
                         profileViews: profileViews,
                         updatedAt: new Date().toISOString()
@@ -357,13 +363,45 @@ exports.privacyController = {
                 timestamp: Date.now(),
                 isRead: false
             };
-            yield db.collection('users').updateOne({ id: profileOwnerId }, {
+            const existingRecentViewNotice = Array.isArray(profileOwner.notifications)
+                ? profileOwner.notifications.find((notif) => {
+                    var _a;
+                    if ((notif === null || notif === void 0 ? void 0 : notif.type) !== 'profile_view')
+                        return false;
+                    if (((_a = notif === null || notif === void 0 ? void 0 : notif.fromUser) === null || _a === void 0 ? void 0 : _a.id) !== authenticatedUserId)
+                        return false;
+                    const rawTimestamp = notif === null || notif === void 0 ? void 0 : notif.timestamp;
+                    const ts = typeof rawTimestamp === 'number'
+                        ? rawTimestamp
+                        : new Date(rawTimestamp || 0).getTime();
+                    if (!Number.isFinite(ts) || ts <= 0)
+                        return false;
+                    return Date.now() - ts < 60 * 60 * 1000; // one hour
+                })
+                : null;
+            if (existingRecentViewNotice) {
+                return res.json({
+                    success: true,
+                    data: {
+                        profileOwnerId,
+                        viewerId: authenticatedUserId,
+                        totalViews: profileViews.length
+                    },
+                    message: 'Profile view already recorded recently'
+                });
+            }
+            yield db.collection(ownerCollection).updateOne({ id: profileOwnerId }, {
                 $push: {
                     notifications: {
                         $each: [newNotification],
                         $position: 0
                     }
                 }
+            });
+            (0, socketHub_1.emitToIdentity)(ownerType, profileOwnerId, 'notification:new', {
+                ownerType,
+                ownerId: profileOwnerId,
+                notification: newNotification
             });
             console.log('Profile view notification created:', {
                 profileOwnerId,

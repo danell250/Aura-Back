@@ -31,6 +31,7 @@ const userUtils_1 = require("../utils/userUtils");
 const trustService_1 = require("../services/trustService");
 const postsController_1 = require("./postsController");
 const securityLogger_1 = require("../utils/securityLogger");
+const socketHub_1 = require("../realtime/socketHub");
 const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
     const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
@@ -870,6 +871,11 @@ exports.usersController = {
                         $position: 0
                     }
                 }
+            });
+            (0, socketHub_1.emitToIdentity)('user', requesterId, 'notification:new', {
+                ownerType: 'user',
+                ownerId: requesterId,
+                notification: acceptanceNotification
             });
             res.json({
                 success: true,
@@ -1899,6 +1905,12 @@ exports.usersController = {
                     message: `Viewer with ID ${viewerId} does not exist`
                 });
             }
+            if (id === viewerId) {
+                return res.json({
+                    success: true,
+                    message: 'Skipped profile view tracking for self-view'
+                });
+            }
             // Initialize profileViews array if it doesn't exist
             const profileViews = user.profileViews || [];
             // Add the viewer ID to the profile views if not already present
@@ -1923,7 +1935,7 @@ exports.usersController = {
                     avatarType: viewer.avatarType
                 },
                 message: 'viewed your profile',
-                timestamp: new Date().toISOString(),
+                timestamp: Date.now(),
                 isRead: false
             };
             // Add notification to the profile owner's notification array
@@ -1934,6 +1946,11 @@ exports.usersController = {
                     notifications: updatedNotifications,
                     updatedAt: new Date().toISOString()
                 }
+            });
+            (0, socketHub_1.emitToIdentity)('user', id, 'notification:new', {
+                ownerType: 'user',
+                ownerId: id,
+                notification: newNotification
             });
             res.json({
                 success: true,
@@ -2027,6 +2044,11 @@ exports.usersController = {
                     updatedAt: new Date().toISOString()
                 }
             });
+            (0, socketHub_1.emitToIdentity)('user', id, 'notification:new', {
+                ownerType: 'user',
+                ownerId: id,
+                notification: newNotification
+            });
             // Update requester's sentAcquaintanceRequests
             yield db.collection('users').updateOne({ id: fromUserId }, {
                 $addToSet: { sentAcquaintanceRequests: id },
@@ -2112,6 +2134,11 @@ exports.usersController = {
                         $position: 0
                     }
                 }
+            });
+            (0, socketHub_1.emitToIdentity)('user', requesterId, 'notification:new', {
+                ownerType: 'user',
+                ownerId: requesterId,
+                notification: rejectionNotification
             });
             res.json({
                 success: true,

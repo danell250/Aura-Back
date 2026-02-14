@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { getDB } from '../db';
 import { User } from '../types';
 import { transformUsers } from '../utils/userUtils';
+import { emitToIdentity } from '../realtime/socketHub';
 
 export const privacyController = {
   // GET /api/privacy/settings/:userId - Get user's privacy settings
@@ -314,17 +315,17 @@ export const privacyController = {
         });
       }
 
-      if (profileOwnerId === authenticatedUserId) {
-        return res.json({
-          success: true,
-          message: 'Skipped profile view tracking for self-view'
-        });
-      }
-
       const db = getDB();
-      
-      // Get profile owner
-      const profileOwner = await db.collection('users').findOne({ id: profileOwnerId });
+
+      const [userOwner, companyOwner] = await Promise.all([
+        db.collection('users').findOne({ id: profileOwnerId }),
+        db.collection('companies').findOne({ id: profileOwnerId, legacyArchived: { $ne: true } }),
+      ]);
+
+      const ownerType: 'user' | 'company' = userOwner ? 'user' : 'company';
+      const ownerCollection = ownerType === 'user' ? 'users' : 'companies';
+      const profileOwner = userOwner || companyOwner;
+
       if (!profileOwner) {
         return res.status(404).json({
           success: false,
@@ -332,9 +333,16 @@ export const privacyController = {
         });
       }
 
+      if (ownerType === 'user' && profileOwnerId === authenticatedUserId) {
+        return res.json({
+          success: true,
+          message: 'Skipped profile view tracking for self-view'
+        });
+      }
+
       // Check if profile owner allows profile view tracking
-      const privacySettings = profileOwner.privacySettings || {};
-      if (!privacySettings.showProfileViews && privacySettings.showProfileViews !== undefined) {
+      const privacySettings = ownerType === 'user' ? (profileOwner.privacySettings || {}) : {};
+      if (ownerType === 'user' && !privacySettings.showProfileViews && privacySettings.showProfileViews !== undefined) {
         return res.json({
           success: true,
           message: 'Profile view not recorded - user has disabled profile view tracking'
@@ -356,7 +364,7 @@ export const privacyController = {
       if (!profileViews.includes(authenticatedUserId)) {
         profileViews.push(authenticatedUserId);
         
-        await db.collection('users').updateOne(
+        await db.collection(ownerCollection).updateOne(
           { id: profileOwnerId },
           { 
             $set: { 
@@ -382,7 +390,33 @@ export const privacyController = {
         isRead: false
       };
 
-      await db.collection('users').updateOne(
+      const existingRecentViewNotice = Array.isArray(profileOwner.notifications)
+        ? profileOwner.notifications.find((notif: any) => {
+            if (notif?.type !== 'profile_view') return false;
+            if (notif?.fromUser?.id !== authenticatedUserId) return false;
+            const rawTimestamp = notif?.timestamp;
+            const ts =
+              typeof rawTimestamp === 'number'
+                ? rawTimestamp
+                : new Date(rawTimestamp || 0).getTime();
+            if (!Number.isFinite(ts) || ts <= 0) return false;
+            return Date.now() - ts < 60 * 60 * 1000; // one hour
+          })
+        : null;
+
+      if (existingRecentViewNotice) {
+        return res.json({
+          success: true,
+          data: {
+            profileOwnerId,
+            viewerId: authenticatedUserId,
+            totalViews: profileViews.length
+          },
+          message: 'Profile view already recorded recently'
+        });
+      }
+
+      await db.collection(ownerCollection).updateOne(
         { id: profileOwnerId },
         { 
           $push: { 
@@ -393,6 +427,12 @@ export const privacyController = {
           }
         } as any
       );
+
+      emitToIdentity(ownerType, profileOwnerId, 'notification:new', {
+        ownerType,
+        ownerId: profileOwnerId,
+        notification: newNotification
+      });
 
       console.log('Profile view notification created:', {
         profileOwnerId,
