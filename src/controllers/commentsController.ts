@@ -110,14 +110,19 @@ export const commentsController = {
 
   createComment: async (req: Request, res: Response) => {
     try {
+      const authenticatedUserId = (req as any).user?.id as string | undefined;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+      }
+
       const { postId } = req.params;
-      const { text, authorId, parentId, taggedUserIds, tempId } = req.body as { text: string; authorId: string; parentId?: string; taggedUserIds?: string[], tempId?: string };
-      if (!text || !authorId) {
-        return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text and authorId are required' });
+      const { text, parentId, taggedUserIds, tempId } = req.body as { text: string; parentId?: string; taggedUserIds?: string[], tempId?: string };
+      if (!text) {
+        return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text is required' });
       }
 
       const db = getDB();
-      const author = await db.collection(USERS_COLLECTION).findOne({ id: authorId });
+      const author = await db.collection(USERS_COLLECTION).findOne({ id: authenticatedUserId });
       const authorEmbed = author ? {
         id: author.id,
         firstName: author.firstName,
@@ -129,12 +134,12 @@ export const commentsController = {
         avatarType: author.avatarType || 'image',
         activeGlow: author.activeGlow
       } : {
-        id: authorId,
+        id: authenticatedUserId,
         firstName: 'User',
         lastName: '',
         name: 'User',
         handle: '@user',
-        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`,
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authenticatedUserId}`,
         avatarType: 'image',
         activeGlow: undefined
       };
@@ -158,11 +163,11 @@ export const commentsController = {
 
       try {
         const post = await db.collection('posts').findOne({ id: postId });
-        if (post && post.author && post.author.id && post.author.id !== authorId) {
+        if (post && post.author && post.author.id && post.author.id !== authenticatedUserId) {
           await createNotificationInDB(
             post.author.id,
             'comment',
-            authorId,
+            authenticatedUserId,
             'commented on your post',
             postId
           );
@@ -313,7 +318,7 @@ export const commentsController = {
     try {
       const { id } = req.params;
       const { reaction, action: forceAction } = req.body as { reaction: string, action?: 'add' | 'remove' };
-      const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
+      const userId = (req as any).user?.id as string | undefined;
 
       if (!reaction) {
         return res.status(400).json({ success: false, error: 'Missing reaction' });
@@ -321,6 +326,7 @@ export const commentsController = {
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
       }
+      const actorUserId = userId;
 
       const db = getDB();
       const comment = await db.collection(COMMENTS_COLLECTION).findOne({ id });
@@ -331,7 +337,7 @@ export const commentsController = {
       // Check if user already reacted with this emoji
       const currentReactionUsers = comment.reactionUsers || {};
       const usersForEmoji = currentReactionUsers[reaction] || [];
-      const hasReacted = usersForEmoji.includes(userId);
+      const hasReacted = usersForEmoji.includes(actorUserId);
       let action = 'added';
       let shouldUpdate = true;
 
@@ -349,18 +355,18 @@ export const commentsController = {
           await db.collection(COMMENTS_COLLECTION).updateOne(
             { id },
             {
-              $pull: { [`reactionUsers.${reaction}`]: userId },
+              $pull: { [`reactionUsers.${reaction}`]: actorUserId } as any,
               $inc: { [`reactions.${reaction}`]: -1 }
-            }
+            } as any
           );
         } else {
           // Add reaction
           await db.collection(COMMENTS_COLLECTION).updateOne(
             { id },
             {
-              $addToSet: { [`reactionUsers.${reaction}`]: userId },
+              $addToSet: { [`reactionUsers.${reaction}`]: actorUserId } as any,
               $inc: { [`reactions.${reaction}`]: 1 }
-            }
+            } as any
           );
         }
       }
@@ -378,7 +384,7 @@ export const commentsController = {
 
       if (updatedComment.reactionUsers) {
         updatedComment.userReactions = Object.keys(updatedComment.reactionUsers).filter(emoji =>
-          Array.isArray(updatedComment.reactionUsers[emoji]) && updatedComment.reactionUsers[emoji].includes(userId)
+          Array.isArray(updatedComment.reactionUsers[emoji]) && updatedComment.reactionUsers[emoji].includes(actorUserId)
         );
       } else {
         updatedComment.userReactions = [];

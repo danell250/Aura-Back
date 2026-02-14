@@ -7,6 +7,7 @@ const express_1 = require("express");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const commentsController_1 = require("../controllers/commentsController");
 const securityLogger_1 = require("../utils/securityLogger");
+const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = (0, express_1.Router)();
 const commentsWriteRateLimiter = (0, express_rate_limit_1.default)({
     windowMs: 60 * 1000,
@@ -35,8 +36,8 @@ const commentsWriteRateLimiter = (0, express_rate_limit_1.default)({
 router.get('/posts/:postId/comments', commentsController_1.commentsController.getCommentsByPost);
 // GET /api/comments/:id - Get comment by ID
 router.get('/comments/:id', commentsController_1.commentsController.getCommentById);
-router.post('/posts/:postId/comments', commentsWriteRateLimiter, commentsController_1.commentsController.createComment);
-router.put('/comments/:id', commentsWriteRateLimiter, commentsController_1.commentsController.updateComment);
-router.delete('/comments/:id', commentsWriteRateLimiter, commentsController_1.commentsController.deleteComment);
-router.post('/comments/:id/react', commentsWriteRateLimiter, commentsController_1.commentsController.reactToComment);
+router.post('/posts/:postId/comments', authMiddleware_1.requireAuth, commentsWriteRateLimiter, commentsController_1.commentsController.createComment);
+router.put('/comments/:id', authMiddleware_1.requireAuth, commentsWriteRateLimiter, commentsController_1.commentsController.updateComment);
+router.delete('/comments/:id', authMiddleware_1.requireAuth, commentsWriteRateLimiter, commentsController_1.commentsController.deleteComment);
+router.post('/comments/:id/react', authMiddleware_1.requireAuth, commentsWriteRateLimiter, commentsController_1.commentsController.reactToComment);
 exports.default = router;

@@ -112,15 +112,19 @@ exports.commentsController = {
         }
     }),
     createComment: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+            }
             const { postId } = req.params;
-            const { text, authorId, parentId, taggedUserIds, tempId } = req.body;
-            if (!text || !authorId) {
-                return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text and authorId are required' });
+            const { text, parentId, taggedUserIds, tempId } = req.body;
+            if (!text) {
+                return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text is required' });
             }
             const db = (0, db_1.getDB)();
-            const author = yield db.collection(USERS_COLLECTION).findOne({ id: authorId });
+            const author = yield db.collection(USERS_COLLECTION).findOne({ id: authenticatedUserId });
             const authorEmbed = author ? {
                 id: author.id,
                 firstName: author.firstName,
@@ -132,12 +136,12 @@ exports.commentsController = {
                 avatarType: author.avatarType || 'image',
                 activeGlow: author.activeGlow
             } : {
-                id: authorId,
+                id: authenticatedUserId,
                 firstName: 'User',
                 lastName: '',
                 name: 'User',
                 handle: '@user',
-                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`,
+                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authenticatedUserId}`,
                 avatarType: 'image',
                 activeGlow: undefined
             };
@@ -157,8 +161,8 @@ exports.commentsController = {
             yield db.collection(COMMENTS_COLLECTION).insertOne(newComment);
             try {
                 const post = yield db.collection('posts').findOne({ id: postId });
-                if (post && post.author && post.author.id && post.author.id !== authorId) {
-                    yield (0, notificationsController_1.createNotificationInDB)(post.author.id, 'comment', authorId, 'commented on your post', postId);
+                if (post && post.author && post.author.id && post.author.id !== authenticatedUserId) {
+                    yield (0, notificationsController_1.createNotificationInDB)(post.author.id, 'comment', authenticatedUserId, 'commented on your post', postId);
                 }
                 if (tagList.length > 0) {
                     const uniqueTagIds = Array.from(new Set(tagList)).filter(id => id && id !== authorEmbed.id);
@@ -167,7 +171,7 @@ exports.commentsController = {
                     })));
                 }
                 if (post && post.author && post.author.id) {
-                    (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id, ((_a = post.author) === null || _a === void 0 ? void 0 : _a.type) === 'company' ? 'company' : 'user');
+                    (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id, ((_b = post.author) === null || _b === void 0 ? void 0 : _b.type) === 'company' ? 'company' : 'user');
                 }
             }
             catch (e) {
@@ -275,13 +279,14 @@ exports.commentsController = {
         try {
             const { id } = req.params;
             const { reaction, action: forceAction } = req.body;
-            const userId = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id) || req.body.userId; // Prefer authenticated user
+            const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             if (!reaction) {
                 return res.status(400).json({ success: false, error: 'Missing reaction' });
             }
             if (!userId) {
                 return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
             }
+            const actorUserId = userId;
             const db = (0, db_1.getDB)();
             const comment = yield db.collection(COMMENTS_COLLECTION).findOne({ id });
             if (!comment) {
@@ -290,7 +295,7 @@ exports.commentsController = {
             // Check if user already reacted with this emoji
             const currentReactionUsers = comment.reactionUsers || {};
             const usersForEmoji = currentReactionUsers[reaction] || [];
-            const hasReacted = usersForEmoji.includes(userId);
+            const hasReacted = usersForEmoji.includes(actorUserId);
             let action = 'added';
             let shouldUpdate = true;
             if (forceAction) {
@@ -307,14 +312,14 @@ exports.commentsController = {
                 if (action === 'removed') {
                     // Remove reaction
                     yield db.collection(COMMENTS_COLLECTION).updateOne({ id }, {
-                        $pull: { [`reactionUsers.${reaction}`]: userId },
+                        $pull: { [`reactionUsers.${reaction}`]: actorUserId },
                         $inc: { [`reactions.${reaction}`]: -1 }
                     });
                 }
                 else {
                     // Add reaction
                     yield db.collection(COMMENTS_COLLECTION).updateOne({ id }, {
-                        $addToSet: { [`reactionUsers.${reaction}`]: userId },
+                        $addToSet: { [`reactionUsers.${reaction}`]: actorUserId },
                         $inc: { [`reactions.${reaction}`]: 1 }
                     });
                 }
@@ -329,7 +334,7 @@ exports.commentsController = {
                 updatedComment.author = (0, userUtils_1.transformUser)(updatedComment.author);
             }
             if (updatedComment.reactionUsers) {
-                updatedComment.userReactions = Object.keys(updatedComment.reactionUsers).filter(emoji => Array.isArray(updatedComment.reactionUsers[emoji]) && updatedComment.reactionUsers[emoji].includes(userId));
+                updatedComment.userReactions = Object.keys(updatedComment.reactionUsers).filter(emoji => Array.isArray(updatedComment.reactionUsers[emoji]) && updatedComment.reactionUsers[emoji].includes(actorUserId));
             }
             else {
                 updatedComment.userReactions = [];

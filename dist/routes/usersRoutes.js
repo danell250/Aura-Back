@@ -113,7 +113,7 @@ router.put('/:id', authMiddleware_1.requireAuth, requirePersonalIdentity, requir
 // DELETE /api/users/:id - Delete user
 router.delete('/:id', authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, usersController_1.usersController.deleteUser);
 // DELETE /api/users/force-delete/:email - Force delete a user (Admin)
-router.delete('/force-delete/:email', authMiddleware_1.requireAuth, usersController_1.usersController.forceDeleteUser);
+router.delete('/force-delete/:email', authMiddleware_1.requireAuth, authMiddleware_1.requireAdmin, usersController_1.usersController.forceDeleteUser);
 // Trust calibration routes
 // POST /api/users/:id/recalculate-trust - Recalculate trust score for a single user
 router.post('/:id/recalculate-trust', authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, usersController_1.usersController.recalculateTrustForUser);

@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { uploadFile } from '../controllers/uploadController';
+import { requireAuth } from '../middleware/authMiddleware';
 
 const router = express.Router();
 
@@ -25,6 +26,6 @@ const upload = multer({
   }
 });
 
-router.post('/', upload.single('file'), uploadFile);
+router.post('/', requireAuth, upload.single('file'), uploadFile);
 
 export default router;

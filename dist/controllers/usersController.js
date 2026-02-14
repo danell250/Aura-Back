@@ -97,6 +97,18 @@ const CREDIT_BUNDLE_CONFIG = {
     'Neural Surge': { credits: 2000, price: 149.99 },
     'Universal Core': { credits: 5000, price: 349.99 }
 };
+const sanitizePublicUserProfile = (user) => {
+    if (!user)
+        return user;
+    const sanitized = Object.assign({}, user);
+    delete sanitized.email;
+    delete sanitized.notifications;
+    delete sanitized.profileViews;
+    delete sanitized.blockedUsers;
+    delete sanitized.sentAcquaintanceRequests;
+    delete sanitized.sentConnectionRequests;
+    return sanitized;
+};
 exports.usersController = {
     // GET /api/users/me/dashboard - Get creator dashboard data
     getMyDashboard: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -217,9 +229,10 @@ exports.usersController = {
                 ]
             };
             const users = yield db.collection('users').find(query).toArray();
+            const transformed = (0, userUtils_1.transformUsers)(users).map((u) => sanitizePublicUserProfile(Object.assign(Object.assign({}, u), { type: 'user' })));
             res.json({
                 success: true,
-                data: (0, userUtils_1.transformUsers)(users).map(u => (Object.assign(Object.assign({}, u), { type: 'user' }))),
+                data: transformed,
                 count: users.length
             });
         }
@@ -289,16 +302,20 @@ exports.usersController = {
     }),
     // GET /api/users/:id - Get user or company by ID
     getUserById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
             // Try to find user first
             const user = yield db.collection('users').findOne({ id });
             if (user) {
+                const transformed = (0, userUtils_1.transformUser)(user);
+                const requesterId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+                const isSelf = typeof requesterId === 'string' && requesterId === id;
                 return res.json({
                     success: true,
                     type: 'user',
-                    data: Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(user)), { type: 'user' })
+                    data: Object.assign(Object.assign({}, (isSelf ? transformed : sanitizePublicUserProfile(transformed))), { type: 'user' })
                 });
             }
             // Try to find company
@@ -334,6 +351,7 @@ exports.usersController = {
     }),
     // GET /api/users/handle/:handle - Get user or company by handle
     getUserByHandle: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             let { handle } = req.params;
             if (!handle) {
@@ -349,10 +367,13 @@ exports.usersController = {
                 handle: { $regex: new RegExp(`^${handle}$`, 'i') }
             });
             if (user) {
+                const transformed = (0, userUtils_1.transformUser)(user);
+                const requesterId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+                const isSelf = typeof requesterId === 'string' && requesterId === user.id;
                 return res.json({
                     success: true,
                     type: 'user',
-                    data: Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(user)), { type: 'user' })
+                    data: Object.assign(Object.assign({}, (isSelf ? transformed : sanitizePublicUserProfile(transformed))), { type: 'user' })
                 });
             }
             // Try to find company
@@ -2115,8 +2136,15 @@ exports.usersController = {
     forceDeleteUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { email } = req.params;
-            // Basic security check - in production this should be protected by admin middleware
-            // For now, we'll just check if the email parameter is provided
+            const requester = req.user;
+            const isAdmin = (requester === null || requester === void 0 ? void 0 : requester.role) === 'admin' || (requester === null || requester === void 0 ? void 0 : requester.isAdmin) === true;
+            if (!isAdmin) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Admin access required',
+                    message: 'Only administrators can force delete users'
+                });
+            }
             if (!email) {
                 return res.status(400).json({
                     success: false,

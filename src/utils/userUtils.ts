@@ -12,6 +12,18 @@ export const transformUser = (user: any): any => {
   // and to treat it as a plain object.
   const transformed = { ...user };
 
+  // Never expose auth/session secrets in transformed user payloads.
+  delete transformed.password;
+  delete transformed.passwordHash;
+  delete transformed.refreshTokens;
+  delete transformed.magicLinkTokenHash;
+  delete transformed.magicLinkExpiresAt;
+  delete transformed.pendingInviteToken;
+  delete transformed.resetToken;
+  delete transformed.resetTokenExpiresAt;
+  delete transformed.resetTokenExpires;
+  delete transformed.verificationToken;
+
   const isCompanyRecord =
     transformed.type === 'company' ||
     (typeof transformed.ownerId === 'string' && transformed.ownerId.length > 0);

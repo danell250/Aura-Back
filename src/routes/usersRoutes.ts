@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { usersController } from '../controllers/usersController';
-import { requireAuth } from '../middleware/authMiddleware';
+import { requireAuth, requireAdmin } from '../middleware/authMiddleware';
 import { upload } from '../middleware/uploadMiddleware';
 
 const router = Router();
@@ -148,7 +148,7 @@ router.put('/:id', requireAuth, requirePersonalIdentity, requireSelfParam, users
 router.delete('/:id', requireAuth, requirePersonalIdentity, requireSelfParam, usersController.deleteUser);
 
 // DELETE /api/users/force-delete/:email - Force delete a user (Admin)
-router.delete('/force-delete/:email', requireAuth, usersController.forceDeleteUser);
+router.delete('/force-delete/:email', requireAuth, requireAdmin, usersController.forceDeleteUser);
 
 // Trust calibration routes
 // POST /api/users/:id/recalculate-trust - Recalculate trust score for a single user

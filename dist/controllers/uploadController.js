@@ -53,6 +53,11 @@ const uploadToCloudinary = (buffer_1, folder_1, ...args_1) => __awaiter(void 0, 
     });
 });
 const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+    if (!authenticatedUserId) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
     if (!req.file) {
         res.status(400).json({ error: 'No file uploaded' });
         return;
@@ -76,6 +81,7 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
             yield db.collection('mediaFiles').insertOne({
                 storageProvider: 'cloudinary',
                 folder,
+                uploadedByUserId: authenticatedUserId,
                 publicUrl: secureUrl,
                 originalName: req.file.originalname,
                 mimetype: req.file.mimetype,
@@ -115,6 +121,7 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
             const db = (0, db_1.getDB)();
             yield db.collection('mediaFiles').insertOne({
                 storageProvider: 'local',
+                uploadedByUserId: authenticatedUserId,
                 path: filePath,
                 filename: objectKey,
                 originalName: req.file.originalname,
@@ -150,6 +157,7 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
         const db = (0, db_1.getDB)();
         yield db.collection('mediaFiles').insertOne({
             storageProvider: 's3',
+            uploadedByUserId: authenticatedUserId,
             bucket: s3Bucket,
             key: objectKey,
             filename: objectKey,

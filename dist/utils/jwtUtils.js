@@ -15,8 +15,22 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.authenticateJWT = exports.clearTokenCookies = exports.setTokenCookies = exports.verifyRefreshToken = exports.verifyAccessToken = exports.generateRefreshToken = exports.generateAccessToken = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = require("../db");
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_jwt_secret_for_dev';
-const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || 'fallback_refresh_token_secret_for_dev';
+const crypto_1 = __importDefault(require("crypto"));
+const getRequiredJwtSecret = (envName) => {
+    const configured = process.env[envName];
+    if (configured && configured.trim().length > 0) {
+        return configured;
+    }
+    const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
+    if (isProduction) {
+        throw new Error(`${envName} is required in production`);
+    }
+    const ephemeral = crypto_1.default.randomBytes(32).toString('hex');
+    console.warn(`[jwtUtils] ${envName} is not set. Using an ephemeral runtime secret for development only.`);
+    return ephemeral;
+};
+const JWT_SECRET = getRequiredJwtSecret('JWT_SECRET');
+const REFRESH_TOKEN_SECRET = getRequiredJwtSecret('REFRESH_TOKEN_SECRET');
 const ACCESS_TOKEN_EXPIRES_IN = (process.env.ACCESS_TOKEN_EXPIRES_IN || '15m');
 const REFRESH_TOKEN_EXPIRES_IN = (process.env.REFRESH_TOKEN_EXPIRES_IN || '7d');
 // Generate Access Token (Short-lived)

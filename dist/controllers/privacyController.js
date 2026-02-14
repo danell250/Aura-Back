@@ -15,8 +15,24 @@ const userUtils_1 = require("../utils/userUtils");
 exports.privacyController = {
     // GET /api/privacy/settings/:userId - Get user's privacy settings
     getPrivacySettings: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { userId } = req.params;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required',
+                    message: 'Please log in to access privacy settings'
+                });
+            }
+            if (authenticatedUserId !== userId) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'You can only access your own privacy settings'
+                });
+            }
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id: userId });
             if (!user) {
@@ -63,8 +79,24 @@ exports.privacyController = {
     }),
     // PUT /api/privacy/settings/:userId - Update user's privacy settings
     updatePrivacySettings: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { userId } = req.params;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required',
+                    message: 'Please log in to update privacy settings'
+                });
+            }
+            if (authenticatedUserId !== userId) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'You can only update your own privacy settings'
+                });
+            }
             const settings = req.body;
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id: userId });
@@ -125,17 +157,25 @@ exports.privacyController = {
     }),
     // POST /api/privacy/analytics-event - Track analytics event (if user consented)
     trackAnalyticsEvent: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
-            const { userId, eventType, eventData } = req.body;
-            if (!userId || !eventType) {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const { eventType, eventData } = req.body;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required'
+                });
+            }
+            if (!eventType) {
                 return res.status(400).json({
                     success: false,
                     error: 'Missing required fields',
-                    message: 'userId and eventType are required'
+                    message: 'eventType is required'
                 });
             }
             const db = (0, db_1.getDB)();
-            const user = yield db.collection('users').findOne({ id: userId });
+            const user = yield db.collection('users').findOne({ id: authenticatedUserId });
             if (!user) {
                 return res.status(404).json({
                     success: false,
@@ -153,7 +193,7 @@ exports.privacyController = {
             // Store analytics event (anonymized)
             const analyticsEvent = {
                 id: `analytics-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                userId: userId, // In production, this might be hashed for privacy
+                userId: authenticatedUserId, // In production, this might be hashed for privacy
                 eventType: eventType,
                 eventData: eventData || {},
                 timestamp: new Date().toISOString(),
@@ -210,7 +250,21 @@ exports.privacyController = {
                 ];
                 delete searchQuery.$or; // Remove the original $or since we're using $and now
             }
-            const searchableUsers = yield db.collection('users').find(searchQuery).toArray();
+            const searchableUsers = yield db.collection('users').find(searchQuery).project({
+                id: 1,
+                name: 1,
+                firstName: 1,
+                lastName: 1,
+                handle: 1,
+                avatar: 1,
+                avatarKey: 1,
+                avatarType: 1,
+                bio: 1,
+                companyName: 1,
+                industry: 1,
+                isVerified: 1,
+                privacySettings: 1
+            }).toArray();
             const transformedUsers = (0, userUtils_1.transformUsers)(searchableUsers);
             res.json({
                 success: true,
@@ -230,13 +284,27 @@ exports.privacyController = {
     }),
     // POST /api/privacy/profile-view - Record profile view (if user allows it)
     recordProfileView: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
-            const { profileOwnerId, viewerId } = req.body;
-            if (!profileOwnerId || !viewerId) {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const { profileOwnerId } = req.body;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required'
+                });
+            }
+            if (!profileOwnerId) {
                 return res.status(400).json({
                     success: false,
                     error: 'Missing required fields',
-                    message: 'profileOwnerId and viewerId are required'
+                    message: 'profileOwnerId is required'
+                });
+            }
+            if (profileOwnerId === authenticatedUserId) {
+                return res.json({
+                    success: true,
+                    message: 'Skipped profile view tracking for self-view'
                 });
             }
             const db = (0, db_1.getDB)();
@@ -257,7 +325,7 @@ exports.privacyController = {
                 });
             }
             // Get viewer
-            const viewer = yield db.collection('users').findOne({ id: viewerId });
+            const viewer = yield db.collection('users').findOne({ id: authenticatedUserId });
             if (!viewer) {
                 return res.status(404).json({
                     success: false,
@@ -266,8 +334,8 @@ exports.privacyController = {
             }
             // Record the profile view (ensure viewer is present at least once)
             const profileViews = profileOwner.profileViews || [];
-            if (!profileViews.includes(viewerId)) {
-                profileViews.push(viewerId);
+            if (!profileViews.includes(authenticatedUserId)) {
+                profileViews.push(authenticatedUserId);
                 yield db.collection('users').updateOne({ id: profileOwnerId }, {
                     $set: {
                         profileViews: profileViews,
@@ -299,7 +367,7 @@ exports.privacyController = {
             });
             console.log('Profile view notification created:', {
                 profileOwnerId,
-                viewerId,
+                viewerId: authenticatedUserId,
                 viewerName: viewer.name,
                 timestamp: new Date().toISOString()
             });
@@ -307,7 +375,7 @@ exports.privacyController = {
                 success: true,
                 data: {
                     profileOwnerId,
-                    viewerId,
+                    viewerId: authenticatedUserId,
                     totalViews: profileViews.length
                 },
                 message: 'Profile view recorded successfully'

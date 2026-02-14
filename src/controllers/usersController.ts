@@ -80,6 +80,18 @@ const CREDIT_BUNDLE_CONFIG: Record<string, { credits: number; price: number }> =
   'Universal Core': { credits: 5000, price: 349.99 }
 };
 
+const sanitizePublicUserProfile = (user: any): any => {
+  if (!user) return user;
+  const sanitized = { ...user };
+  delete sanitized.email;
+  delete sanitized.notifications;
+  delete sanitized.profileViews;
+  delete sanitized.blockedUsers;
+  delete sanitized.sentAcquaintanceRequests;
+  delete sanitized.sentConnectionRequests;
+  return sanitized;
+};
+
 export const usersController = {
   // GET /api/users/me/dashboard - Get creator dashboard data
   getMyDashboard: async (req: Request, res: Response) => {
@@ -206,10 +218,11 @@ export const usersController = {
       };
 
       const users = await db.collection('users').find(query).toArray();
+      const transformed = transformUsers(users).map((u) => sanitizePublicUserProfile({ ...u, type: 'user' }));
 
       res.json({
         success: true,
-        data: transformUsers(users).map(u => ({ ...u, type: 'user' })),
+        data: transformed,
         count: users.length
       });
     } catch (error) {
@@ -303,11 +316,14 @@ export const usersController = {
       const user = await db.collection('users').findOne({ id });
 
       if (user) {
+        const transformed = transformUser(user);
+        const requesterId = (req as any).user?.id;
+        const isSelf = typeof requesterId === 'string' && requesterId === id;
         return res.json({
           success: true,
           type: 'user',
           data: {
-            ...transformUser(user),
+            ...(isSelf ? transformed : sanitizePublicUserProfile(transformed)),
             type: 'user'
           }
         });
@@ -386,11 +402,14 @@ export const usersController = {
       });
 
       if (user) {
+        const transformed = transformUser(user);
+        const requesterId = (req as any).user?.id;
+        const isSelf = typeof requesterId === 'string' && requesterId === user.id;
         return res.json({
           success: true,
           type: 'user',
           data: {
-            ...transformUser(user),
+            ...(isSelf ? transformed : sanitizePublicUserProfile(transformed)),
             type: 'user'
           }
         });
@@ -2468,9 +2487,17 @@ export const usersController = {
   forceDeleteUser: async (req: Request, res: Response) => {
     try {
       const { email } = req.params;
+      const requester = (req as any).user;
+      const isAdmin = requester?.role === 'admin' || requester?.isAdmin === true;
 
-      // Basic security check - in production this should be protected by admin middleware
-      // For now, we'll just check if the email parameter is provided
+      if (!isAdmin) {
+        return res.status(403).json({
+          success: false,
+          error: 'Admin access required',
+          message: 'Only administrators can force delete users'
+        });
+      }
+
       if (!email) {
         return res.status(400).json({
           success: false,

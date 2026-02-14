@@ -2,9 +2,26 @@ import jwt, { SignOptions, Secret } from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
 import { getDB } from '../db';
 import { User } from '../types';
+import crypto from 'crypto';
 
-const JWT_SECRET: Secret = process.env.JWT_SECRET || 'fallback_jwt_secret_for_dev';
-const REFRESH_TOKEN_SECRET: Secret = process.env.REFRESH_TOKEN_SECRET || 'fallback_refresh_token_secret_for_dev';
+const getRequiredJwtSecret = (envName: 'JWT_SECRET' | 'REFRESH_TOKEN_SECRET'): Secret => {
+  const configured = process.env[envName];
+  if (configured && configured.trim().length > 0) {
+    return configured;
+  }
+
+  const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
+  if (isProduction) {
+    throw new Error(`${envName} is required in production`);
+  }
+
+  const ephemeral = crypto.randomBytes(32).toString('hex');
+  console.warn(`[jwtUtils] ${envName} is not set. Using an ephemeral runtime secret for development only.`);
+  return ephemeral;
+};
+
+const JWT_SECRET: Secret = getRequiredJwtSecret('JWT_SECRET');
+const REFRESH_TOKEN_SECRET: Secret = getRequiredJwtSecret('REFRESH_TOKEN_SECRET');
 
 const ACCESS_TOKEN_EXPIRES_IN = (process.env.ACCESS_TOKEN_EXPIRES_IN || '15m') as SignOptions['expiresIn'];
 const REFRESH_TOKEN_EXPIRES_IN = (process.env.REFRESH_TOKEN_EXPIRES_IN || '7d') as SignOptions['expiresIn'];

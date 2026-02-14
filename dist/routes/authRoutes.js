@@ -701,7 +701,10 @@ router.post("/magic-link/verify", (req, res) => __awaiter(void 0, void 0, void 0
                         }
                     });
                     // Get company name
-                    const company = yield db.collection('users').findOne({ id: invite.companyId });
+                    const company = yield db.collection('companies').findOne({
+                        id: invite.companyId,
+                        legacyArchived: { $ne: true }
+                    });
                     const companyName = (company === null || company === void 0 ? void 0 : company.name) || 'A Company';
                     // Create notification so user sees it in their bell icon
                     yield (0, notificationsController_1.createNotificationInDB)(user.id, 'company_invite', invite.invitedByUserId, `invited you to join ${companyName} as ${invite.role}`, undefined, undefined, {

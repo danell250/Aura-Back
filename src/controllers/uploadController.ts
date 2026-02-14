@@ -50,6 +50,11 @@ const uploadToCloudinary = async (buffer: Buffer, folder: string, resourceType: 
 };
 
 export const uploadFile = async (req: Request, res: Response) => {
+  const authenticatedUserId = (req as any).user?.id as string | undefined;
+  if (!authenticatedUserId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
   if (!req.file) {
     res.status(400).json({ error: 'No file uploaded' });
     return;
@@ -79,6 +84,7 @@ export const uploadFile = async (req: Request, res: Response) => {
       await db.collection('mediaFiles').insertOne({
         storageProvider: 'cloudinary',
         folder,
+        uploadedByUserId: authenticatedUserId,
         publicUrl: secureUrl,
         originalName: req.file.originalname,
         mimetype: req.file.mimetype,
@@ -124,6 +130,7 @@ export const uploadFile = async (req: Request, res: Response) => {
       const db = getDB();
       await db.collection('mediaFiles').insertOne({
         storageProvider: 'local',
+        uploadedByUserId: authenticatedUserId,
         path: filePath,
         filename: objectKey,
         originalName: req.file.originalname,
@@ -163,6 +170,7 @@ export const uploadFile = async (req: Request, res: Response) => {
     const db = getDB();
     await db.collection('mediaFiles').insertOne({
       storageProvider: 's3',
+      uploadedByUserId: authenticatedUserId,
       bucket: s3Bucket,
       key: objectKey,
       filename: objectKey,

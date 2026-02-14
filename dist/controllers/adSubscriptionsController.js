@@ -18,6 +18,7 @@ exports.ensureCurrentPeriod = ensureCurrentPeriod;
 const db_1 = require("../db");
 const axios_1 = __importDefault(require("axios"));
 const securityLogger_1 = require("../utils/securityLogger");
+const identityUtils_1 = require("../utils/identityUtils");
 function verifyPayPalWebhookSignature(req) {
     return __awaiter(this, void 0, void 0, function* () {
         const webhookId = process.env.PAYPAL_WEBHOOK_ID;
@@ -96,25 +97,66 @@ function ensureCurrentPeriod(db, subscription) {
     });
 }
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
+const parseOwnerType = (value) => {
+    if (value === undefined || value === null || value === '')
+        return 'user';
+    if (value === 'user' || value === 'company')
+        return value;
+    return null;
+};
+const buildOwnerScope = (ownerId, ownerType) => {
+    const clauses = [
+        { ownerId, ownerType },
+        { userId: ownerId, ownerType } // backward compatibility
+    ];
+    if (ownerType === 'user') {
+        clauses.push({ userId: ownerId, ownerType: { $exists: false } });
+    }
+    return { $or: clauses };
+};
+const getSubscriptionOwner = (subscription) => {
+    const ownerId = typeof (subscription === null || subscription === void 0 ? void 0 : subscription.ownerId) === 'string' && subscription.ownerId
+        ? subscription.ownerId
+        : (typeof (subscription === null || subscription === void 0 ? void 0 : subscription.userId) === 'string' ? subscription.userId : '');
+    if (!ownerId)
+        return null;
+    const ownerType = (subscription === null || subscription === void 0 ? void 0 : subscription.ownerType) === 'company' ? 'company' : 'user';
+    return { ownerId, ownerType };
+};
 exports.adSubscriptionsController = {
     // GET /api/ad-subscriptions/user/:userId - Get user's ad subscriptions
     getUserSubscriptions: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
-            const { userId } = req.params;
-            const { ownerType = 'user' } = req.query;
-            console.log(`[AdSubscriptions] Fetching subscriptions for ${ownerType}:`, userId);
-            const db = (0, db_1.getDB)();
-            const query = {
-                $or: [
-                    { ownerId: userId, ownerType },
-                    { userId: userId, ownerType } // backward compatibility
-                ]
-            };
-            // If no ownerType was explicitly set in the document yet (old data), 
-            // and we're looking for 'user' type, also match documents without ownerType
-            if (ownerType === 'user') {
-                query.$or.push({ userId, ownerType: { $exists: false } });
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required'
+                });
             }
+            const ownerType = parseOwnerType(req.query.ownerType);
+            if (!ownerType) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid ownerType. Use "user" or "company".'
+                });
+            }
+            const requestedOwnerId = req.params.userId;
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId: requestedOwnerId
+            });
+            if (!actor || actor.id !== requestedOwnerId || actor.type !== ownerType) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized to access subscriptions for this identity'
+                });
+            }
+            console.log(`[AdSubscriptions] Fetching subscriptions for ${ownerType}:`, requestedOwnerId);
+            const db = (0, db_1.getDB)();
+            const query = buildOwnerScope(actor.id, actor.type);
             const subscriptions = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION)
                 .find(query)
                 .sort({ createdAt: -1 })
@@ -137,13 +179,40 @@ exports.adSubscriptionsController = {
     }),
     // POST /api/ad-subscriptions - Create new ad subscription
     createSubscription: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b;
         try {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required'
+                });
+            }
             const { userId, packageId, packageName, paypalSubscriptionId, adLimit, durationDays, ownerType = 'user' } = req.body;
-            if (!userId || !packageId || !packageName || !adLimit) {
+            const normalizedOwnerType = parseOwnerType(ownerType);
+            if (!normalizedOwnerType) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid ownerType. Use "user" or "company".'
+                });
+            }
+            const requestedOwnerId = typeof userId === 'string' && userId ? userId : authenticatedUserId;
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: normalizedOwnerType,
+                ownerId: requestedOwnerId
+            });
+            if (!actor || actor.id !== requestedOwnerId || actor.type !== normalizedOwnerType) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized to create subscription for this identity'
+                });
+            }
+            if (!packageId || !packageName || !adLimit) {
                 return res.status(400).json({
                     success: false,
                     error: 'Missing required fields',
-                    message: 'userId, packageId, packageName, and adLimit are required'
+                    message: 'packageId, packageName, and adLimit are required'
                 });
             }
             const db = (0, db_1.getDB)();
@@ -154,14 +223,13 @@ exports.adSubscriptionsController = {
             const nextBillingDate = !durationDays ? now + (30 * 24 * 60 * 60 * 1000) : undefined;
             const plan = adPlans_1.AD_PLANS[packageId];
             const impressionLimit = plan ? plan.impressionLimit : 0;
-            const BILLING_MS = 30 * 24 * 60 * 60 * 1000;
             const periodStart = now;
             const periodEnd = nextBillingDate || (now + BILLING_MS);
             const newSubscription = {
                 id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
-                userId, // Legacy field
-                ownerId: userId, // New standardized field
-                ownerType,
+                userId: actor.id, // Legacy field
+                ownerId: actor.id, // New standardized field
+                ownerType: actor.type,
                 packageId,
                 packageName,
                 status: 'active',
@@ -181,9 +249,9 @@ exports.adSubscriptionsController = {
             yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).insertOne(newSubscription);
             // Log the transaction
             yield db.collection('transactions').insertOne({
-                userId,
-                ownerId: userId,
-                ownerType,
+                userId: actor.id,
+                ownerId: actor.id,
+                ownerType: actor.type,
                 type: 'ad_subscription',
                 packageId,
                 packageName,
@@ -208,7 +276,7 @@ exports.adSubscriptionsController = {
             (0, securityLogger_1.logSecurityEvent)({
                 req,
                 type: 'payment_failure',
-                userId: req.body && req.body.userId,
+                userId: ((_b = req.user) === null || _b === void 0 ? void 0 : _b.id) || (req.body && req.body.userId),
                 metadata: {
                     source: 'ad_subscriptions',
                     reason: 'create_subscription_exception',
@@ -226,7 +294,15 @@ exports.adSubscriptionsController = {
     }),
     // PUT /api/ad-subscriptions/:id/use-ad - Increment ads used count
     useAdSlot: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required'
+                });
+            }
             const { id } = req.params;
             const db = (0, db_1.getDB)();
             const subscription = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
@@ -235,6 +311,21 @@ exports.adSubscriptionsController = {
                     success: false,
                     error: 'Subscription not found',
                     message: 'The requested subscription could not be found.'
+                });
+            }
+            const owner = getSubscriptionOwner(subscription);
+            if (!owner) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'Subscription ownership metadata is invalid'
+                });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, owner);
+            if (!actor || actor.id !== owner.ownerId || actor.type !== owner.ownerType) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized to use this subscription'
                 });
             }
             if (subscription.status !== 'active') {
@@ -260,7 +351,7 @@ exports.adSubscriptionsController = {
                 });
             }
             // Increment ads used
-            const result = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne({ id }, {
+            const result = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne({ id, ownerId: owner.ownerId, ownerType: owner.ownerType }, {
                 $inc: { adsUsed: 1 },
                 $set: { updatedAt: Date.now() }
             });
@@ -288,10 +379,40 @@ exports.adSubscriptionsController = {
     }),
     // PUT /api/ad-subscriptions/:id/cancel - Cancel subscription
     cancelSubscription: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required'
+                });
+            }
             const { id } = req.params;
             const db = (0, db_1.getDB)();
-            const result = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne({ id }, {
+            const subscription = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
+            if (!subscription) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Subscription not found'
+                });
+            }
+            const owner = getSubscriptionOwner(subscription);
+            if (!owner) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'Subscription ownership metadata is invalid'
+                });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, owner);
+            if (!actor || actor.id !== owner.ownerId || actor.type !== owner.ownerType) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized to cancel this subscription'
+                });
+            }
+            const result = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne({ id, ownerId: owner.ownerId, ownerType: owner.ownerType }, {
                 $set: {
                     status: 'cancelled',
                     updatedAt: Date.now()
@@ -321,9 +442,34 @@ exports.adSubscriptionsController = {
     }),
     // GET /api/ad-subscriptions/user/:userId/active - Get user's active subscriptions with available ad slots
     getActiveSubscriptions: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
-            const { userId } = req.params;
-            const { ownerType = 'user' } = req.query;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required'
+                });
+            }
+            const ownerType = parseOwnerType(req.query.ownerType);
+            if (!ownerType) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid ownerType. Use "user" or "company".'
+                });
+            }
+            const requestedOwnerId = req.params.userId;
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId: requestedOwnerId
+            });
+            if (!actor || actor.id !== requestedOwnerId || actor.type !== ownerType) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized to access active subscriptions for this identity'
+                });
+            }
             const db = (0, db_1.getDB)();
             const now = Date.now();
             const baseQuery = {
@@ -336,18 +482,9 @@ exports.adSubscriptionsController = {
             const query = {
                 $and: [
                     baseQuery,
-                    {
-                        $or: [
-                            { ownerId: userId, ownerType },
-                            { userId: userId, ownerType }
-                        ]
-                    }
+                    buildOwnerScope(actor.id, actor.type)
                 ]
             };
-            // Handle legacy 'user' subscriptions without ownerType field
-            if (ownerType === 'user') {
-                query.$and[1].$or.push({ userId, ownerType: { $exists: false } });
-            }
             // Find active subscriptions that haven't expired
             const activeSubscriptions = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION)
                 .find(query)
@@ -359,17 +496,7 @@ exports.adSubscriptionsController = {
                 updated.push(yield ensureCurrentPeriod(db, sub));
             }
             // Auto-expire any subscriptions that have passed their end date
-            const expireQuery = {
-                status: 'active',
-                endDate: { $exists: true, $lte: now },
-                $or: [
-                    { ownerId: userId, ownerType },
-                    { userId: userId, ownerType }
-                ]
-            };
-            if (ownerType === 'user') {
-                expireQuery.$or.push({ userId, ownerType: { $exists: false } });
-            }
+            const expireQuery = Object.assign({ status: 'active', endDate: { $exists: true, $lte: now } }, buildOwnerScope(actor.id, actor.type));
             yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany(expireQuery, {
                 $set: { status: 'expired', updatedAt: now }
             });
@@ -389,7 +516,15 @@ exports.adSubscriptionsController = {
     }),
     // GET /api/ad-subscriptions/:id - Get subscription by ID
     getSubscriptionById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Authentication required'
+                });
+            }
             const { id } = req.params;
             const db = (0, db_1.getDB)();
             const subscription = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
@@ -397,6 +532,21 @@ exports.adSubscriptionsController = {
                 return res.status(404).json({
                     success: false,
                     error: 'Subscription not found'
+                });
+            }
+            const owner = getSubscriptionOwner(subscription);
+            if (!owner) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'Subscription ownership metadata is invalid'
+                });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, owner);
+            if (!actor || actor.id !== owner.ownerId || actor.type !== owner.ownerType) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Unauthorized to access this subscription'
                 });
             }
             res.json({

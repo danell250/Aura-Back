@@ -8,6 +8,21 @@ export const privacyController = {
   getPrivacySettings: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
+      const authenticatedUserId = (req as any).user?.id as string | undefined;
+      if (!authenticatedUserId) {
+        return res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+          message: 'Please log in to access privacy settings'
+        });
+      }
+      if (authenticatedUserId !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden',
+          message: 'You can only access your own privacy settings'
+        });
+      }
       const db = getDB();
       
       const user = await db.collection('users').findOne({ id: userId });
@@ -60,6 +75,21 @@ export const privacyController = {
   updatePrivacySettings: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
+      const authenticatedUserId = (req as any).user?.id as string | undefined;
+      if (!authenticatedUserId) {
+        return res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+          message: 'Please log in to update privacy settings'
+        });
+      }
+      if (authenticatedUserId !== userId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden',
+          message: 'You can only update your own privacy settings'
+        });
+      }
       const settings = req.body;
       const db = getDB();
       
@@ -129,18 +159,25 @@ export const privacyController = {
   // POST /api/privacy/analytics-event - Track analytics event (if user consented)
   trackAnalyticsEvent: async (req: Request, res: Response) => {
     try {
-      const { userId, eventType, eventData } = req.body;
+      const authenticatedUserId = (req as any).user?.id as string | undefined;
+      const { eventType, eventData } = req.body;
+      if (!authenticatedUserId) {
+        return res.status(401).json({
+          success: false,
+          error: 'Authentication required'
+        });
+      }
       
-      if (!userId || !eventType) {
+      if (!eventType) {
         return res.status(400).json({
           success: false,
           error: 'Missing required fields',
-          message: 'userId and eventType are required'
+          message: 'eventType is required'
         });
       }
 
       const db = getDB();
-      const user = await db.collection('users').findOne({ id: userId });
+      const user = await db.collection('users').findOne({ id: authenticatedUserId });
       
       if (!user) {
         return res.status(404).json({
@@ -161,7 +198,7 @@ export const privacyController = {
       // Store analytics event (anonymized)
       const analyticsEvent = {
         id: `analytics-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        userId: userId, // In production, this might be hashed for privacy
+        userId: authenticatedUserId, // In production, this might be hashed for privacy
         eventType: eventType,
         eventData: eventData || {},
         timestamp: new Date().toISOString(),
@@ -224,7 +261,21 @@ export const privacyController = {
         delete searchQuery.$or; // Remove the original $or since we're using $and now
       }
 
-      const searchableUsers = await db.collection('users').find(searchQuery).toArray();
+      const searchableUsers = await db.collection('users').find(searchQuery).project({
+        id: 1,
+        name: 1,
+        firstName: 1,
+        lastName: 1,
+        handle: 1,
+        avatar: 1,
+        avatarKey: 1,
+        avatarType: 1,
+        bio: 1,
+        companyName: 1,
+        industry: 1,
+        isVerified: 1,
+        privacySettings: 1
+      }).toArray();
       const transformedUsers = transformUsers(searchableUsers);
 
       res.json({
@@ -246,13 +297,27 @@ export const privacyController = {
   // POST /api/privacy/profile-view - Record profile view (if user allows it)
   recordProfileView: async (req: Request, res: Response) => {
     try {
-      const { profileOwnerId, viewerId } = req.body;
+      const authenticatedUserId = (req as any).user?.id as string | undefined;
+      const { profileOwnerId } = req.body;
+      if (!authenticatedUserId) {
+        return res.status(401).json({
+          success: false,
+          error: 'Authentication required'
+        });
+      }
       
-      if (!profileOwnerId || !viewerId) {
+      if (!profileOwnerId) {
         return res.status(400).json({
           success: false,
           error: 'Missing required fields',
-          message: 'profileOwnerId and viewerId are required'
+          message: 'profileOwnerId is required'
+        });
+      }
+
+      if (profileOwnerId === authenticatedUserId) {
+        return res.json({
+          success: true,
+          message: 'Skipped profile view tracking for self-view'
         });
       }
 
@@ -277,7 +342,7 @@ export const privacyController = {
       }
 
       // Get viewer
-      const viewer = await db.collection('users').findOne({ id: viewerId });
+      const viewer = await db.collection('users').findOne({ id: authenticatedUserId });
       if (!viewer) {
         return res.status(404).json({
           success: false,
@@ -288,8 +353,8 @@ export const privacyController = {
       // Record the profile view (ensure viewer is present at least once)
       const profileViews = profileOwner.profileViews || [];
       
-      if (!profileViews.includes(viewerId)) {
-        profileViews.push(viewerId);
+      if (!profileViews.includes(authenticatedUserId)) {
+        profileViews.push(authenticatedUserId);
         
         await db.collection('users').updateOne(
           { id: profileOwnerId },
@@ -331,7 +396,7 @@ export const privacyController = {
 
       console.log('Profile view notification created:', {
         profileOwnerId,
-        viewerId,
+        viewerId: authenticatedUserId,
         viewerName: viewer.name,
         timestamp: new Date().toISOString()
       });
@@ -340,7 +405,7 @@ export const privacyController = {
         success: true,
         data: {
           profileOwnerId,
-          viewerId,
+          viewerId: authenticatedUserId,
           totalViews: profileViews.length
         },
         message: 'Profile view recorded successfully'

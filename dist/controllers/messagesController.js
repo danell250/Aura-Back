@@ -119,7 +119,7 @@ const messageAccessQuery = (actor, otherId, otherType) => {
 const resolveEntityTypeById = (id) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
     const [company, user] = yield Promise.all([
-        db.collection('companies').findOne({ id }, { projection: { id: 1 } }),
+        db.collection('companies').findOne({ id, legacyArchived: { $ne: true } }, { projection: { id: 1 } }),
         db.collection('users').findOne({ id }, { projection: { id: 1 } }),
     ]);
     if (company)
@@ -132,7 +132,7 @@ const resolvePeerType = (rawType, id) => __awaiter(void 0, void 0, void 0, funct
     const explicitType = rawType === 'company' || rawType === 'user' ? rawType : null;
     const db = (0, db_1.getDB)();
     if (explicitType === 'company') {
-        const company = yield db.collection('companies').findOne({ id }, { projection: { id: 1 } });
+        const company = yield db.collection('companies').findOne({ id, legacyArchived: { $ne: true } }, { projection: { id: 1 } });
         return company ? 'company' : null;
     }
     if (explicitType === 'user') {
@@ -481,7 +481,10 @@ exports.messagesController = {
             const [users, companies, actorDoc, threadDocs] = yield Promise.all([
                 userPeerIds.length > 0 ? db.collection('users').find({ id: { $in: userPeerIds } }).toArray() : Promise.resolve([]),
                 companyPeerIds.length > 0
-                    ? db.collection('companies').find({ id: { $in: companyPeerIds } }).toArray()
+                    ? db.collection('companies').find({
+                        id: { $in: companyPeerIds },
+                        legacyArchived: { $ne: true }
+                    }).toArray()
                     : Promise.resolve([]),
                 db.collection(actor.type === 'company' ? 'companies' : 'users').findOne({ id: actor.id }),
                 peerFilters.length > 0
@@ -504,8 +507,8 @@ exports.messagesController = {
                 const peerType = base.peerType;
                 const thread = threadByPeer.get(base.conversationKey);
                 const entity = peerType === 'company'
-                    ? companyById.get(peerId) || userById.get(peerId) || null
-                    : userById.get(peerId) || companyById.get(peerId) || null;
+                    ? companyById.get(peerId) || null
+                    : userById.get(peerId) || null;
                 if (!entity)
                     return null;
                 const normalized = thread || {

@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const multer_1 = __importDefault(require("multer"));
 const uploadController_1 = require("../controllers/uploadController");
+const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = express_1.default.Router();
 const ALLOWED_MIME_TYPES = [
     'image/jpeg',
@@ -25,5 +26,5 @@ const upload = (0, multer_1.default)({
         cb(null, true);
     }
 });
-router.post('/', upload.single('file'), uploadController_1.uploadFile);
+router.post('/', authMiddleware_1.requireAuth, upload.single('file'), uploadController_1.uploadFile);
 exports.default = router;

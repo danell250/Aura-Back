@@ -400,8 +400,19 @@ export const postsController = {
         {
           $lookup: {
             from: 'companies',
-            localField: 'author.id',
-            foreignField: 'id',
+            let: { authorId: '$author.id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$id', '$$authorId'] },
+                      { $ne: ['$legacyArchived', true] }
+                    ]
+                  }
+                }
+              }
+            ],
             as: 'authorCompanyDetails'
           }
         },
@@ -409,40 +420,26 @@ export const postsController = {
           $addFields: {
             authorDetails: {
               $cond: {
-                if: { $eq: ['$author.type', 'company'] },
+                if: {
+                  $or: [
+                    { $eq: ['$author.type', 'company'] },
+                    { $eq: ['$ownerType', 'company'] }
+                  ]
+                },
                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
-                else: {
-                  $cond: {
-                    if: { $eq: ['$author.type', 'user'] },
-                    then: { $arrayElemAt: ['$authorUserDetails', 0] },
-                    else: {
-                      $cond: {
-                        if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
-                        then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
-                        else: { $arrayElemAt: ['$authorUserDetails', 0] }
-                      }
-                    }
-                  }
-                }
+                else: { $arrayElemAt: ['$authorUserDetails', 0] }
               },
             },
             authorType: {
               $cond: {
-                if: { $eq: ['$author.type', 'company'] },
+                if: {
+                  $or: [
+                    { $eq: ['$author.type', 'company'] },
+                    { $eq: ['$ownerType', 'company'] }
+                  ]
+                },
                 then: 'company',
-                else: {
-                  $cond: {
-                    if: { $eq: ['$author.type', 'user'] },
-                    then: 'user',
-                    else: {
-                      $cond: {
-                        if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
-                        then: 'company',
-                        else: 'user'
-                      }
-                    }
-                  }
-                }
+                else: 'user'
               },
             }
           }
@@ -560,8 +557,19 @@ export const postsController = {
         {
           $lookup: {
             from: 'companies',
-            localField: 'author.id',
-            foreignField: 'id',
+            let: { authorId: '$author.id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$id', '$$authorId'] },
+                      { $ne: ['$legacyArchived', true] }
+                    ]
+                  }
+                }
+              }
+            ],
             as: 'authorCompanyDetails'
           }
         },
@@ -569,40 +577,26 @@ export const postsController = {
           $addFields: {
             authorDetails: {
               $cond: {
-                if: { $eq: ['$author.type', 'company'] },
+                if: {
+                  $or: [
+                    { $eq: ['$author.type', 'company'] },
+                    { $eq: ['$ownerType', 'company'] }
+                  ]
+                },
                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
-                else: {
-                  $cond: {
-                    if: { $eq: ['$author.type', 'user'] },
-                    then: { $arrayElemAt: ['$authorUserDetails', 0] },
-                    else: {
-                      $cond: {
-                        if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
-                        then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
-                        else: { $arrayElemAt: ['$authorUserDetails', 0] }
-                      }
-                    }
-                  }
-                }
+                else: { $arrayElemAt: ['$authorUserDetails', 0] }
               },
             },
             authorType: {
               $cond: {
-                if: { $eq: ['$author.type', 'company'] },
+                if: {
+                  $or: [
+                    { $eq: ['$author.type', 'company'] },
+                    { $eq: ['$ownerType', 'company'] }
+                  ]
+                },
                 then: 'company',
-                else: {
-                  $cond: {
-                    if: { $eq: ['$author.type', 'user'] },
-                    then: 'user',
-                    else: {
-                      $cond: {
-                        if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
-                        then: 'company',
-                        else: 'user'
-                      }
-                    }
-                  }
-                }
+                else: 'user'
               },
             }
           }
@@ -725,8 +719,19 @@ export const postsController = {
         {
           $lookup: {
             from: 'companies',
-            localField: 'author.id',
-            foreignField: 'id',
+            let: { authorId: '$author.id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$id', '$$authorId'] },
+                      { $ne: ['$legacyArchived', true] }
+                    ]
+                  }
+                }
+              }
+            ],
             as: 'authorCompanyDetails'
           }
         },
@@ -734,40 +739,26 @@ export const postsController = {
           $addFields: {
             authorDetails: {
               $cond: {
-                if: { $eq: ['$author.type', 'company'] },
+                if: {
+                  $or: [
+                    { $eq: ['$author.type', 'company'] },
+                    { $eq: ['$ownerType', 'company'] }
+                  ]
+                },
                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
-                else: {
-                  $cond: {
-                    if: { $eq: ['$author.type', 'user'] },
-                    then: { $arrayElemAt: ['$authorUserDetails', 0] },
-                    else: {
-                      $cond: {
-                        if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
-                        then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
-                        else: { $arrayElemAt: ['$authorUserDetails', 0] }
-                      }
-                    }
-                  }
-                }
+                else: { $arrayElemAt: ['$authorUserDetails', 0] }
               },
             },
             authorType: {
               $cond: {
-                if: { $eq: ['$author.type', 'company'] },
+                if: {
+                  $or: [
+                    { $eq: ['$author.type', 'company'] },
+                    { $eq: ['$ownerType', 'company'] }
+                  ]
+                },
                 then: 'company',
-                else: {
-                  $cond: {
-                    if: { $eq: ['$author.type', 'user'] },
-                    then: 'user',
-                    else: {
-                      $cond: {
-                        if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
-                        then: 'company',
-                        else: 'user'
-                      }
-                    }
-                  }
-                }
+                else: 'user'
               },
             }
           }
@@ -868,8 +859,19 @@ export const postsController = {
         {
           $lookup: {
             from: 'companies',
-            localField: 'author.id',
-            foreignField: 'id',
+            let: { authorId: '$author.id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$id', '$$authorId'] },
+                      { $ne: ['$legacyArchived', true] }
+                    ]
+                  }
+                }
+              }
+            ],
             as: 'authorCompanyDetails'
           }
         },
@@ -885,40 +887,26 @@ export const postsController = {
           $addFields: {
             authorDetails: {
               $cond: {
-                if: { $eq: ['$author.type', 'company'] },
+                if: {
+                  $or: [
+                    { $eq: ['$author.type', 'company'] },
+                    { $eq: ['$ownerType', 'company'] }
+                  ]
+                },
                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
-                else: {
-                  $cond: {
-                    if: { $eq: ['$author.type', 'user'] },
-                    then: { $arrayElemAt: ['$authorUserDetails', 0] },
-                    else: {
-                      $cond: {
-                        if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
-                        then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
-                        else: { $arrayElemAt: ['$authorUserDetails', 0] }
-                      }
-                    }
-                  }
-                }
+                else: { $arrayElemAt: ['$authorUserDetails', 0] }
               },
             },
             authorType: {
               $cond: {
-                if: { $eq: ['$author.type', 'company'] },
+                if: {
+                  $or: [
+                    { $eq: ['$author.type', 'company'] },
+                    { $eq: ['$ownerType', 'company'] }
+                  ]
+                },
                 then: 'company',
-                else: {
-                  $cond: {
-                    if: { $eq: ['$author.type', 'user'] },
-                    then: 'user',
-                    else: {
-                      $cond: {
-                        if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
-                        then: 'company',
-                        else: 'user'
-                      }
-                    }
-                  }
-                }
+                else: 'user'
               },
             },
             commentCount: { $size: '$fetchedComments' },

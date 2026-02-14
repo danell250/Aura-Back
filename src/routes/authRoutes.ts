@@ -892,7 +892,10 @@ router.post("/magic-link/verify", async (req: Request, res: Response) => {
           );
 
           // Get company name
-          const company = await db.collection('users').findOne({ id: invite.companyId });
+          const company = await db.collection('companies').findOne({
+            id: invite.companyId,
+            legacyArchived: { $ne: true }
+          });
           const companyName = company?.name || 'A Company';
 
           // Create notification so user sees it in their bell icon

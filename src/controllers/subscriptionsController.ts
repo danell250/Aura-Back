@@ -66,7 +66,14 @@ export const subscriptionsController = {
   // Get user subscriptions
   async getUserSubscriptions(req: Request, res: Response) {
     try {
+      const authenticatedUserId = (req as any).user?.id as string | undefined;
       const { userId } = req.params;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      if (authenticatedUserId !== userId) {
+        return res.status(403).json({ error: 'Forbidden', message: 'You can only view your own subscriptions' });
+      }
       const db = getDB();
       const subscriptions = await db.collection('subscriptions')
         .find({ userId })
@@ -83,16 +90,24 @@ export const subscriptionsController = {
   // Create subscription
   async createSubscription(req: Request, res: Response) {
     try {
+      const authenticatedUserId = (req as any).user?.id as string | undefined;
       const { userId, planId, planName, paypalSubscriptionId, amount } = req.body;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
       
-      if (!userId || !planId || !planName || !paypalSubscriptionId || !amount) {
+      if (typeof userId === 'string' && userId && userId !== authenticatedUserId) {
+        return res.status(403).json({ error: 'Forbidden', message: 'Invalid user context for subscription creation' });
+      }
+
+      if (!planId || !planName || !paypalSubscriptionId || !amount) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
       const db = getDB();
       const subscription: Subscription = {
         id: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        userId,
+        userId: authenticatedUserId,
         planId,
         planName,
         status: 'active',
@@ -113,11 +128,22 @@ export const subscriptionsController = {
   // Cancel subscription
   async cancelSubscription(req: Request, res: Response) {
     try {
+      const authenticatedUserId = (req as any).user?.id as string | undefined;
       const { subscriptionId } = req.params;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
       const db = getDB();
+      const subscription = await db.collection('subscriptions').findOne({ id: subscriptionId });
+      if (!subscription) {
+        return res.status(404).json({ error: 'Subscription not found' });
+      }
+      if (subscription.userId !== authenticatedUserId) {
+        return res.status(403).json({ error: 'Forbidden', message: 'You can only cancel your own subscriptions' });
+      }
 
       const result = await db.collection('subscriptions').updateOne(
-        { id: subscriptionId },
+        { id: subscriptionId, userId: authenticatedUserId },
         { 
           $set: { 
             status: 'cancelled',
@@ -125,13 +151,12 @@ export const subscriptionsController = {
           }
         }
       );
+      // In a real implementation, you would also call PayPal API to cancel the subscription
+      // const paypalResponse = await cancelPayPalSubscription(paypalSubscriptionId);
 
       if (result.matchedCount === 0) {
         return res.status(404).json({ error: 'Subscription not found' });
       }
-
-      // In a real implementation, you would also call PayPal API to cancel the subscription
-      // const paypalResponse = await cancelPayPalSubscription(paypalSubscriptionId);
 
       res.json({ message: 'Subscription cancelled successfully' });
     } catch (error) {
