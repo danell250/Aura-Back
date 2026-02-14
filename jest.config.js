@@ -1,0 +1,23 @@
+module.exports = {
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  testMatch: ['**/tests/**/*.test.ts'],
+  setupFilesAfterEnv: ['./tests/setup.ts'],
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/src/$1',
+  },
+  verbose: true,
+  forceExit: true,
+  clearMocks: true,
+  resetMocks: true,
+  restoreMocks: true,
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/src/$1',
+  },
+  transform: {
+    '^.+\\.(t|j)sx?$': 'ts-jest',
+  },
+  transformIgnorePatterns: [
+    '/node_modules/(?!(uuid)/)',
+  ],
+};

@@ -46,6 +46,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.app = void 0;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
@@ -170,6 +171,7 @@ passport_1.default.deserializeUser((id, done) => __awaiter(void 0, void 0, void 
     }
 }));
 const app = (0, express_1.default)();
+exports.app = app;
 const PORT = process.env.PORT || 5000;
 // Security & Optimization Middleware
 // Ensure uploads directory exists
@@ -1094,4 +1096,6 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
     // Don't exit immediately, log and continue
 });
-startServer();
+if (require.main === module) {
+    startServer();
+}

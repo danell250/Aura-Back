@@ -14,61 +14,38 @@ const Message_1 = require("../models/Message");
 const mongodb_1 = require("mongodb");
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
-const canActAsEntity = (authUserId, entityId) => __awaiter(void 0, void 0, void 0, function* () {
-    if (authUserId === entityId)
-        return true;
-    const db = (0, db_1.getDB)();
-    const membership = yield db.collection('company_members').findOne({ companyId: entityId, userId: authUserId });
-    if (membership)
-        return true;
-    const company = yield db.collection('companies').findOne({ id: entityId, ownerId: authUserId });
-    return !!company;
-});
+const identityUtils_1 = require("../utils/identityUtils");
 exports.messagesController = {
-    // GET /api/messages/conversations - Get all conversations for a user
+    // GET /api/messages/conversations - Get all conversations for an actor (personal or company)
     getConversations: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            const { userId, ownerType = 'user' } = req.query;
-            const resolvedOwnerId = String(userId || authUserId);
-            const resolvedOwnerType = String(ownerType || 'user');
-            if (resolvedOwnerType !== 'user' && resolvedOwnerType !== 'company') {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Invalid ownerType'
-                });
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: req.query.ownerType,
+                ownerId: req.query.userId
+            }, req.headers);
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized access to this identity' });
             }
-            if (!(yield canActAsEntity(authUserId, resolvedOwnerId))) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden'
-                });
-            }
-            if (!resolvedOwnerId) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'User ID is required'
-                });
-            }
+            const actorId = actor.id;
+            const ownerType = actor.type;
             if (!(0, db_1.isDBConnected)()) {
-                return res.json({
-                    success: true,
-                    data: []
-                });
+                return res.json({ success: true, data: [] });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const db = (0, db_1.getDB)();
-            // Get latest message for each conversation
+            // Get latest message for each conversation where actor is sender or receiver
             const conversations = yield messagesCollection.aggregate([
                 {
                     $match: {
                         $or: [
-                            { senderId: resolvedOwnerId },
-                            { receiverId: resolvedOwnerId }
+                            { senderId: actorId },
+                            { receiverId: actorId }
                         ]
                     }
                 },
@@ -76,7 +53,7 @@ exports.messagesController = {
                     $addFields: {
                         conversationWith: {
                             $cond: {
-                                if: { $eq: ['$senderId', resolvedOwnerId] },
+                                if: { $eq: ['$senderId', actorId] },
                                 then: '$receiverId',
                                 else: '$senderId'
                             }
@@ -95,7 +72,7 @@ exports.messagesController = {
                                 $cond: {
                                     if: {
                                         $and: [
-                                            { $eq: ['$receiverId', resolvedOwnerId] },
+                                            { $eq: ['$receiverId', actorId] },
                                             { $eq: ['$isRead', false] }
                                         ]
                                     },
@@ -143,8 +120,8 @@ exports.messagesController = {
                     $sort: { 'lastMessage.timestamp': -1 }
                 }
             ]).toArray();
-            const collectionName = resolvedOwnerType === 'company' ? 'companies' : 'users';
-            const doc = yield db.collection(collectionName).findOne({ id: resolvedOwnerId });
+            const collectionName = ownerType === 'company' ? 'companies' : 'users';
+            const doc = yield db.collection(collectionName).findOne({ id: actorId });
             const archivedChats = (doc === null || doc === void 0 ? void 0 : doc.archivedChats) || [];
             const conversationsWithArchive = conversations.map(conv => {
                 const otherUser = conv.otherEntity ? (0, userUtils_1.transformUser)(conv.otherEntity) : null;
@@ -163,40 +140,38 @@ exports.messagesController = {
             });
         }
     }),
-    // GET /api/messages/:userId - Get messages between current user and another user
+    // GET /api/messages/:otherId - Get messages between actor and another entity
     getMessages: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
+            const { userId: otherId } = req.params; // The other person/company
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const { page = 1, limit = 50, ownerType, currentUserId } = req.query;
+            if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            const { userId } = req.params;
-            const { currentUserId, page = 1, limit = 50 } = req.query;
-            const resolvedCurrentUserId = String(currentUserId || authUserId);
-            if (!resolvedCurrentUserId) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Current user ID is required'
-                });
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: ownerType,
+                ownerId: currentUserId
+            }, req.headers);
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized access to this identity' });
             }
-            if (!(yield canActAsEntity(authUserId, resolvedCurrentUserId))) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden'
-                });
-            }
+            const actorId = actor.id;
             if (!(0, db_1.isDBConnected)()) {
-                return res.json({
-                    success: true,
-                    data: []
-                });
+                return res.json({ success: true, data: [] });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const messages = yield messagesCollection.find({
-                $or: [
-                    { senderId: resolvedCurrentUserId, receiverId: userId },
-                    { senderId: userId, receiverId: resolvedCurrentUserId }
+                $and: [
+                    {
+                        $or: [
+                            { senderId: actorId, receiverId: otherId },
+                            { senderId: otherId, receiverId: actorId }
+                        ]
+                    },
+                    { deletedFor: { $ne: actorId } }
                 ]
             })
                 .sort({ timestamp: -1 })
@@ -204,10 +179,10 @@ exports.messagesController = {
                 .skip((Number(page) - 1) * Number(limit))
                 .toArray();
             const mappedMessages = messages.map((message) => (Object.assign(Object.assign({}, message), { id: message.id || (message._id ? String(message._id) : undefined) })));
-            // Mark messages as read
+            // Mark messages as read (only those sent by the other entity to the actor)
             yield messagesCollection.updateMany({
-                senderId: userId,
-                receiverId: resolvedCurrentUserId,
+                senderId: otherId,
+                receiverId: actorId,
                 isRead: false
             }, { $set: { isRead: true } });
             res.json({
@@ -227,21 +202,25 @@ exports.messagesController = {
     sendMessage: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
+            const { senderId: requestedSenderId, // Actor ID from client
+            ownerType, receiverId, text, messageType = 'text', mediaUrl, mediaKey, mediaMimeType, mediaSize, replyTo } = req.body;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            const { senderId, receiverId, text, messageType = 'text', mediaUrl, mediaKey, mediaMimeType, mediaSize, replyTo } = req.body;
-            if (!senderId || !receiverId || !text) {
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId: requestedSenderId
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized to send as this identity' });
+            }
+            const senderId = actor.id;
+            if (!receiverId || !text) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Sender ID, receiver ID, and text are required'
-                });
-            }
-            if (!(yield canActAsEntity(authUserId, senderId))) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden'
+                    message: 'Receiver ID and text are required'
                 });
             }
             if (!(0, db_1.isDBConnected)()) {
@@ -270,9 +249,15 @@ exports.messagesController = {
             const insertedMessage = yield messagesCollection.findOne({ _id: result.insertedId });
             const responseMessage = insertedMessage
                 ? Object.assign(Object.assign({}, insertedMessage), { id: insertedMessage._id ? String(insertedMessage._id) : undefined }) : null;
-            yield db.collection('users').updateOne({ id: receiverId }, { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } });
-            // Also try companies collection in case receiver is a company
-            yield db.collection('companies').updateOne({ id: receiverId }, { $pull: { archivedChats: senderId }, $set: { updatedAt: new Date().toISOString() } });
+            // Auto-unarchive for receiver
+            const unarchiveUpdate = {
+                $pull: { archivedChats: senderId },
+                $set: { updatedAt: new Date().toISOString() }
+            };
+            yield Promise.all([
+                db.collection('users').updateOne({ id: receiverId }, unarchiveUpdate),
+                db.collection('companies').updateOne({ id: receiverId }, unarchiveUpdate)
+            ]);
             res.status(201).json({
                 success: true,
                 data: responseMessage
@@ -290,43 +275,25 @@ exports.messagesController = {
     editMessage: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
-                return res.status(401).json({ success: false, message: 'Authentication required' });
-            }
             const { messageId } = req.params;
-            const { text, userId } = req.body;
-            if (!text || !userId) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Text and user ID are required'
-                });
-            }
-            if (!(yield canActAsEntity(authUserId, userId))) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden'
-                });
+            const { text, userId: requestedActorId } = req.body;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!text) {
+                return res.status(400).json({ success: false, message: 'Text is required' });
             }
             if (!(0, db_1.isDBConnected)()) {
-                return res.status(503).json({
-                    success: false,
-                    message: 'Messaging service is temporarily unavailable'
-                });
+                return res.status(503).json({ success: false, message: 'Service unavailable' });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const message = yield messagesCollection.findOne({ _id: new mongodb_1.ObjectId(messageId) });
             if (!message) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Message not found'
-                });
+                return res.status(404).json({ success: false, message: 'Message not found' });
             }
-            if (message.senderId !== userId) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'You can only edit your own messages'
-                });
+            // Authorization: Must be the sender and have access to that identity
+            const actorId = message.senderId;
+            const hasAccess = yield (0, identityUtils_1.validateIdentityAccess)(authenticatedUserId, actorId);
+            if (!hasAccess) {
+                return res.status(403).json({ success: false, message: 'Unauthorized to edit this message' });
             }
             const result = yield messagesCollection.findOneAndUpdate({ _id: new mongodb_1.ObjectId(messageId) }, {
                 $set: {
@@ -335,12 +302,6 @@ exports.messagesController = {
                     editedAt: new Date()
                 }
             }, { returnDocument: 'after' });
-            if (!result) {
-                return res.status(500).json({
-                    success: false,
-                    message: 'Failed to update message'
-                });
-            }
             res.json({
                 success: true,
                 data: result
@@ -358,43 +319,21 @@ exports.messagesController = {
     deleteMessage: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
-                return res.status(401).json({ success: false, message: 'Authentication required' });
-            }
             const { messageId } = req.params;
-            const { userId } = req.body;
-            if (!userId) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'User ID is required'
-                });
-            }
-            if (!(yield canActAsEntity(authUserId, userId))) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden'
-                });
-            }
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             if (!(0, db_1.isDBConnected)()) {
-                return res.status(503).json({
-                    success: false,
-                    message: 'Messaging service is temporarily unavailable'
-                });
+                return res.status(503).json({ success: false, message: 'Service unavailable' });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             const message = yield messagesCollection.findOne({ _id: new mongodb_1.ObjectId(messageId) });
             if (!message) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Message not found'
-                });
+                return res.status(404).json({ success: false, message: 'Message not found' });
             }
-            if (message.senderId !== userId) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'You can only delete your own messages'
-                });
+            // Authorization: Must be the sender and have access to that identity
+            const actorId = message.senderId;
+            const hasAccess = yield (0, identityUtils_1.validateIdentityAccess)(authenticatedUserId, actorId);
+            if (!hasAccess) {
+                return res.status(403).json({ success: false, message: 'Unauthorized to delete this message' });
             }
             yield messagesCollection.deleteOne({ _id: new mongodb_1.ObjectId(messageId) });
             res.json({
@@ -414,36 +353,36 @@ exports.messagesController = {
     deleteConversation: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const { userId: requestedActorId, ownerType, otherUserId } = req.body;
+            if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            const { userId, otherUserId } = req.body;
-            if (!userId || !otherUserId) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'userId and otherUserId are required'
-                });
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId: requestedActorId
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized' });
             }
-            if (!(yield canActAsEntity(authUserId, userId))) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden'
-                });
+            const actorId = actor.id;
+            if (!otherUserId) {
+                return res.status(400).json({ success: false, message: 'Other party is required' });
             }
             if (!(0, db_1.isDBConnected)()) {
-                return res.status(503).json({
-                    success: false,
-                    message: 'Messaging service is temporarily unavailable'
-                });
+                return res.status(503).json({ success: false, message: 'Service unavailable' });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
-            yield messagesCollection.deleteMany({
+            // IMPORTANT: In a "delete conversation" for one side, we usually just clear it for THEM
+            // but the current schema seems to delete the messages globally for both. 
+            // Following existing logic but with auth.
+            yield messagesCollection.updateMany({
                 $or: [
-                    { senderId: userId, receiverId: otherUserId },
-                    { senderId: otherUserId, receiverId: userId }
+                    { senderId: actorId, receiverId: otherUserId },
+                    { senderId: otherUserId, receiverId: actorId }
                 ]
-            });
+            }, { $addToSet: { deletedFor: actorId } });
             res.json({
                 success: true,
                 message: 'Conversation deleted successfully'
@@ -458,39 +397,36 @@ exports.messagesController = {
         }
     }),
     markAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
-            const { senderId, receiverId, userId, otherUserId, currentUserId } = req.body;
-            const authUser = req.user;
-            const bodySenderId = senderId || otherUserId;
-            const bodyReceiverId = receiverId || currentUserId || userId;
-            const querySenderId = req.query.senderId || req.query.otherUserId;
-            const queryReceiverId = req.query.receiverId ||
-                req.query.currentUserId ||
-                req.query.userId;
-            const resolvedReceiverId = bodyReceiverId || queryReceiverId || (authUser === null || authUser === void 0 ? void 0 : authUser.id);
-            const resolvedSenderId = bodySenderId || querySenderId;
-            if (!resolvedSenderId || !resolvedReceiverId) {
-                return res.json({
-                    success: true,
-                    message: 'No messages to mark as read'
-                });
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            if (!(authUser === null || authUser === void 0 ? void 0 : authUser.id) || !(yield canActAsEntity(authUser.id, resolvedReceiverId))) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden'
-                });
+            // Actor is the receiver of the messages being marked as read
+            const requestedActorId = req.body.receiverId || req.body.currentUserId || req.body.userId || req.query.receiverId || req.query.currentUserId || req.query.userId;
+            const ownerType = req.body.ownerType || req.query.ownerType;
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId: requestedActorId
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized' });
+            }
+            const actorId = actor.id;
+            // Other party is the sender of the messages
+            const otherId = req.body.senderId || req.body.otherUserId || req.query.senderId || req.query.otherUserId;
+            if (!otherId) {
+                return res.json({ success: true, message: 'Missing sender parameters' });
             }
             if (!(0, db_1.isDBConnected)()) {
-                return res.status(503).json({
-                    success: false,
-                    message: 'Messaging service is temporarily unavailable'
-                });
+                return res.status(503).json({ success: false, message: 'Service unavailable' });
             }
             const messagesCollection = (0, Message_1.getMessagesCollection)();
             yield messagesCollection.updateMany({
-                senderId: resolvedSenderId,
-                receiverId: resolvedReceiverId,
+                senderId: otherId,
+                receiverId: actorId,
                 isRead: false
             }, { $set: { isRead: true } });
             res.json({
@@ -509,31 +445,31 @@ exports.messagesController = {
     archiveConversation: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, message: 'Authentication required' });
             }
-            const { userId, otherUserId, archived } = req.body;
-            if (!userId || !otherUserId || typeof archived !== 'boolean') {
-                return res.status(400).json({
-                    success: false,
-                    message: 'userId, otherUserId and archived flag are required'
-                });
+            const { userId: requestedActorId, ownerType, otherUserId, archived } = req.body;
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId: requestedActorId
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized' });
             }
-            if (!(yield canActAsEntity(authUserId, userId))) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden'
-                });
+            const actorId = actor.id;
+            if (!otherUserId || typeof archived !== 'boolean') {
+                return res.status(400).json({ success: false, message: 'Invalid parameters' });
             }
             const db = (0, db_1.getDB)();
             const update = archived
                 ? { $addToSet: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } }
                 : { $pull: { archivedChats: otherUserId }, $set: { updatedAt: new Date().toISOString() } };
-            // Update in both collections to be safe, or we could pass ownerType from frontend
+            // Update in both collections to be safe
             yield Promise.all([
-                db.collection('users').updateOne({ id: userId }, update),
-                db.collection('companies').updateOne({ id: userId }, update)
+                db.collection('users').updateOne({ id: actorId }, update),
+                db.collection('companies').updateOne({ id: actorId }, update)
             ]);
             res.json({
                 success: true,
@@ -544,7 +480,7 @@ exports.messagesController = {
             console.error('Error archiving conversation:', error);
             res.status(500).json({
                 success: false,
-                message: 'Failed to update archive state for conversation'
+                message: 'Failed to update archive state'
             });
         }
     })

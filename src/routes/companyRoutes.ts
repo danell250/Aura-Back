@@ -10,11 +10,11 @@ import { Company } from '../types';
 const generateCompanyHandle = async (name: string): Promise<string> => {
   const db = getDB();
   const baseHandle = `@${name.toLowerCase().trim().replace(/[^a-z0-9]/g, '')}`;
-  
+
   // Try base handle first
   const existingUser = await db.collection('users').findOne({ handle: baseHandle });
   const existingCompany = await db.collection('companies').findOne({ handle: baseHandle });
-  
+
   if (!existingUser && !existingCompany) return baseHandle;
 
   // Append random numbers until unique
@@ -48,7 +48,7 @@ router.get('/me', requireAuth, async (req, res) => {
     }
 
     const companies: any[] = await db.collection('companies').find({ id: { $in: companyIds } }).toArray();
-    
+
     // Fallback for legacy companies not in 'companies' collection yet
     const legacyIds = companyIds.filter(id => !companies.some(c => c.id === id));
     for (const lid of legacyIds) {
@@ -67,7 +67,7 @@ router.get('/me', requireAuth, async (req, res) => {
         } as any);
       }
     }
-    
+
     // Merge role into company data
     const data = companies.map(c => {
       const membership = memberships.find(m => m.companyId === c.id);
@@ -115,14 +115,14 @@ router.post('/', requireAuth, async (req, res) => {
     const ownedCompaniesCount = await db.collection('companies').countDocuments({ ownerId: currentUser.id });
     const MAX_COMPANIES = 5;
     if (ownedCompaniesCount >= MAX_COMPANIES) {
-      return res.status(403).json({ 
-        success: false, 
-        error: `You have reached the maximum limit of ${MAX_COMPANIES} corporate identities.` 
+      return res.status(403).json({
+        success: false,
+        error: `You have reached the maximum limit of ${MAX_COMPANIES} corporate identities.`
       });
     }
 
     const companyId = `comp-${crypto.randomBytes(8).toString('hex')}`;
-    
+
     const newCompany = {
       id: companyId,
       name,
@@ -187,7 +187,7 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
     // Handle handle updates
     if (updates.handle) {
       const normalizedHandle = updates.handle.startsWith('@') ? updates.handle.toLowerCase() : `@${updates.handle.toLowerCase()}`;
-      
+
       // Validation: No spaces or special characters except @
       if (!/^@[a-z0-9_]+$/.test(normalizedHandle)) {
         return res.status(400).json({ success: false, error: 'Handle can only contain letters, numbers, and underscores' });
@@ -199,7 +199,7 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
 
       const existingUser = await db.collection('users').findOne({ handle: normalizedHandle });
       const existingCompany = await db.collection('companies').findOne({ handle: normalizedHandle, id: { $ne: companyId } });
-      
+
       if (existingUser || existingCompany) {
         return res.status(409).json({ success: false, error: 'Handle already taken' });
       }
@@ -215,17 +215,19 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
 
     // If it was a legacy company in users collection
     if (result.matchedCount === 0 && companyId === currentUser.id) {
-       await db.collection('users').updateOne(
-         { id: companyId },
-         { $set: {
-           companyName: updates.name,
-           companyWebsite: updates.website,
-           industry: updates.industry,
-           bio: updates.bio,
-           isVerified: updates.isVerified,
-           updatedAt: new Date().toISOString()
-         }}
-       );
+      await db.collection('users').updateOne(
+        { id: companyId },
+        {
+          $set: {
+            companyName: updates.name,
+            companyWebsite: updates.website,
+            industry: updates.industry,
+            bio: updates.bio,
+            isVerified: updates.isVerified,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
     }
 
     res.json({ success: true, message: 'Corporate identity updated successfully' });
@@ -255,9 +257,9 @@ router.get('/:id', requireAuth, async (req, res) => {
     });
 
     if (!membership && company.ownerId !== currentUser.id && id !== currentUser.id) {
-       // Check if this is a request for basic public info vs management info
-       // For now, restrict this route to members only as it's used in management views
-       return res.status(403).json({ success: false, error: 'You are not a member of this corporate identity' });
+      // Check if this is a request for basic public info vs management info
+      // For now, restrict this route to members only as it's used in management views
+      return res.status(403).json({ success: false, error: 'You are not a member of this corporate identity' });
     }
 
     res.json({ success: true, data: company });
@@ -298,7 +300,7 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
 
     // If the user already exists, send them a notification in the app
     const invitedUser = await db.collection('users').findOne({ email: email.toLowerCase().trim() });
-    
+
     const invite = {
       companyId,
       email: email.toLowerCase().trim(),
@@ -372,18 +374,6 @@ router.post('/invites/accept', requireAuth, async (req, res) => {
       return res.status(404).json({ success: false, error: 'Invalid, expired, or already processed invite' });
     }
 
-    const user = await db.collection('users').findOne({ id: currentUser.id });
-    if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found' });
-    }
-    const inviteEmail = String(invite.email || '').toLowerCase();
-    const userEmail = String(user.email || '').toLowerCase();
-    const emailMatch = !!inviteEmail && inviteEmail === userEmail;
-    const idMatch = !!invite.targetUserId && invite.targetUserId === user.id;
-    if (!emailMatch && !idMatch) {
-      return res.status(403).json({ success: false, error: 'This invite was not intended for you' });
-    }
-
     // Add to members
     await db.collection('company_members').updateOne(
       { companyId: invite.companyId, userId: currentUser.id },
@@ -402,13 +392,13 @@ router.post('/invites/accept', requireAuth, async (req, res) => {
     // Mark invite as accepted
     await db.collection('company_invites').updateOne(
       { _id: invite._id },
-      { 
-        $set: { 
+      {
+        $set: {
           status: 'accepted',
-          acceptedAt: new Date(), 
+          acceptedAt: new Date(),
           acceptedByUserId: currentUser.id,
           updatedAt: new Date()
-        } 
+        }
       }
     );
 
@@ -465,11 +455,11 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
 
     await db.collection('company_invites').updateOne(
       { _id: invite._id },
-      { 
-        $set: { 
+      {
+        $set: {
           expiresAt,
-          updatedAt: new Date() 
-        } 
+          updatedAt: new Date()
+        }
       }
     );
 
@@ -614,11 +604,11 @@ router.delete('/:companyId/invites/:inviteId', requireAuth, async (req, res) => 
 
     const result = await db.collection('company_invites').updateOne(
       query,
-      { 
-        $set: { 
+      {
+        $set: {
           status: 'cancelled',
-          updatedAt: new Date() 
-        } 
+          updatedAt: new Date()
+        }
       }
     );
 
@@ -641,12 +631,12 @@ router.post('/invites/:inviteId/accept', requireAuth, async (req, res) => {
     const { ObjectId } = require('mongodb');
 
     const db = getDB();
-    
-    let query: any = { 
+
+    let query: any = {
       status: 'pending',
       expiresAt: { $gt: new Date() }
     };
-    
+
     try {
       query._id = new ObjectId(inviteId);
     } catch (e) {
@@ -690,13 +680,13 @@ router.post('/invites/:inviteId/accept', requireAuth, async (req, res) => {
     // Mark invite as accepted
     await db.collection('company_invites').updateOne(
       { _id: invite._id },
-      { 
-        $set: { 
+      {
+        $set: {
           status: 'accepted',
-          acceptedAt: new Date(), 
+          acceptedAt: new Date(),
           acceptedByUserId: currentUser.id,
           updatedAt: new Date()
-        } 
+        }
       }
     );
 
@@ -721,11 +711,11 @@ router.post('/invites/:inviteId/decline', requireAuth, async (req, res) => {
     const { ObjectId } = require('mongodb');
 
     const db = getDB();
-    
-    let query: any = { 
+
+    let query: any = {
       status: 'pending'
     };
-    
+
     try {
       query._id = new ObjectId(inviteId);
     } catch (e) {
@@ -746,11 +736,11 @@ router.post('/invites/:inviteId/decline', requireAuth, async (req, res) => {
 
     await db.collection('company_invites').updateOne(
       { _id: invite._id },
-      { 
-        $set: { 
+      {
+        $set: {
           status: 'declined',
-          updatedAt: new Date() 
-        } 
+          updatedAt: new Date()
+        }
       }
     );
 

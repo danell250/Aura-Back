@@ -192,14 +192,16 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
         const result = yield db.collection('companies').updateOne({ id: companyId }, { $set: updates });
         // If it was a legacy company in users collection
         if (result.matchedCount === 0 && companyId === currentUser.id) {
-            yield db.collection('users').updateOne({ id: companyId }, { $set: {
+            yield db.collection('users').updateOne({ id: companyId }, {
+                $set: {
                     companyName: updates.name,
                     companyWebsite: updates.website,
                     industry: updates.industry,
                     bio: updates.bio,
                     isVerified: updates.isVerified,
                     updatedAt: new Date().toISOString()
-                } });
+                }
+            });
         }
         res.json({ success: true, message: 'Corporate identity updated successfully' });
     }
@@ -319,17 +321,6 @@ router.post('/invites/accept', authMiddleware_1.requireAuth, (req, res) => __awa
         });
         if (!invite) {
             return res.status(404).json({ success: false, error: 'Invalid, expired, or already processed invite' });
-        }
-        const user = yield db.collection('users').findOne({ id: currentUser.id });
-        if (!user) {
-            return res.status(404).json({ success: false, error: 'User not found' });
-        }
-        const inviteEmail = String(invite.email || '').toLowerCase();
-        const userEmail = String(user.email || '').toLowerCase();
-        const emailMatch = !!inviteEmail && inviteEmail === userEmail;
-        const idMatch = !!invite.targetUserId && invite.targetUserId === user.id;
-        if (!emailMatch && !idMatch) {
-            return res.status(403).json({ success: false, error: 'This invite was not intended for you' });
         }
         // Add to members
         yield db.collection('company_members').updateOne({ companyId: invite.companyId, userId: currentUser.id }, {

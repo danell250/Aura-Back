@@ -1161,4 +1161,8 @@ process.on('unhandledRejection', (reason, promise) => {
   // Don't exit immediately, log and continue
 });
 
-startServer();
+export { app };
+
+if (require.main === module) {
+  startServer();
+}

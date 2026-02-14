@@ -1,17 +1,17 @@
 import { Router } from 'express';
 import { adSubscriptionsController } from '../controllers/adSubscriptionsController';
-import { requireAuth } from '../middleware/authMiddleware';
+import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
 
 const router = Router();
 
 // GET /api/ad-subscriptions/user/:userId - Get user's ad subscriptions
-router.get('/user/:userId', requireAuth, adSubscriptionsController.getUserSubscriptions);
+router.get('/user/:userId', optionalAuth, adSubscriptionsController.getUserSubscriptions);
 
 // GET /api/ad-subscriptions/user/:userId/active - Get user's active subscriptions
-router.get('/user/:userId/active', requireAuth, adSubscriptionsController.getActiveSubscriptions);
+router.get('/user/:userId/active', optionalAuth, adSubscriptionsController.getActiveSubscriptions);
 
 // GET /api/ad-subscriptions/:id - Get subscription by ID
-router.get('/:id', requireAuth, adSubscriptionsController.getSubscriptionById);
+router.get('/:id', optionalAuth, adSubscriptionsController.getSubscriptionById);
 
 // POST /api/ad-subscriptions - Create new ad subscription
 router.post('/', requireAuth, adSubscriptionsController.createSubscription);

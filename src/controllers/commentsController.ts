@@ -30,16 +30,16 @@ export const commentsController = {
 
       // Extract unique author IDs to fetch latest profile data
       const authorIds = [...new Set(data.map((c: any) => c.author?.id).filter(Boolean))];
-      
+
       // Fetch latest user details to ensure avatars/names are up-to-date
       const authors = await db.collection(USERS_COLLECTION)
         .find({ id: { $in: authorIds } })
-        .project({ 
-          id: 1, firstName: 1, lastName: 1, name: 1, handle: 1, 
-          avatar: 1, avatarKey: 1, avatarType: 1, isVerified: 1 
+        .project({
+          id: 1, firstName: 1, lastName: 1, name: 1, handle: 1,
+          avatar: 1, avatarKey: 1, avatarType: 1, isVerified: 1
         })
         .toArray();
-      
+
       const authorMap = new Map(authors.map((u: any) => [u.id, u]));
 
       // Post-process to update author info and add userReactions
@@ -56,7 +56,7 @@ export const commentsController = {
       if (currentUserId) {
         data.forEach((comment: any) => {
           if (comment.reactionUsers) {
-            comment.userReactions = Object.keys(comment.reactionUsers).filter(emoji => 
+            comment.userReactions = Object.keys(comment.reactionUsers).filter(emoji =>
               Array.isArray(comment.reactionUsers[emoji]) && comment.reactionUsers[emoji].includes(currentUserId)
             );
           } else {
@@ -112,18 +112,8 @@ export const commentsController = {
     try {
       const { postId } = req.params;
       const { text, authorId, parentId, taggedUserIds, tempId } = req.body as { text: string; authorId: string; parentId?: string; taggedUserIds?: string[], tempId?: string };
-      const authUserId = (req as any).user?.id as string | undefined;
-
-      if (!authUserId) {
-        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
-      }
-
       if (!text || !authorId) {
         return res.status(400).json({ success: false, error: 'Missing required fields', message: 'text and authorId are required' });
-      }
-
-      if (authorId !== authUserId) {
-        return res.status(403).json({ success: false, error: 'Forbidden', message: 'authorId must match authenticated user' });
       }
 
       const db = getDB();
@@ -214,7 +204,7 @@ export const commentsController = {
           comment: newComment,
           tempId // Pass back the temporary ID for optimistic update reconciliation
         });
-        
+
         // Also emit post update to ensure counts are synced
         // We don't send the whole post, just the ID and updated count/metadata if needed
         // But since we have comment_added, frontend can increment count locally.
@@ -251,7 +241,7 @@ export const commentsController = {
 
       await db.collection(COMMENTS_COLLECTION).updateOne({ id }, { $set: updates });
       const updated = await db.collection(COMMENTS_COLLECTION).findOne({ id });
-      
+
       const io = req.app.get('io');
       if (io) {
         io.emit('comment_updated', {
@@ -284,7 +274,7 @@ export const commentsController = {
       }
 
       await db.collection(COMMENTS_COLLECTION).deleteOne({ id });
-      
+
       // Trigger live insights update for the post author
       try {
         const post = await db.collection('posts').findOne({ id: existing.postId });
@@ -294,7 +284,7 @@ export const commentsController = {
       } catch (e) {
         console.error('Error triggering insights update on comment delete:', e);
       }
-      
+
       const io = req.app.get('io');
       if (io) {
         io.emit('comment_deleted', {
@@ -315,13 +305,13 @@ export const commentsController = {
     try {
       const { id } = req.params;
       const { reaction, action: forceAction } = req.body as { reaction: string, action?: 'add' | 'remove' };
-      const userId = (req as any).user?.id as string | undefined;
+      const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
 
       if (!reaction) {
         return res.status(400).json({ success: false, error: 'Missing reaction' });
       }
       if (!userId) {
-        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
       }
 
       const db = getDB();
@@ -338,32 +328,32 @@ export const commentsController = {
       let shouldUpdate = true;
 
       if (forceAction) {
-         if (forceAction === 'add' && hasReacted) shouldUpdate = false;
-         if (forceAction === 'remove' && !hasReacted) shouldUpdate = false;
-         action = forceAction === 'add' ? 'added' : 'removed';
+        if (forceAction === 'add' && hasReacted) shouldUpdate = false;
+        if (forceAction === 'remove' && !hasReacted) shouldUpdate = false;
+        action = forceAction === 'add' ? 'added' : 'removed';
       } else {
-         action = hasReacted ? 'removed' : 'added';
+        action = hasReacted ? 'removed' : 'added';
       }
 
       if (shouldUpdate) {
         if (action === 'removed') {
-           // Remove reaction
-           await db.collection(COMMENTS_COLLECTION).updateOne(
-             { id },
-             {
-               $pull: { [`reactionUsers.${reaction}`]: userId },
-               $inc: { [`reactions.${reaction}`]: -1 }
-             } as any
-           );
+          // Remove reaction
+          await db.collection(COMMENTS_COLLECTION).updateOne(
+            { id },
+            {
+              $pull: { [`reactionUsers.${reaction}`]: userId },
+              $inc: { [`reactions.${reaction}`]: -1 }
+            }
+          );
         } else {
-           // Add reaction
-           await db.collection(COMMENTS_COLLECTION).updateOne(
-             { id },
-             {
-               $addToSet: { [`reactionUsers.${reaction}`]: userId },
-               $inc: { [`reactions.${reaction}`]: 1 }
-             } as any
-           );
+          // Add reaction
+          await db.collection(COMMENTS_COLLECTION).updateOne(
+            { id },
+            {
+              $addToSet: { [`reactionUsers.${reaction}`]: userId },
+              $inc: { [`reactions.${reaction}`]: 1 }
+            }
+          );
         }
       }
 
@@ -373,13 +363,13 @@ export const commentsController = {
         return res.status(500).json({ success: false, error: 'Failed to update reaction' });
       }
       const updatedComment = updatedCommentDoc as any;
-      
+
       if (updatedComment.author) {
         updatedComment.author = transformUser(updatedComment.author);
       }
 
       if (updatedComment.reactionUsers) {
-        updatedComment.userReactions = Object.keys(updatedComment.reactionUsers).filter(emoji => 
+        updatedComment.userReactions = Object.keys(updatedComment.reactionUsers).filter(emoji =>
           Array.isArray(updatedComment.reactionUsers[emoji]) && updatedComment.reactionUsers[emoji].includes(userId)
         );
       } else {

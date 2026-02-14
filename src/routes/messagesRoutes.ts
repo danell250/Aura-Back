@@ -4,28 +4,33 @@ import { requireAuth } from '../middleware/authMiddleware';
 
 const router = express.Router();
 
+// Apply requireAuth to all routes in this router
+router.use(requireAuth);
+
 // GET /api/messages/conversations - Get all conversations for a user
-router.get('/conversations', requireAuth, messagesController.getConversations);
+router.get('/conversations', messagesController.getConversations);
+// Alias for conversation-specific messages
+router.get('/conversation/:userId', messagesController.getMessages);
 
 // PUT /api/messages/mark-read - Mark messages as read
-router.put('/mark-read', requireAuth, messagesController.markAsRead);
+router.put('/mark-read', messagesController.markAsRead);
 
 // DELETE /api/messages/conversation - Delete all messages in a conversation
-router.delete('/conversation', requireAuth, messagesController.deleteConversation);
+router.delete('/conversation', messagesController.deleteConversation);
 
 // POST /api/messages/archive - Archive or unarchive a conversation
-router.post('/archive', requireAuth, messagesController.archiveConversation);
+router.post('/archive', messagesController.archiveConversation);
 
 // POST /api/messages - Send a new message
-router.post('/', requireAuth, messagesController.sendMessage);
+router.post('/', messagesController.sendMessage);
 
 // GET /api/messages/:userId - Get messages between current user and another user
-router.get('/:userId', requireAuth, messagesController.getMessages);
+router.get('/:userId', messagesController.getMessages);
 
 // PUT /api/messages/:messageId - Edit a message
-router.put('/:messageId', requireAuth, messagesController.editMessage);
+router.put('/:messageId', messagesController.editMessage);
 
 // DELETE /api/messages/:messageId - Delete a message
-router.delete('/:messageId', requireAuth, messagesController.deleteMessage);
+router.delete('/:messageId', messagesController.deleteMessage);
 
 export default router;

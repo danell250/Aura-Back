@@ -103,6 +103,10 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('posts').createIndex({ 'author.id': 1 });
         await db.collection('posts').createIndex({ id: 1 }, { unique: true });
         await db.collection('posts').createIndex({ timestamp: -1 });
+        await db.collection('posts').createIndex({ visibility: 1 });
+        await db.collection('posts').createIndex({ isTimeCapsule: 1, unlockDate: 1 });
+        await db.collection('posts').createIndex({ hashtags: 1 });
+        await db.collection('posts').createIndex({ energy: 1 });
         console.log("✅ Post collection indexes initialized");
       } catch (postIndexError) {
         console.warn("⚠️  Warning: Could not initialize post indexes:", postIndexError);

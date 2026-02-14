@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.notificationsController = exports.createNotificationInDB = void 0;
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
+const identityUtils_1 = require("../utils/identityUtils");
 const createNotificationInDB = (userId_1, type_1, fromUserId_1, message_1, postId_1, connectionId_1, meta_1, yearKey_1, ...args_1) => __awaiter(void 0, [userId_1, type_1, fromUserId_1, message_1, postId_1, connectionId_1, meta_1, yearKey_1, ...args_1], void 0, function* (userId, type, fromUserId, message, postId, connectionId, meta, yearKey, ownerType = 'user') {
     let db = null;
     if ((0, db_1.isDBConnected)()) {
@@ -103,26 +104,30 @@ const createNotificationInDB = (userId_1, type_1, fromUserId_1, message_1, postI
 });
 exports.createNotificationInDB = createNotificationInDB;
 exports.notificationsController = {
-    // GET /api/notifications - Get notifications for the current user
+    // GET /api/notifications - Get notifications for the current user or authorized company
     getMyNotifications: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
-            const currentUser = req.user;
-            if (!currentUser) {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, error: 'Unauthorized' });
             }
             const { page = 1, limit = 20, unreadOnly, ownerType = 'user', ownerId } = req.query;
-            const targetId = (ownerType === 'company' && ownerId) ? String(ownerId) : currentUser.id;
-            const collectionName = ownerType === 'company' ? 'companies' : 'users';
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: ownerType,
+                ownerId: ownerId
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, error: 'Unauthorized access to this identity' });
+            }
+            const targetId = actor.id;
+            const collectionName = actor.type === 'company' ? 'companies' : 'users';
             if (!(0, db_1.isDBConnected)()) {
                 return res.json({
                     success: true,
                     data: [],
-                    pagination: {
-                        page: Number(page),
-                        limit: Number(limit),
-                        total: 0,
-                        pages: 0
-                    },
+                    pagination: { page: Number(page), limit: Number(limit), total: 0, pages: 0 },
                     unreadCount: 0
                 });
             }
@@ -131,20 +136,16 @@ exports.notificationsController = {
             if (!doc) {
                 return res.status(404).json({
                     success: false,
-                    error: `${ownerType === 'company' ? 'Company' : 'User'} not found`
+                    error: `${actor.type === 'company' ? 'Company' : 'User'} not found`
                 });
             }
             let notifications = doc.notifications || [];
-            // Filter unread only if specified
             if (unreadOnly === 'true') {
                 notifications = notifications.filter((notif) => !notif.isRead);
             }
-            // Sort by timestamp (newest first)
             notifications.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-            // Pagination
             const startIndex = (Number(page) - 1) * Number(limit);
-            const endIndex = startIndex + Number(limit);
-            const paginatedNotifications = notifications.slice(startIndex, endIndex).map((notification) => {
+            const paginatedNotifications = notifications.slice(startIndex, startIndex + Number(limit)).map((notification) => {
                 if (notification.fromUser) {
                     notification.fromUser = (0, userUtils_1.transformUser)(notification.fromUser);
                 }
@@ -164,101 +165,51 @@ exports.notificationsController = {
         }
         catch (error) {
             console.error('Error fetching notifications:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to fetch notifications'
-            });
-        }
-    }),
-    // GET /api/notifications/user/:userId - Get notifications for a user
-    getNotificationsByUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            const { userId } = req.params;
-            const { page = 1, limit = 20, unreadOnly, ownerType = 'user' } = req.query;
-            const collectionName = ownerType === 'company' ? 'companies' : 'users';
-            if (!(0, db_1.isDBConnected)()) {
-                return res.json({
-                    success: true,
-                    data: [],
-                    pagination: {
-                        page: Number(page),
-                        limit: Number(limit),
-                        total: 0,
-                        pages: 0
-                    },
-                    unreadCount: 0
-                });
-            }
-            const db = (0, db_1.getDB)();
-            const doc = yield db.collection(collectionName).findOne({ id: userId });
-            if (!doc) {
-                return res.status(404).json({
-                    success: false,
-                    error: `${ownerType === 'company' ? 'Company' : 'User'} not found`
-                });
-            }
-            let notifications = doc.notifications || [];
-            // Filter unread only if specified
-            if (unreadOnly === 'true') {
-                notifications = notifications.filter((notif) => !notif.isRead);
-            }
-            // Sort by timestamp (newest first)
-            notifications.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-            // Pagination
-            const startIndex = (Number(page) - 1) * Number(limit);
-            const endIndex = startIndex + Number(limit);
-            const paginatedNotifications = notifications.slice(startIndex, endIndex).map((notification) => {
-                if (notification.fromUser) {
-                    notification.fromUser = (0, userUtils_1.transformUser)(notification.fromUser);
-                }
-                return notification;
-            });
-            res.json({
-                success: true,
-                data: paginatedNotifications,
-                pagination: {
-                    page: Number(page),
-                    limit: Number(limit),
-                    total: notifications.length,
-                    pages: Math.ceil(notifications.length / Number(limit))
-                },
-                unreadCount: (doc.notifications || []).filter((n) => !n.isRead).length
-            });
-        }
-        catch (error) {
-            console.error('Error fetching notifications:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to fetch notifications',
-                message: 'Internal server error'
-            });
+            res.status(500).json({ success: false, error: 'Failed to fetch notifications' });
         }
     }),
     // POST /api/notifications - Create new notification
     createNotification: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c;
         try {
-            const { userId, type, fromUserId, message, postId, connectionId, ownerType = 'user' } = req.body;
-            const db = (0, db_1.getDB)();
-            // Validate required fields
+            const { userId, type, fromUserId, message, postId, connectionId, ownerType = 'user', fromOwnerType } = req.body;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
             if (!userId || !type || !fromUserId || !message) {
-                return res.status(400).json({
+                return res.status(400).json({ success: false, error: 'Missing required fields' });
+            }
+            // Authorization: Only allow creating notifications if acting as fromUserId (user or company)
+            const senderOwnerType = req.body.fromOwnerType || 'user';
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: senderOwnerType,
+                ownerId: fromUserId
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, error: 'Unauthorized sender identity' });
+            }
+            const isAdmin = ((_b = req.user) === null || _b === void 0 ? void 0 : _b.role) === 'admin' || ((_c = req.user) === null || _c === void 0 ? void 0 : _c.isAdmin) === true;
+            if (!isAdmin && userId !== actor.id) {
+                return res.status(403).json({
                     success: false,
-                    error: 'Missing required fields',
-                    message: 'userId, type, fromUserId, and message are required'
+                    error: 'Forbidden',
+                    message: 'You can only create notifications for your own identity'
                 });
             }
-            // Fetch fromUser from database
-            const fromUserDoc = yield db.collection('users').findOne({ id: fromUserId });
-            const fromUser = fromUserDoc ? {
-                id: fromUserDoc.id,
-                firstName: fromUserDoc.firstName || '',
-                lastName: fromUserDoc.lastName || '',
-                name: fromUserDoc.name || `${fromUserDoc.firstName} ${fromUserDoc.lastName}`,
-                handle: fromUserDoc.handle,
-                avatar: fromUserDoc.avatar,
-                avatarKey: fromUserDoc.avatarKey,
-                avatarType: fromUserDoc.avatarType || 'image',
-                activeGlow: fromUserDoc.activeGlow
+            const db = (0, db_1.getDB)();
+            const senderCollection = actor.type === 'company' ? 'companies' : 'users';
+            const fromDoc = yield db.collection(senderCollection).findOne({ id: actor.id });
+            const fromUser = fromDoc ? {
+                id: fromDoc.id,
+                firstName: fromDoc.firstName || '',
+                lastName: fromDoc.lastName || '',
+                name: fromDoc.name || `${fromDoc.firstName || ''} ${fromDoc.lastName || ''}`.trim(),
+                handle: fromDoc.handle,
+                avatar: fromDoc.avatar,
+                avatarKey: fromDoc.avatarKey,
+                avatarType: fromDoc.avatarType || 'image',
+                activeGlow: fromDoc.activeGlow
             } : {
                 id: fromUserId,
                 firstName: 'User',
@@ -282,129 +233,126 @@ exports.notificationsController = {
                 ownerType
             };
             const collectionName = ownerType === 'company' ? 'companies' : 'users';
-            // Save to database
-            yield db.collection(collectionName).updateOne({ id: userId }, {
-                $push: { notifications: { $each: [newNotification], $position: 0 } }
-            });
-            // Transform fromUser for response
+            const targetDoc = yield db.collection(collectionName).findOne({ id: userId });
+            if (!targetDoc) {
+                return res.status(404).json({ success: false, error: 'Target identity not found' });
+            }
+            yield db.collection(collectionName).updateOne({ id: userId }, { $push: { notifications: { $each: [newNotification], $position: 0 } } });
             if (newNotification.fromUser) {
                 newNotification.fromUser = (0, userUtils_1.transformUser)(newNotification.fromUser);
             }
-            res.status(201).json({
-                success: true,
-                data: newNotification,
-                message: 'Notification created successfully'
-            });
+            res.status(201).json({ success: true, data: newNotification });
         }
         catch (error) {
             console.error('Error creating notification:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to create notification',
-                message: 'Internal server error'
-            });
+            res.status(500).json({ success: false, error: 'Failed to create notification' });
         }
     }),
     // PUT /api/notifications/:id/read - Mark notification as read
     markAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
+            const { ownerId, ownerType = 'user' } = req.body;
             const db = (0, db_1.getDB)();
-            // Try updating in users collection first
-            let result = yield db.collection('users').updateOne({ "notifications.id": id }, {
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, error: 'Unauthorized' });
+            }
+            const actorId = actor.id;
+            const collectionName = actor.type === 'company' ? 'companies' : 'users';
+            // Update notification only if it belongs to the authorized actor
+            const result = yield db.collection(collectionName).updateOne({ id: actorId, "notifications.id": id }, {
                 $set: {
                     "notifications.$.isRead": true,
                     "notifications.$.readAt": new Date(),
                     "notifications.$.updatedAt": new Date()
                 }
             });
-            // If not found, try companies collection
             if (result.matchedCount === 0) {
-                result = yield db.collection('companies').updateOne({ "notifications.id": id }, {
-                    $set: {
-                        "notifications.$.isRead": true,
-                        "notifications.$.readAt": new Date(),
-                        "notifications.$.updatedAt": new Date()
-                    }
-                });
+                return res.status(404).json({ success: false, error: 'Notification not found' });
             }
-            if (result.matchedCount === 0) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'Notification not found',
-                    message: `Notification with ID ${id} does not exist`
-                });
-            }
-            res.json({
-                success: true,
-                message: 'Notification marked as read'
-            });
+            res.json({ success: true, message: 'Notification marked as read' });
         }
         catch (error) {
             console.error('Error marking notification as read:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to mark notification as read',
-                message: 'Internal server error'
-            });
+            res.status(500).json({ success: false, error: 'Internal server error' });
         }
     }),
-    // PUT /api/notifications/user/:userId/read-all - Mark all notifications as read
+    // PUT /api/notifications/read-all - Mark all notifications as read
     markAllAsRead: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
-            const { userId } = req.params;
-            const { ownerType = 'user' } = req.query;
-            const collectionName = ownerType === 'company' ? 'companies' : 'users';
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
+            const { ownerId, ownerType = 'user' } = req.body;
             const db = (0, db_1.getDB)();
-            const doc = yield db.collection(collectionName).findOne({ id: userId });
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId
+            });
+            if (!actor) {
+                return res.status(403).json({ success: false, error: 'Unauthorized' });
+            }
+            const actorId = actor.id;
+            const collectionName = actor.type === 'company' ? 'companies' : 'users';
+            const doc = yield db.collection(collectionName).findOne({ id: actorId });
             if (!doc) {
-                return res.status(404).json({ success: false, error: `${ownerType === 'company' ? 'Company' : 'User'} not found` });
+                return res.status(404).json({ success: false, error: 'Identity not found' });
             }
             if (!doc.notifications || doc.notifications.length === 0) {
-                return res.json({ success: true, message: 'No notifications to mark as read' });
+                return res.json({ success: true, message: 'No notifications' });
             }
-            // Update all notifications in memory then save
             const updatedNotifications = doc.notifications.map((n) => (Object.assign(Object.assign({}, n), { isRead: true })));
-            yield db.collection(collectionName).updateOne({ id: userId }, { $set: { notifications: updatedNotifications } });
-            res.json({
-                success: true,
-                message: 'All notifications marked as read'
-            });
+            yield db.collection(collectionName).updateOne({ id: actorId }, { $set: { notifications: updatedNotifications } });
+            res.json({ success: true, message: 'All notifications marked as read' });
         }
         catch (error) {
             console.error('Error marking all notifications as read:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to mark all notifications as read',
-                message: 'Internal server error'
-            });
+            res.status(500).json({ success: false, error: 'Internal server error' });
         }
     }),
     // DELETE /api/notifications/:id - Delete notification
     deleteNotification: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
-            const db = (0, db_1.getDB)();
-            const result = yield db.collection('users').updateOne({ "notifications.id": id }, { $pull: { notifications: { id: id } } });
-            if (result.matchedCount === 0) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'Notification not found',
-                    message: `Notification with ID ${id} does not exist`
-                });
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
             }
-            res.json({
-                success: true,
-                message: 'Notification deleted successfully'
+            const { ownerId, ownerType = 'user' } = req.body;
+            const db = (0, db_1.getDB)();
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType,
+                ownerId
             });
+            if (!actor) {
+                return res.status(403).json({ success: false, error: 'Unauthorized' });
+            }
+            const actorId = actor.id;
+            const collectionName = actor.type === 'company' ? 'companies' : 'users';
+            const result = yield db.collection(collectionName).updateOne({ id: actorId, "notifications.id": id }, { $pull: { notifications: { id: id } } });
+            if (result.matchedCount === 0) {
+                return res.status(404).json({ success: false, error: 'Notification not found' });
+            }
+            res.json({ success: true, message: 'Notification deleted successfully' });
         }
         catch (error) {
             console.error('Error deleting notification:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to delete notification',
-                message: 'Internal server error'
-            });
+            res.status(500).json({ success: false, error: 'Internal server error' });
         }
     })
 };

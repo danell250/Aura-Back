@@ -15,19 +15,10 @@ const hashtagUtils_1 = require("../utils/hashtagUtils");
 const notificationsController_1 = require("./notificationsController");
 const s3Upload_1 = require("../utils/s3Upload");
 const userUtils_1 = require("../utils/userUtils");
+const identityUtils_1 = require("../utils/identityUtils");
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
-const canActAsEntity = (authUserId, entityId) => __awaiter(void 0, void 0, void 0, function* () {
-    if (authUserId === entityId)
-        return true;
-    const db = (0, db_1.getDB)();
-    const membership = yield db.collection('company_members').findOne({ companyId: entityId, userId: authUserId });
-    if (membership)
-        return true;
-    const company = yield db.collection('companies').findOne({ id: entityId, ownerId: authUserId });
-    return !!company;
-});
 const postSseClients = [];
 const broadcastPostViewUpdate = (payload) => {
     if (!postSseClients.length)
@@ -318,6 +309,7 @@ exports.postsController = {
             };
             const pipeline = [
                 { $match: query },
+                ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : []),
                 {
                     $lookup: {
                         from: USERS_COLLECTION,
@@ -367,6 +359,9 @@ exports.postsController = {
                 },
                 ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : [])
             ];
+            // Move privacy filtering match earlier if possible
+            // However, authorDetails.isPrivate depends on the lookup
+            // So we keep it here but the visibilityMatchStage above will filter out many posts already
             if (sort === 'trending') {
                 pipeline.push({
                     $addFields: {
@@ -444,6 +439,7 @@ exports.postsController = {
             // Get total count with privacy filtering
             const countPipeline = [
                 { $match: query },
+                ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : []),
                 {
                     $lookup: {
                         from: USERS_COLLECTION,
@@ -464,7 +460,6 @@ exports.postsController = {
                         ]
                     }
                 },
-                ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : []),
                 { $count: 'total' }
             ];
             const countResult = yield db.collection(POSTS_COLLECTION).aggregate(countPipeline).toArray();
@@ -716,29 +711,23 @@ exports.postsController = {
     createPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            const { content, mediaUrl, mediaType, mediaKey, mediaMimeType, mediaSize, mediaItems, energy, authorId, taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle, timezone, visibility, isSystemPost, systemType, ownerId, createdByUserId, id // Allow frontend to provide ID (e.g. for S3 key consistency)
+            const { content, mediaUrl, mediaType, mediaKey, mediaMimeType, mediaSize, mediaItems, energy, authorId: rawAuthorId, // Rename to rawAuthorId as we won't trust it
+            taggedUserIds, isTimeCapsule, unlockDate, timeCapsuleType, invitedUsers, timeCapsuleTitle, timezone, visibility, isSystemPost, systemType, ownerId, createdByUserId, id // Allow frontend to provide ID (e.g. for S3 key consistency)
              } = req.body;
-            if (!authorId) {
-                return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
             }
-            if (!(yield canActAsEntity(authUserId, authorId))) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'Forbidden',
-                    message: 'You cannot create posts for this identity'
-                });
+            // Resolve effective actor identity
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: req.body.ownerType,
+                ownerId: rawAuthorId
+            }, req.headers);
+            if (!actor) {
+                return res.status(403).json({ success: false, error: 'Forbidden', message: 'Unauthorized author identity' });
             }
-            if (ownerId && ownerId !== authorId) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid owner',
-                    message: 'ownerId must match authorId'
-                });
-            }
+            const authorId = actor.id;
+            const authorType = actor.type;
             // Handle media uploads
             const files = req.files;
             const uploadedMediaItems = [];
@@ -804,15 +793,9 @@ exports.postsController = {
                 return res.status(400).json({ success: false, error: 'Missing content or media', message: 'A post must include text or at least one media item' });
             }
             const db = (0, db_1.getDB)();
-            // Try to fetch full author from DB (could be user or company)
-            let authorRaw = yield db.collection(USERS_COLLECTION).findOne({ id: authorId });
-            let authorType = 'user';
-            if (!authorRaw) {
-                authorRaw = yield db.collection('companies').findOne({ id: authorId });
-                if (authorRaw) {
-                    authorType = 'company';
-                }
-            }
+            // Try to fetch full author from DB
+            const collectionName = authorType === 'company' ? 'companies' : USERS_COLLECTION;
+            const authorRaw = yield db.collection(collectionName).findOne({ id: authorId });
             const author = authorRaw ? (0, userUtils_1.transformUser)(authorRaw) : null;
             const authorEmbed = author ? {
                 id: author.id,
@@ -898,6 +881,7 @@ exports.postsController = {
     }),
     // PUT /api/posts/:id - Update post (author only)
     updatePost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
             const updates = req.body || {};
@@ -907,8 +891,15 @@ exports.postsController = {
                 return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
             }
             // Auth check: only author can update
-            const user = req.user;
-            if (!user || user.id !== post.author.id) {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerId: post.author.id,
+                ownerType: post.author.type
+            });
+            if (!actor || actor.id !== post.author.id) {
                 return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can update this post' });
             }
             // Prevent changing immutable fields
@@ -941,6 +932,7 @@ exports.postsController = {
     }),
     // DELETE /api/posts/:id - Delete post (author only)
     deletePost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
@@ -948,8 +940,15 @@ exports.postsController = {
             if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
             }
-            const user = req.user;
-            if (!user || user.id !== post.author.id) {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized' });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerId: post.author.id,
+                ownerType: post.author.type
+            });
+            if (!actor || actor.id !== post.author.id) {
                 return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can delete this post' });
             }
             yield db.collection(POSTS_COLLECTION).deleteOne({ id });
@@ -968,12 +967,12 @@ exports.postsController = {
         try {
             const { id } = req.params;
             const { reaction, action: forceAction } = req.body;
-            const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const userId = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id) || req.body.userId; // Prefer authenticated user
             if (!reaction) {
                 return res.status(400).json({ success: false, error: 'Missing reaction' });
             }
             if (!userId) {
-                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
             }
             const db = (0, db_1.getDB)();
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
@@ -1045,20 +1044,13 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/boost - Boost post and deduct credits server-side
     boostPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
+        var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
             const { id } = req.params;
             const { userId, credits } = req.body;
             const db = (0, db_1.getDB)();
             if (!userId) {
                 return res.status(400).json({ success: false, error: 'Missing userId' });
-            }
-            if (!(yield canActAsEntity(authUserId, userId))) {
-                return res.status(403).json({ success: false, error: 'Forbidden' });
             }
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
@@ -1110,7 +1102,7 @@ exports.postsController = {
                 }
                 try {
                     const appInstance = req.app;
-                    const authorId = ((_b = boostedDoc.author) === null || _b === void 0 ? void 0 : _b.id) || post.author.id;
+                    const authorId = ((_a = boostedDoc.author) === null || _a === void 0 ? void 0 : _a.id) || post.author.id;
                     if (authorId) {
                         yield (0, exports.emitAuthorInsightsUpdate)(appInstance, authorId);
                     }
@@ -1132,18 +1124,10 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/share - Share a post
     sharePost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
         try {
-            const authUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!authUserId) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
             const { id } = req.params;
             const { userId } = req.body;
             const db = (0, db_1.getDB)();
-            if (!userId || !(yield canActAsEntity(authUserId, userId))) {
-                return res.status(403).json({ success: false, error: 'Forbidden' });
-            }
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found' });

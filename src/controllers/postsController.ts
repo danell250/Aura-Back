@@ -6,19 +6,11 @@ import { uploadToS3 } from '../utils/s3Upload';
 import { transformUser } from '../utils/userUtils';
 import { AD_PLANS } from '../constants/adPlans';
 import { MediaItem, MediaItemMetrics } from '../types';
+import { validateIdentityAccess, resolveIdentityActor } from '../utils/identityUtils';
 
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
-
-const canActAsEntity = async (authUserId: string, entityId: string): Promise<boolean> => {
-  if (authUserId === entityId) return true;
-  const db = getDB();
-  const membership = await db.collection('company_members').findOne({ companyId: entityId, userId: authUserId });
-  if (membership) return true;
-  const company = await db.collection('companies').findOne({ id: entityId, ownerId: authUserId });
-  return !!company;
-};
 
 interface PostSseClient {
   id: string;
@@ -73,7 +65,7 @@ export const emitAuthorInsightsUpdate = async (app: any, authorId: string) => {
 
     // If we have access to the app and it has an 'io' instance, emit the update
     console.log(`📡 Emitting live analytics update to user: ${authorId} (Total views: ${agg?.totalViews ?? 0})`);
-    
+
     const result = io.to(authorId).emit('analytics_update', {
       userId: authorId,
       stats: {
@@ -231,7 +223,7 @@ export const postsController = {
           $match: {
             $or: [
               { 'authorDetails.isPrivate': { $ne: true } },
-              { 
+              {
                 'authorDetails.isPrivate': true,
                 'author.id': { $in: currentUserAcquaintances }
               },
@@ -255,7 +247,7 @@ export const postsController = {
       ];
 
       const posts = await db.collection(POSTS_COLLECTION).aggregate(pipeline).toArray();
-      
+
       const transformedPosts = posts.map((post: any) => {
         if (post.author) {
           post.author = {
@@ -350,6 +342,7 @@ export const postsController = {
 
       const pipeline: any[] = [
         { $match: query },
+        ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : []),
         {
           $lookup: {
             from: USERS_COLLECTION,
@@ -388,7 +381,7 @@ export const postsController = {
           $match: {
             $or: [
               { 'authorDetails.isPrivate': { $ne: true } },
-              { 
+              {
                 'authorDetails.isPrivate': true,
                 'author.id': { $in: currentUserAcquaintances }
               },
@@ -397,8 +390,12 @@ export const postsController = {
             ]
           }
         },
-        ...( !userId || userId !== currentUserId ? [visibilityMatchStage] : [] )
+        ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : [])
       ];
+
+      // Move privacy filtering match earlier if possible
+      // However, authorDetails.isPrivate depends on the lookup
+      // So we keep it here but the visibilityMatchStage above will filter out many posts already
 
       if (sort === 'trending') {
         pipeline.push(
@@ -494,6 +491,7 @@ export const postsController = {
       // Get total count with privacy filtering
       const countPipeline: any[] = [
         { $match: query },
+        ...(!userId || userId !== currentUserId ? [visibilityMatchStage] : []),
         {
           $lookup: {
             from: USERS_COLLECTION,
@@ -506,7 +504,7 @@ export const postsController = {
           $match: {
             $or: [
               { 'authorDetails.isPrivate': { $ne: true } },
-              { 
+              {
                 'authorDetails.isPrivate': true,
                 'author.id': { $in: currentUserAcquaintances }
               },
@@ -514,7 +512,6 @@ export const postsController = {
             ]
           }
         },
-        ...( !userId || userId !== currentUserId ? [visibilityMatchStage] : [] ),
         { $count: 'total' }
       ];
 
@@ -539,11 +536,11 @@ export const postsController = {
 
         if (currentUserId) {
           if (post.reactionUsers) {
-            post.userReactions = Object.keys(post.reactionUsers).filter(emoji => 
+            post.userReactions = Object.keys(post.reactionUsers).filter(emoji =>
               Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId)
             );
           } else {
-             post.userReactions = [];
+            post.userReactions = [];
           }
           // Optional: Remove reactionUsers from response to save bandwidth/privacy
           // delete post.reactionUsers; 
@@ -576,7 +573,7 @@ export const postsController = {
       const { id } = req.params;
       const db = getDB();
       const currentUserId = (req as any).user?.id;
-      
+
       const pipeline = [
         { $match: { id } },
         // Lookup author details to check privacy settings
@@ -624,13 +621,13 @@ export const postsController = {
       if (currentUserId !== post.author.id) {
         await db.collection(POSTS_COLLECTION).updateOne(
           { id },
-          { 
+          {
             $inc: { viewCount: 1 },
             $setOnInsert: { viewCount: 1 }
           }
         );
         post.viewCount = (post.viewCount || 0) + 1;
-        
+
         // Trigger insights update for author
         if (post.author.id) {
           emitAuthorInsightsUpdate(req.app, post.author.id);
@@ -643,7 +640,7 @@ export const postsController = {
         // Check if current user is an acquaintance of the author
         const currentUser = currentUserId ? await db.collection(USERS_COLLECTION).findOne({ id: currentUserId }) : null;
         const currentUserAcquaintances = currentUser?.acquaintances || [];
-        
+
         if (!currentUserAcquaintances.includes(post.author.id)) {
           return res.status(404).json({ success: false, error: 'Post not found', message: 'This post is private' });
         }
@@ -686,11 +683,11 @@ export const postsController = {
 
       if (currentUserId) {
         if (post.reactionUsers) {
-          post.userReactions = Object.keys(post.reactionUsers).filter(emoji => 
+          post.userReactions = Object.keys(post.reactionUsers).filter(emoji =>
             Array.isArray(post.reactionUsers[emoji]) && post.reactionUsers[emoji].includes(currentUserId)
           );
         } else {
-            post.userReactions = [];
+          post.userReactions = [];
         }
       }
 
@@ -704,12 +701,12 @@ export const postsController = {
         if (commentAuthorIds.size > 0) {
           const commentAuthors = await db.collection(USERS_COLLECTION)
             .find({ id: { $in: Array.from(commentAuthorIds) } })
-            .project({ 
-              id: 1, firstName: 1, lastName: 1, name: 1, handle: 1, 
-              avatar: 1, avatarKey: 1, avatarType: 1, isVerified: 1 
+            .project({
+              id: 1, firstName: 1, lastName: 1, name: 1, handle: 1,
+              avatar: 1, avatarKey: 1, avatarType: 1, isVerified: 1
             })
             .toArray();
-          
+
           const commentAuthorMap = new Map(commentAuthors.map((u: any) => [u.id, u]));
 
           post.comments.forEach((c: any) => {
@@ -719,15 +716,15 @@ export const postsController = {
             } else if (c.author) {
               c.author = transformUser(c.author);
             }
-            
+
             if (currentUserId) {
-               if (c.reactionUsers) {
-                 c.userReactions = Object.keys(c.reactionUsers).filter(emoji => 
-                   Array.isArray(c.reactionUsers[emoji]) && c.reactionUsers[emoji].includes(currentUserId)
-                 );
-               } else {
-                 c.userReactions = [];
-               }
+              if (c.reactionUsers) {
+                c.userReactions = Object.keys(c.reactionUsers).filter(emoji =>
+                  Array.isArray(c.reactionUsers[emoji]) && c.reactionUsers[emoji].includes(currentUserId)
+                );
+              } else {
+                c.userReactions = [];
+              }
             }
           });
         }
@@ -743,7 +740,7 @@ export const postsController = {
   incrementPostViews: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      
+
       if (!isDBConnected()) {
         return res.json({
           success: true,
@@ -767,9 +764,9 @@ export const postsController = {
       if (!viewerId || viewerId !== authorId) {
         const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
           { id },
-          { 
+          {
             $inc: { viewCount: 1 },
-            $setOnInsert: { viewCount: 1 } 
+            $setOnInsert: { viewCount: 1 }
           },
           { returnDocument: 'after' }
         );
@@ -806,21 +803,16 @@ export const postsController = {
   // POST /api/posts - Create new post
   createPost: async (req: Request, res: Response) => {
     try {
-      const authUserId = (req as any).user?.id as string | undefined;
-      if (!authUserId) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
-      }
-
-      const { 
-        content, 
-        mediaUrl, 
+      const {
+        content,
+        mediaUrl,
         mediaType,
         mediaKey,
         mediaMimeType,
         mediaSize,
         mediaItems,
-        energy, 
-        authorId,
+        energy,
+        authorId: rawAuthorId, // Rename to rawAuthorId as we won't trust it
         taggedUserIds,
         isTimeCapsule,
         unlockDate,
@@ -832,29 +824,27 @@ export const postsController = {
         isSystemPost,
         systemType,
         ownerId,
-          createdByUserId,
-          id // Allow frontend to provide ID (e.g. for S3 key consistency)
-        } = req.body;
-      
-      if (!authorId) {
-        return res.status(400).json({ success: false, error: 'Missing required fields', message: 'authorId is required' });
+        createdByUserId,
+        id // Allow frontend to provide ID (e.g. for S3 key consistency)
+      } = req.body;
+
+      const authenticatedUserId = (req as any).user?.id;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
       }
 
-      if (!(await canActAsEntity(authUserId, authorId))) {
-        return res.status(403).json({
-          success: false,
-          error: 'Forbidden',
-          message: 'You cannot create posts for this identity'
-        });
+      // Resolve effective actor identity
+      const actor = await resolveIdentityActor(authenticatedUserId, {
+        ownerType: req.body.ownerType as string,
+        ownerId: rawAuthorId as string
+      }, req.headers);
+
+      if (!actor) {
+        return res.status(403).json({ success: false, error: 'Forbidden', message: 'Unauthorized author identity' });
       }
 
-      if (ownerId && ownerId !== authorId) {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid owner',
-          message: 'ownerId must match authorId'
-        });
-      }
+      const authorId = actor.id;
+      const authorType = actor.type;
 
       // Handle media uploads
       const files = req.files as Express.Multer.File[];
@@ -863,18 +853,18 @@ export const postsController = {
       if (files && files.length > 0) {
         for (const file of files) {
           const sanitize = (name: string) => name.replace(/[^a-zA-Z0-9.-]/g, '_');
-            const path = `${authorId}/${Date.now()}-${sanitize(file.originalname)}`;
-            
-            const url = await uploadToS3(
-              'media',
-              path,
-              file.buffer,
-              file.mimetype
-            );
-        
-            const type = file.mimetype.startsWith('video/') ? 'video' : 'image';
-          uploadedMediaItems.push({ 
-            url, 
+          const path = `${authorId}/${Date.now()}-${sanitize(file.originalname)}`;
+
+          const url = await uploadToS3(
+            'media',
+            path,
+            file.buffer,
+            file.mimetype
+          );
+
+          const type = file.mimetype.startsWith('video/') ? 'video' : 'image';
+          uploadedMediaItems.push({
+            url,
             type,
             key: path,
             mimeType: file.mimetype,
@@ -898,7 +888,7 @@ export const postsController = {
       }
 
       const mergedItems = [...(parsedMediaItems || []), ...uploadedMediaItems];
-      
+
       // Enhance media items with metrics and order
       const finalMediaItems: MediaItem[] = mergedItems.map((item, index) => ({
         // Strong rule: use mediaKey as id if available, otherwise create one
@@ -917,11 +907,11 @@ export const postsController = {
           dwellMs: 0
         }
       }));
-      
+
       // Determine primary mediaUrl/Type if not set
       let finalMediaUrl = mediaUrl;
       let finalMediaType = mediaType;
-      
+
       if (finalMediaItems.length > 0 && !finalMediaUrl) {
         finalMediaUrl = finalMediaItems[0].url;
         finalMediaType = finalMediaItems[0].type;
@@ -934,19 +924,12 @@ export const postsController = {
       }
 
       const db = getDB();
-      // Try to fetch full author from DB (could be user or company)
-      let authorRaw = await db.collection(USERS_COLLECTION).findOne({ id: authorId });
-      let authorType: 'user' | 'company' = 'user';
-
-      if (!authorRaw) {
-        authorRaw = await db.collection('companies').findOne({ id: authorId });
-        if (authorRaw) {
-          authorType = 'company';
-        }
-      }
+      // Try to fetch full author from DB
+      const collectionName = authorType === 'company' ? 'companies' : USERS_COLLECTION;
+      const authorRaw = await db.collection(collectionName).findOne({ id: authorId });
 
       const author = authorRaw ? transformUser(authorRaw) : null;
-      
+
       const authorEmbed = author ? {
         id: author.id,
         firstName: authorType === 'user' ? author.firstName : author.name,
@@ -975,7 +958,7 @@ export const postsController = {
       const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];
       // Use provided ID if available, otherwise generate one
       const postId = id || (isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`);
-      
+
       const currentYear = new Date().getFullYear();
 
       const newPost = {
@@ -1063,7 +1046,7 @@ export const postsController = {
       if (io) {
         const isPublic = !visibility || visibility === 'public';
         const isLockedTimeCapsule = isTimeCapsule && unlockDate && new Date(unlockDate) > new Date();
-        
+
         if (isPublic && !isLockedTimeCapsule) {
           io.emit('new_post', newPost);
         } else if (visibility === 'acquaintances') {
@@ -1075,13 +1058,13 @@ export const postsController = {
         emitAuthorInsightsUpdate(req.app, authorEmbed.id);
       }
 
-      res.status(201).json({ 
-        success: true, 
+      res.status(201).json({
+        success: true,
         data: {
           ...newPost,
           type: 'post'
-        }, 
-        message: 'Post created successfully' 
+        },
+        message: 'Post created successfully'
       });
     } catch (error) {
       console.error('Error creating post:', error);
@@ -1102,8 +1085,17 @@ export const postsController = {
       }
 
       // Auth check: only author can update
-      const user = (req as any).user;
-      if (!user || user.id !== post.author.id) {
+      const authenticatedUserId = (req as any).user?.id;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const actor = await resolveIdentityActor(authenticatedUserId, {
+        ownerId: post.author.id,
+        ownerType: post.author.type
+      });
+
+      if (!actor || actor.id !== post.author.id) {
         return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can update this post' });
       }
 
@@ -1134,13 +1126,13 @@ export const postsController = {
       // Trigger live insights update for the author
       emitAuthorInsightsUpdate(req.app, post.author.id);
 
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         data: {
           ...updatedDoc,
           type: 'post'
-        }, 
-        message: 'Post updated successfully' 
+        },
+        message: 'Post updated successfully'
       });
     } catch (error) {
       console.error('Error updating post:', error);
@@ -1159,13 +1151,22 @@ export const postsController = {
         return res.status(404).json({ success: false, error: 'Post not found', message: `Post with ID ${id} does not exist` });
       }
 
-      const user = (req as any).user;
-      if (!user || user.id !== post.author.id) {
+      const authenticatedUserId = (req as any).user?.id;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const actor = await resolveIdentityActor(authenticatedUserId, {
+        ownerId: post.author.id,
+        ownerType: post.author.type
+      });
+
+      if (!actor || actor.id !== post.author.id) {
         return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can delete this post' });
       }
 
       await db.collection(POSTS_COLLECTION).deleteOne({ id });
-      
+
       // Trigger live insights update for the author
       emitAuthorInsightsUpdate(req.app, post.author.id);
 
@@ -1181,13 +1182,13 @@ export const postsController = {
     try {
       const { id } = req.params;
       const { reaction, action: forceAction } = req.body;
-      const userId = (req as any).user?.id as string | undefined;
+      const userId = (req as any).user?.id || req.body.userId; // Prefer authenticated user
 
       if (!reaction) {
         return res.status(400).json({ success: false, error: 'Missing reaction' });
       }
       if (!userId) {
-        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'User ID required' });
       }
 
       const db = getDB();
@@ -1204,32 +1205,32 @@ export const postsController = {
       let shouldUpdate = true;
 
       if (forceAction) {
-         if (forceAction === 'add' && hasReacted) shouldUpdate = false;
-         if (forceAction === 'remove' && !hasReacted) shouldUpdate = false;
-         action = forceAction === 'add' ? 'added' : 'removed';
+        if (forceAction === 'add' && hasReacted) shouldUpdate = false;
+        if (forceAction === 'remove' && !hasReacted) shouldUpdate = false;
+        action = forceAction === 'add' ? 'added' : 'removed';
       } else {
-         action = hasReacted ? 'removed' : 'added';
+        action = hasReacted ? 'removed' : 'added';
       }
 
       if (shouldUpdate) {
         if (action === 'removed') {
-           // Remove reaction
-           await db.collection(POSTS_COLLECTION).updateOne(
-             { id },
-             {
-               $pull: { [`reactionUsers.${reaction}`]: userId },
-               $inc: { [`reactions.${reaction}`]: -1 }
-             } as any
-           );
+          // Remove reaction
+          await db.collection(POSTS_COLLECTION).updateOne(
+            { id },
+            {
+              $pull: { [`reactionUsers.${reaction}`]: userId },
+              $inc: { [`reactions.${reaction}`]: -1 }
+            }
+          );
         } else {
-           // Add reaction
-           await db.collection(POSTS_COLLECTION).updateOne(
-             { id },
-             {
-               $addToSet: { [`reactionUsers.${reaction}`]: userId },
-               $inc: { [`reactions.${reaction}`]: 1 }
-             } as any
-           );
+          // Add reaction
+          await db.collection(POSTS_COLLECTION).updateOne(
+            { id },
+            {
+              $addToSet: { [`reactionUsers.${reaction}`]: userId },
+              $inc: { [`reactions.${reaction}`]: 1 }
+            }
+          );
         }
       }
 
@@ -1251,7 +1252,7 @@ export const postsController = {
       }
       const updatedPost = updatedPostDoc as any;
       if (updatedPost.reactionUsers) {
-        updatedPost.userReactions = Object.keys(updatedPost.reactionUsers).filter(emoji => 
+        updatedPost.userReactions = Object.keys(updatedPost.reactionUsers).filter(emoji =>
           Array.isArray(updatedPost.reactionUsers[emoji]) && updatedPost.reactionUsers[emoji].includes(userId)
         );
       } else {
@@ -1278,21 +1279,12 @@ export const postsController = {
   // POST /api/posts/:id/boost - Boost post and deduct credits server-side
   boostPost: async (req: Request, res: Response) => {
     try {
-      const authUserId = (req as any).user?.id as string | undefined;
-      if (!authUserId) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
-      }
-
       const { id } = req.params;
       const { userId, credits } = req.body as { userId: string; credits?: number | string };
       const db = getDB();
 
       if (!userId) {
         return res.status(400).json({ success: false, error: 'Missing userId' });
-      }
-
-      if (!(await canActAsEntity(authUserId, userId))) {
-        return res.status(403).json({ success: false, error: 'Forbidden' });
       }
 
       const post = await db.collection(POSTS_COLLECTION).findOne({ id });
@@ -1316,7 +1308,7 @@ export const postsController = {
       const newCredits = currentCredits - creditsToSpend;
       const creditUpdateResult = await db.collection(USERS_COLLECTION).updateOne(
         { id: userId },
-        { 
+        {
           $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() },
           $inc: { auraCreditsSpent: creditsToSpend }
         }
@@ -1391,18 +1383,9 @@ export const postsController = {
   // POST /api/posts/:id/share - Share a post
   sharePost: async (req: Request, res: Response) => {
     try {
-      const authUserId = (req as any).user?.id as string | undefined;
-      if (!authUserId) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
-      }
-
       const { id } = req.params;
       const { userId } = req.body;
       const db = getDB();
-
-      if (!userId || !(await canActAsEntity(authUserId, userId))) {
-        return res.status(403).json({ success: false, error: 'Forbidden' });
-      }
 
       const post = await db.collection(POSTS_COLLECTION).findOne({ id });
       if (!post) {
@@ -1432,7 +1415,7 @@ export const postsController = {
       res.status(500).json({ success: false, error: 'Failed to share post', message: 'Internal server error' });
     }
   },
-  
+
   // POST /api/posts/:id/report - Report a post
   reportPost: async (req: Request, res: Response) => {
     try {
@@ -1440,19 +1423,19 @@ export const postsController = {
       const { reason, notes } = req.body as { reason: string; notes?: string };
       const db = getDB();
       const reporter = (req as any).user;
-      
+
       if (!reporter || !reporter.id) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
       }
       if (!reason) {
         return res.status(400).json({ success: false, error: 'Missing reason' });
       }
-      
+
       const post = await db.collection(POSTS_COLLECTION).findOne({ id });
       if (!post) {
         return res.status(404).json({ success: false, error: 'Post not found' });
       }
-      
+
       const reportDoc = {
         id: `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         type: 'post',
@@ -1463,9 +1446,9 @@ export const postsController = {
         createdAt: new Date().toISOString(),
         status: 'open'
       };
-      
+
       await db.collection('reports').insertOne(reportDoc);
-      
+
       const toEmail = 'danelloosthuizen3@gmail.com';
       const subject = `Aura Post Report: ${post.author?.name || post.author?.handle || id}`;
       const body = [
@@ -1478,7 +1461,7 @@ export const postsController = {
         `Report ID: ${reportDoc.id}`,
         `Content: ${(post.content || '').slice(0, 300)}`
       ].join('\n');
-      
+
       await db.collection('email_outbox').insertOne({
         to: toEmail,
         subject,
@@ -1486,7 +1469,7 @@ export const postsController = {
         createdAt: new Date().toISOString(),
         status: 'pending'
       });
-      
+
       res.json({ success: true, data: reportDoc, message: 'Post reported successfully' });
     } catch (error) {
       console.error('Error reporting post:', error);
@@ -1500,7 +1483,7 @@ export const postsController = {
       const { limit = 10, hours = 24 } = req.query as Record<string, any>;
       const db = getDB();
       const limitNum = Math.min(parseInt(String(limit), 10) || 10, 100);
-      
+
       const getPipeline = (since: number) => [
         { $match: { timestamp: { $gte: since } } },
         { $unwind: '$hashtags' },
@@ -1535,11 +1518,11 @@ export const postsController = {
         windowUsed = 'all_time';
       }
 
-      res.json({ 
-        success: true, 
-        data: tags, 
+      res.json({
+        success: true,
+        data: tags,
         message: 'Trending hashtags retrieved successfully',
-        meta: { windowUsed } 
+        meta: { windowUsed }
       });
     } catch (error) {
       console.error('Error fetching trending hashtags:', error);
@@ -1552,12 +1535,12 @@ export const postsController = {
     try {
       const { id } = req.params;
       let { mediaId } = req.params;
-      
+
       // Handle wildcard parameter which might be an array in Express 5
       const normalizedMediaId = Array.isArray(mediaId) ? mediaId.join('/') : mediaId;
-      
+
       const { metric, value } = req.body; // metric: 'views' | 'clicks' | 'saves' | 'dwellMs'
-      
+
       if (!['views', 'clicks', 'saves', 'dwellMs'].includes(metric)) {
         return res.status(400).json({ success: false, error: 'Invalid metric' });
       }
@@ -1566,7 +1549,7 @@ export const postsController = {
       const updateField = `mediaItems.$[elem].metrics.${metric}`;
       // For dwellMs, we increment by the value provided. For others, we increment by 1.
       const incrementValue = metric === 'dwellMs' ? (Number(value) || 0) : 1;
-      
+
       // Prepare update object
       const updateDoc: any = {
         $inc: {
@@ -1608,7 +1591,7 @@ export const postsController = {
     try {
       const { id } = req.params;
       const db = getDB();
-      
+
       const post = await db.collection(POSTS_COLLECTION).findOne({ id });
       if (!post) {
         return res.status(404).json({ success: false, error: 'Post not found' });
@@ -1619,18 +1602,18 @@ export const postsController = {
       let totalViews = post.metrics?.totalViews || post.viewCount || 0;
       let totalClicks = post.metrics?.totalClicks || 0;
       let totalSaves = post.metrics?.totalSaves || 0;
-      
+
       // If metrics are missing on post level (legacy), aggregate from items
       if (!post.metrics && mediaItems.length > 0) {
         totalViews = 0; // Reset to recalculate from items if metrics obj missing
         totalClicks = 0;
         totalSaves = 0;
         mediaItems.forEach((item: any) => {
-           if (item.metrics) {
-             totalViews += item.metrics.views || 0;
-             totalClicks += item.metrics.clicks || 0;
-             totalSaves += item.metrics.saves || 0;
-           }
+          if (item.metrics) {
+            totalViews += item.metrics.views || 0;
+            totalClicks += item.metrics.clicks || 0;
+            totalSaves += item.metrics.saves || 0;
+          }
         });
         // Fallback to viewCount if items have no data yet
         if (totalViews === 0 && post.viewCount) totalViews = post.viewCount;
@@ -1641,7 +1624,7 @@ export const postsController = {
         const clicks = item.metrics?.clicks || 0;
         const saves = item.metrics?.saves || 0;
         const ctr = views > 0 ? (clicks / views) * 100 : 0;
-        
+
         return {
           id: item.id,
           order: item.order,
@@ -1660,9 +1643,9 @@ export const postsController = {
       let bestItemId = null;
       if (items.length > 0) {
         const sorted = [...items].sort((a, b) => {
-             const scoreA = (a.clicks * 10) + a.views;
-             const scoreB = (b.clicks * 10) + b.views;
-             return scoreB - scoreA;
+          const scoreA = (a.clicks * 10) + a.views;
+          const scoreB = (b.clicks * 10) + b.views;
+          return scoreB - scoreA;
         });
         bestItemId = sorted[0].id;
       }

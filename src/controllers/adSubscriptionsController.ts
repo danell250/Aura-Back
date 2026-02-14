@@ -75,19 +75,19 @@ export async function ensureCurrentPeriod(db: any, subscription: any) {
 
   // Use findOneAndUpdate for atomicity - only update if period hasn't been reset by another request
   const updated = await db.collection('adSubscriptions').findOneAndUpdate(
-    { 
+    {
       id: subscription.id,
       // Conditional check to prevent race conditions
-      periodEnd: subscription.periodEnd 
+      periodEnd: subscription.periodEnd
     },
-    { 
-      $set: { 
-        adsUsed: 0, 
+    {
+      $set: {
+        adsUsed: 0,
         impressionsUsed: 0,
-        periodStart, 
-        periodEnd, 
-        updatedAt: now 
-      } 
+        periodStart,
+        periodEnd,
+        updatedAt: now
+      }
     },
     { returnDocument: 'after' }
   );
@@ -98,45 +98,26 @@ export async function ensureCurrentPeriod(db: any, subscription: any) {
 
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 
-const isAdminUser = (user: any): boolean => !!(user && (user.role === 'admin' || user.isAdmin === true));
-
-const canAccessOwner = async (req: Request, ownerId: string, ownerType: 'user' | 'company'): Promise<boolean> => {
-  const actor = (req as any).user;
-  if (!actor?.id) return false;
-  if (isAdminUser(actor)) return true;
-  if (ownerType === 'user') return actor.id === ownerId;
-
-  const db = getDB();
-  const membership = await db.collection('company_members').findOne({ companyId: ownerId, userId: actor.id });
-  if (membership) return true;
-  const company = await db.collection('companies').findOne({ id: ownerId, ownerId: actor.id });
-  return !!company;
-};
-
 export const adSubscriptionsController = {
   // GET /api/ad-subscriptions/user/:userId - Get user's ad subscriptions
   getUserSubscriptions: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;
       const { ownerType = 'user' } = req.query;
-      const resolvedOwnerType = ownerType === 'company' ? 'company' : 'user';
-      if (!(await canAccessOwner(req, userId, resolvedOwnerType))) {
-        return res.status(403).json({ success: false, error: 'Forbidden' });
-      }
       console.log(`[AdSubscriptions] Fetching subscriptions for ${ownerType}:`, userId);
-      
+
       const db = getDB();
 
       const query: any = {
         $or: [
-          { ownerId: userId, ownerType: resolvedOwnerType },
-          { userId: userId, ownerType: resolvedOwnerType } // backward compatibility
+          { ownerId: userId, ownerType },
+          { userId: userId, ownerType } // backward compatibility
         ]
       };
-      
+
       // If no ownerType was explicitly set in the document yet (old data), 
       // and we're looking for 'user' type, also match documents without ownerType
-      if (resolvedOwnerType === 'user') {
+      if (ownerType === 'user') {
         query.$or.push({ userId, ownerType: { $exists: false } });
       }
 
@@ -146,7 +127,7 @@ export const adSubscriptionsController = {
         .toArray();
 
       console.log('[AdSubscriptions] Found subscriptions:', subscriptions.length);
-      
+
       res.json({
         success: true,
         data: subscriptions
@@ -174,7 +155,6 @@ export const adSubscriptionsController = {
         durationDays,
         ownerType = 'user'
       } = req.body;
-      const resolvedOwnerType = ownerType === 'company' ? 'company' : 'user';
 
       if (!userId || !packageId || !packageName || !adLimit) {
         return res.status(400).json({
@@ -187,17 +167,9 @@ export const adSubscriptionsController = {
       const db = getDB();
       const now = Date.now();
 
-      if (!(await canAccessOwner(req, userId, resolvedOwnerType))) {
-        return res.status(403).json({
-          success: false,
-          error: 'Forbidden',
-          message: 'You do not have permission to create this subscription'
-        });
-      }
-      
       // Calculate end date for one-time packages
       const endDate = durationDays ? now + (durationDays * 24 * 60 * 60 * 1000) : undefined;
-      
+
       // For subscriptions, next billing is typically 30 days from start
       const nextBillingDate = !durationDays ? now + (30 * 24 * 60 * 60 * 1000) : undefined;
 
@@ -212,7 +184,7 @@ export const adSubscriptionsController = {
         id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
         userId, // Legacy field
         ownerId: userId, // New standardized field
-        ownerType: resolvedOwnerType,
+        ownerType,
         packageId,
         packageName,
         status: 'active',
@@ -236,7 +208,7 @@ export const adSubscriptionsController = {
       await db.collection('transactions').insertOne({
         userId,
         ownerId: userId,
-        ownerType: resolvedOwnerType,
+        ownerType,
         type: 'ad_subscription',
         packageId,
         packageName,
@@ -285,19 +257,13 @@ export const adSubscriptionsController = {
       const db = getDB();
 
       const subscription = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
-      
+
       if (!subscription) {
         return res.status(404).json({
           success: false,
           error: 'Subscription not found',
           message: 'The requested subscription could not be found.'
         });
-      }
-
-      const subOwnerId = subscription.ownerId || subscription.userId;
-      const subOwnerType = subscription.ownerType === 'company' ? 'company' : 'user';
-      if (!subOwnerId || !(await canAccessOwner(req, subOwnerId, subOwnerType))) {
-        return res.status(403).json({ success: false, error: 'Forbidden' });
       }
 
       if (subscription.status !== 'active') {
@@ -322,7 +288,7 @@ export const adSubscriptionsController = {
           { id },
           { $set: { status: 'expired', updatedAt: Date.now() } }
         );
-        
+
         return res.status(400).json({
           success: false,
           error: 'Subscription has expired'
@@ -332,7 +298,7 @@ export const adSubscriptionsController = {
       // Increment ads used
       const result = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
         { id },
-        { 
+        {
           $inc: { adsUsed: 1 },
           $set: { updatedAt: Date.now() }
         }
@@ -368,23 +334,10 @@ export const adSubscriptionsController = {
       const { id } = req.params;
       const db = getDB();
 
-      const existing = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
-      if (!existing) {
-        return res.status(404).json({
-          success: false,
-          error: 'Subscription not found'
-        });
-      }
-      const subOwnerId = existing.ownerId || existing.userId;
-      const subOwnerType = existing.ownerType === 'company' ? 'company' : 'user';
-      if (!subOwnerId || !(await canAccessOwner(req, subOwnerId, subOwnerType))) {
-        return res.status(403).json({ success: false, error: 'Forbidden' });
-      }
-
       const result = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
         { id },
-        { 
-          $set: { 
+        {
+          $set: {
             status: 'cancelled',
             updatedAt: Date.now()
           }
@@ -420,10 +373,6 @@ export const adSubscriptionsController = {
     try {
       const { userId } = req.params;
       const { ownerType = 'user' } = req.query;
-      const resolvedOwnerType = ownerType === 'company' ? 'company' : 'user';
-      if (!(await canAccessOwner(req, userId, resolvedOwnerType))) {
-        return res.status(403).json({ success: false, error: 'Forbidden' });
-      }
       const db = getDB();
       const now = Date.now();
 
@@ -440,15 +389,15 @@ export const adSubscriptionsController = {
           baseQuery,
           {
             $or: [
-              { ownerId: userId, ownerType: resolvedOwnerType },
-              { userId: userId, ownerType: resolvedOwnerType }
+              { ownerId: userId, ownerType },
+              { userId: userId, ownerType }
             ]
           }
         ]
       };
 
       // Handle legacy 'user' subscriptions without ownerType field
-      if (resolvedOwnerType === 'user') {
+      if (ownerType === 'user') {
         (query.$and[1] as any).$or.push({ userId, ownerType: { $exists: false } });
       }
 
@@ -469,12 +418,12 @@ export const adSubscriptionsController = {
         status: 'active',
         endDate: { $exists: true, $lte: now },
         $or: [
-          { ownerId: userId, ownerType: resolvedOwnerType },
-          { userId: userId, ownerType: resolvedOwnerType }
+          { ownerId: userId, ownerType },
+          { userId: userId, ownerType }
         ]
       };
 
-      if (resolvedOwnerType === 'user') {
+      if (ownerType === 'user') {
         expireQuery.$or.push({ userId, ownerType: { $exists: false } });
       }
 
@@ -512,12 +461,6 @@ export const adSubscriptionsController = {
           success: false,
           error: 'Subscription not found'
         });
-      }
-
-      const subOwnerId = subscription.ownerId || subscription.userId;
-      const subOwnerType = subscription.ownerType === 'company' ? 'company' : 'user';
-      if (!subOwnerId || !(await canAccessOwner(req, subOwnerId, subOwnerType))) {
-        return res.status(403).json({ success: false, error: 'Forbidden' });
       }
 
       res.json({
@@ -575,7 +518,7 @@ export const adSubscriptionsController = {
 
       const eventType = event.event_type;
       const resource = event.resource;
-      
+
       console.log(`[AdSubscriptions] Webhook received: ${eventType}`);
 
       if (
@@ -587,24 +530,24 @@ export const adSubscriptionsController = {
           resource.billing_agreement_id ||
           resource.id ||
           (resource.supplementary_data && resource.supplementary_data.related_ids && resource.supplementary_data.related_ids.billing_agreement_id);
-        
+
         if (subscriptionId) {
           console.log(`[AdSubscriptions] Processing renewal for subscription: ${subscriptionId}`);
-          
-          const subscription = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ 
-            paypalSubscriptionId: subscriptionId 
+
+          const subscription = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({
+            paypalSubscriptionId: subscriptionId
           });
-          
+
           if (subscription) {
             await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
               { _id: subscription._id },
-              { 
-                $set: { 
+              {
+                $set: {
                   adsUsed: 0,
                   impressionsUsed: 0,
                   updatedAt: Date.now(),
                   status: 'active'
-                } 
+                }
               }
             );
 
@@ -614,7 +557,7 @@ export const adSubscriptionsController = {
             const currency =
               (resource.amount && (resource.amount.currency || resource.amount.currency_code)) ||
               undefined;
-            
+
             await db.collection('transactions').insertOne({
               userId: subscription.userId,
               type: 'ad_subscription_renewal',
@@ -631,7 +574,7 @@ export const adSubscriptionsController = {
               },
               createdAt: new Date().toISOString()
             });
-            
+
             console.log(`[AdSubscriptions] Successfully renewed subscription ${subscription.id}`);
           } else {
             console.warn(`[AdSubscriptions] No subscription found for PayPal ID: ${subscriptionId}`);
@@ -640,27 +583,27 @@ export const adSubscriptionsController = {
       } else if (eventType === 'BILLING.SUBSCRIPTION.CANCELLED') {
         const subscriptionId = resource.id;
         console.log(`[AdSubscriptions] Processing cancellation for subscription: ${subscriptionId}`);
-        
+
         await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
           { paypalSubscriptionId: subscriptionId },
-          { 
-            $set: { 
+          {
+            $set: {
               status: 'cancelled',
               updatedAt: Date.now()
-            } 
+            }
           }
         );
       } else if (eventType === 'BILLING.SUBSCRIPTION.EXPIRED' || eventType === 'BILLING.SUBSCRIPTION.SUSPENDED') {
         const subscriptionId = resource.id;
         console.log(`[AdSubscriptions] Processing expiration/suspension for subscription: ${subscriptionId}`);
-        
+
         await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
           { paypalSubscriptionId: subscriptionId },
-          { 
-            $set: { 
+          {
+            $set: {
               status: 'expired',
               updatedAt: Date.now()
-            } 
+            }
           }
         );
       }

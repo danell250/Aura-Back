@@ -97,15 +97,6 @@ const CREDIT_BUNDLE_CONFIG = {
     'Neural Surge': { credits: 2000, price: 149.99 },
     'Universal Core': { credits: 5000, price: 349.99 }
 };
-const isAdminUser = (user) => !!(user && (user.role === 'admin' || user.isAdmin === true));
-const ensureSelfOrAdmin = (req, targetUserId) => {
-    const actor = req.user;
-    if (!(actor === null || actor === void 0 ? void 0 : actor.id))
-        return { ok: false, status: 401, message: 'Authentication required' };
-    if (actor.id === targetUserId || isAdminUser(actor))
-        return { ok: true, status: 200 };
-    return { ok: false, status: 403, message: 'Forbidden' };
-};
 exports.usersController = {
     // GET /api/users/me/dashboard - Get creator dashboard data
     getMyDashboard: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -239,10 +230,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { targetUserId } = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             const requester = yield db.collection('users').findOne({ id });
             if (!requester) {
@@ -456,10 +443,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const updates = req.body || {};
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             const existingUser = yield db.collection('users').findOne({ id });
             if (!existingUser) {
@@ -570,10 +553,6 @@ exports.usersController = {
     deleteUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             const result = yield db.collection('users').deleteOne({ id });
             if (result.deletedCount === 0) {
@@ -684,10 +663,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { targetUserId } = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id });
             if (!user) {
@@ -724,10 +699,6 @@ exports.usersController = {
         try {
             const { id } = req.params; // The ID of the user accepting the request (acceptor)
             const { requesterId } = req.body; // The ID of the user who sent the request
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             // Find both users
             const acceptor = yield db.collection('users').findOne({ id });
@@ -826,10 +797,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { targetUserId } = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             if (!targetUserId || typeof targetUserId !== 'string') {
                 return res.status(400).json({
@@ -893,10 +860,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { targetUserId } = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             if (!targetUserId || typeof targetUserId !== 'string') {
                 return res.status(400).json({
@@ -953,10 +916,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { targetUserId, reason, notes } = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             if (!targetUserId || !reason) {
                 return res.status(400).json({
@@ -1115,10 +1074,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { credits, bundleName, transactionId, paymentMethod, orderId } = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             // Validate required fields
             if (!bundleName) {
                 return res.status(400).json({
@@ -1355,10 +1310,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { credits, reason } = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             // Validate required fields
             if (!credits || credits <= 0) {
                 return res.status(400).json({
@@ -1430,10 +1381,6 @@ exports.usersController = {
     getPrivacyData: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id });
             if (!user) {
@@ -1513,10 +1460,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { confirmationCode, reason } = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             // Validate confirmation code (in production, this would be a secure token)
             if (confirmationCode !== 'CONFIRM_DELETE_ALL_DATA') {
                 return res.status(400).json({
@@ -1581,10 +1524,6 @@ exports.usersController = {
     recalculateTrustForUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id });
             if (!user) {
@@ -1620,13 +1559,6 @@ exports.usersController = {
     // POST /api/users/recalculate-trust-all - Recalculate trust scores for all users
     recalculateTrustForAllUsers: (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const actor = _req.user;
-            if (!(actor === null || actor === void 0 ? void 0 : actor.id)) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            if (!isAdminUser(actor)) {
-                return res.status(403).json({ success: false, error: 'Admin access required' });
-            }
             yield (0, trustService_1.recalculateAllTrustScores)();
             res.json({
                 success: true,
@@ -1645,10 +1577,6 @@ exports.usersController = {
     getSerendipityMatches: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const { limit } = req.query;
             const parsedLimit = parseInt(String(limit !== null && limit !== void 0 ? limit : 20), 10);
             const limitValue = Number.isNaN(parsedLimit) ? 20 : parsedLimit;
@@ -1681,10 +1609,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { targetUserId } = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             if (!targetUserId || typeof targetUserId !== 'string') {
                 return res.status(400).json({
                     success: false,
@@ -1752,10 +1676,6 @@ exports.usersController = {
     getPrivacySettings: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id });
             if (!user) {
@@ -1804,10 +1724,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const settings = req.body;
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id });
             if (!user) {
@@ -1853,13 +1769,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { viewerId } = req.body;
-            const actor = req.user;
-            if (!(actor === null || actor === void 0 ? void 0 : actor.id)) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            if (viewerId !== actor.id && !isAdminUser(actor)) {
-                return res.status(403).json({ success: false, error: 'Forbidden' });
-            }
             const db = (0, db_1.getDB)();
             // Find the user whose profile was viewed
             const user = yield db.collection('users').findOne({ id });
@@ -1941,10 +1850,6 @@ exports.usersController = {
         try {
             const { id } = req.params;
             let { fromUserId } = req.body;
-            const actor = req.user;
-            if (!(actor === null || actor === void 0 ? void 0 : actor.id)) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
             const db = (0, db_1.getDB)();
             // Fallback to authenticated user if fromUserId is not provided
             if (!fromUserId && ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id)) {
@@ -1955,13 +1860,6 @@ exports.usersController = {
                     success: false,
                     error: 'Missing requester',
                     message: 'fromUserId is required to send a connection request'
-                });
-            }
-            if (fromUserId !== actor.id && !isAdminUser(actor)) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'Forbidden',
-                    message: 'fromUserId must match authenticated user'
                 });
             }
             if (id === fromUserId) {
@@ -2047,10 +1945,6 @@ exports.usersController = {
         try {
             const { id } = req.params; // The ID of the user rejecting the request (rejecter)
             const { requesterId } = req.body; // The ID of the user who sent the request
-            const authz = ensureSelfOrAdmin(req, id);
-            if (!authz.ok) {
-                return res.status(authz.status).json({ success: false, error: authz.message });
-            }
             const db = (0, db_1.getDB)();
             // Find both users
             const rejecter = yield db.collection('users').findOne({ id });
@@ -2134,13 +2028,6 @@ exports.usersController = {
     // DELETE /api/users/force-delete/:email - Force delete a user by email (Admin only)
     forceDeleteUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const actor = req.user;
-            if (!(actor === null || actor === void 0 ? void 0 : actor.id)) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            if (!isAdminUser(actor)) {
-                return res.status(403).json({ success: false, error: 'Admin access required' });
-            }
             const { email } = req.params;
             // Basic security check - in production this should be protected by admin middleware
             // For now, we'll just check if the email parameter is provided

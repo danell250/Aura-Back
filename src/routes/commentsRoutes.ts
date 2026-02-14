@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { commentsController } from '../controllers/commentsController';
-import { requireAuth } from '../middleware/authMiddleware';
 import { logSecurityEvent } from '../utils/securityLogger';
 
 const router = Router();
@@ -37,9 +36,9 @@ router.get('/posts/:postId/comments', commentsController.getCommentsByPost);
 // GET /api/comments/:id - Get comment by ID
 router.get('/comments/:id', commentsController.getCommentById);
 
-router.post('/posts/:postId/comments', commentsWriteRateLimiter, requireAuth, commentsController.createComment);
-router.put('/comments/:id', commentsWriteRateLimiter, requireAuth, commentsController.updateComment);
-router.delete('/comments/:id', commentsWriteRateLimiter, requireAuth, commentsController.deleteComment);
-router.post('/comments/:id/react', commentsWriteRateLimiter, requireAuth, commentsController.reactToComment);
+router.post('/posts/:postId/comments', commentsWriteRateLimiter, commentsController.createComment);
+router.put('/comments/:id', commentsWriteRateLimiter, commentsController.updateComment);
+router.delete('/comments/:id', commentsWriteRateLimiter, commentsController.deleteComment);
+router.post('/comments/:id/react', commentsWriteRateLimiter, commentsController.reactToComment);
 
 export default router;
