@@ -35,6 +35,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { transformUser } from './utils/userUtils';
 import { verifyAccessToken } from './utils/jwtUtils';
 import { validateIdentityAccess } from './utils/identityUtils';
+import { CallType, getCallLogsCollection } from './models/CallLog';
 
 dotenv.config();
 
@@ -180,7 +181,17 @@ const corsOptions: cors.CorsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+    "Origin",
+    "x-identity-type",
+    "x-identity-id",
+    "X-Identity-Type",
+    "X-Identity-Id"
+  ],
   exposedHeaders: ["Set-Cookie"],
   optionsSuccessStatus: 204
 };
@@ -1126,52 +1137,249 @@ async function startServer() {
         }
       );
 
-      const routeCallEvent = (
-        eventName: string,
-        payload: {
-          callId?: string;
-          fromType?: 'user' | 'company';
-          fromId?: string;
-          toType?: 'user' | 'company';
-          toId?: string;
-          callType?: 'audio' | 'video';
-          offer?: any;
-          answer?: any;
-          candidate?: any;
-          reason?: string;
-        }
-      ) => {
-        const { callId, fromType, fromId, toType, toId } = payload || {};
-        if (!callId || !fromType || !fromId || !toType || !toId) return;
+      type SocketCallPayload = {
+        callId?: string;
+        fromType?: 'user' | 'company';
+        fromId?: string;
+        toType?: 'user' | 'company';
+        toId?: string;
+        callType?: 'audio' | 'video';
+        offer?: any;
+        answer?: any;
+        candidate?: any;
+        reason?: string;
+      };
 
-        const fromRoom = identityRoom(fromType, fromId);
-        if (!identityRooms.has(fromRoom)) {
-          console.warn(`⚠️ Blocked call event from non-joined identity ${fromType}:${fromId}`);
-          return;
+      const normalizeCallPayload = (payload: SocketCallPayload) => {
+        const callId = typeof payload?.callId === 'string' ? payload.callId.trim() : '';
+        const fromType = payload?.fromType;
+        const fromId = typeof payload?.fromId === 'string' ? payload.fromId.trim() : '';
+        const toType = payload?.toType;
+        const toId = typeof payload?.toId === 'string' ? payload.toId.trim() : '';
+        const callType: CallType = payload?.callType === 'video' ? 'video' : 'audio';
+
+        if (!callId || !fromType || !fromId || !toType || !toId) {
+          return null;
         }
 
-        const targetRoom = identityRoom(toType, toId);
-        io.to(targetRoom).emit(eventName, {
+        return {
           callId,
           fromType,
           fromId,
           toType,
           toId,
-          callType: payload.callType,
+          callType,
           offer: payload.offer,
           answer: payload.answer,
           candidate: payload.candidate,
           reason: payload.reason,
+        };
+      };
+
+      const recordCallInvite = async (call: ReturnType<typeof normalizeCallPayload>) => {
+        if (!call || !isDBConnected()) return;
+        try {
+          const now = new Date();
+          await getCallLogsCollection().updateOne(
+            { callId: call.callId },
+            {
+              $set: {
+                callType: call.callType,
+                fromType: call.fromType,
+                fromId: call.fromId,
+                toType: call.toType,
+                toId: call.toId,
+                initiatedByUserId: user?.id,
+                status: 'ringing',
+                updatedAt: now,
+              },
+              $setOnInsert: {
+                callId: call.callId,
+                startedAt: now,
+                createdAt: now,
+                seenBy: [],
+              },
+            },
+            { upsert: true }
+          );
+        } catch (error) {
+          console.error('Failed to record call invite:', error);
+        }
+      };
+
+      const recordCallAccepted = async (call: ReturnType<typeof normalizeCallPayload>) => {
+        if (!call || !isDBConnected()) return;
+        try {
+          const now = new Date();
+          await getCallLogsCollection().updateOne(
+            { callId: call.callId },
+            {
+              $set: {
+                callType: call.callType,
+                fromType: call.fromType,
+                fromId: call.fromId,
+                toType: call.toType,
+                toId: call.toId,
+                status: 'accepted',
+                acceptedAt: now,
+                updatedAt: now,
+              },
+              $setOnInsert: {
+                callId: call.callId,
+                startedAt: now,
+                createdAt: now,
+                seenBy: [],
+                initiatedByUserId: user?.id,
+              },
+            },
+            { upsert: true }
+          );
+        } catch (error) {
+          console.error('Failed to record accepted call:', error);
+        }
+      };
+
+      const recordCallRejected = async (call: ReturnType<typeof normalizeCallPayload>) => {
+        if (!call || !isDBConnected()) return;
+        try {
+          const now = new Date();
+          const reason = typeof call.reason === 'string' && call.reason.trim() ? call.reason.trim() : 'rejected';
+          await getCallLogsCollection().updateOne(
+            { callId: call.callId },
+            {
+              $set: {
+                callType: call.callType,
+                fromType: call.fromType,
+                fromId: call.fromId,
+                toType: call.toType,
+                toId: call.toId,
+                status: reason === 'busy' ? 'missed' : 'rejected',
+                endReason: reason,
+                endedAt: now,
+                updatedAt: now,
+              },
+              $setOnInsert: {
+                callId: call.callId,
+                startedAt: now,
+                createdAt: now,
+                seenBy: [],
+                initiatedByUserId: user?.id,
+              },
+            },
+            { upsert: true }
+          );
+        } catch (error) {
+          console.error('Failed to record rejected call:', error);
+        }
+      };
+
+      const recordCallEnded = async (call: ReturnType<typeof normalizeCallPayload>) => {
+        if (!call || !isDBConnected()) return;
+        try {
+          const now = new Date();
+          const callLogs = getCallLogsCollection();
+          const existing = await callLogs.findOne({ callId: call.callId });
+          const accepted = !!existing?.acceptedAt || existing?.status === 'accepted' || existing?.status === 'ended';
+          const reason = typeof call.reason === 'string' && call.reason.trim() ? call.reason.trim() : 'ended';
+
+          let status: 'ended' | 'missed' | 'cancelled' | 'failed' = 'ended';
+          if (!accepted) {
+            if (reason === 'no-answer' || reason === 'timeout') {
+              status = 'missed';
+            } else if (reason === 'cancelled') {
+              status = 'cancelled';
+            } else {
+              status = 'missed';
+            }
+          } else if (reason === 'failed') {
+            status = 'failed';
+          }
+
+          const connectedAt = existing?.acceptedAt || existing?.startedAt;
+          const durationSeconds =
+            accepted && connectedAt
+              ? Math.max(0, Math.round((now.getTime() - new Date(connectedAt).getTime()) / 1000))
+              : undefined;
+
+          await callLogs.updateOne(
+            { callId: call.callId },
+            {
+              $set: {
+                callType: call.callType,
+                fromType: call.fromType,
+                fromId: call.fromId,
+                toType: call.toType,
+                toId: call.toId,
+                status,
+                endReason: reason,
+                endedAt: now,
+                ...(typeof durationSeconds === 'number' ? { durationSeconds } : {}),
+                updatedAt: now,
+              },
+              $setOnInsert: {
+                callId: call.callId,
+                startedAt: now,
+                createdAt: now,
+                seenBy: [],
+                initiatedByUserId: user?.id,
+              },
+            },
+            { upsert: true }
+          );
+        } catch (error) {
+          console.error('Failed to record ended call:', error);
+        }
+      };
+
+      const routeCallEvent = (
+        eventName: string,
+        payload: SocketCallPayload,
+      ) => {
+        const call = normalizeCallPayload(payload);
+        if (!call) return null;
+
+        const fromRoom = identityRoom(call.fromType, call.fromId);
+        if (!identityRooms.has(fromRoom)) {
+          console.warn(`⚠️ Blocked call event from non-joined identity ${call.fromType}:${call.fromId}`);
+          return null;
+        }
+
+        const targetRoom = identityRoom(call.toType, call.toId);
+        io.to(targetRoom).emit(eventName, {
+          callId: call.callId,
+          fromType: call.fromType,
+          fromId: call.fromId,
+          toType: call.toType,
+          toId: call.toId,
+          callType: call.callType,
+          offer: call.offer,
+          answer: call.answer,
+          candidate: call.candidate,
+          reason: call.reason,
           fromUserId: user?.id,
           timestamp: Date.now(),
         });
+
+        return call;
       };
 
-      socket.on('call:invite', (payload) => routeCallEvent('call:incoming', payload));
-      socket.on('call:accept', (payload) => routeCallEvent('call:accepted', payload));
-      socket.on('call:reject', (payload) => routeCallEvent('call:rejected', payload));
+      socket.on('call:invite', async (payload) => {
+        const call = routeCallEvent('call:incoming', payload);
+        await recordCallInvite(call);
+      });
+      socket.on('call:accept', async (payload) => {
+        const call = routeCallEvent('call:accepted', payload);
+        await recordCallAccepted(call);
+      });
+      socket.on('call:reject', async (payload) => {
+        const call = routeCallEvent('call:rejected', payload);
+        await recordCallRejected(call);
+      });
       socket.on('call:ice-candidate', (payload) => routeCallEvent('call:ice-candidate', payload));
-      socket.on('call:end', (payload) => routeCallEvent('call:ended', payload));
+      socket.on('call:end', async (payload) => {
+        const call = routeCallEvent('call:ended', payload);
+        await recordCallEnded(call);
+      });
 
       socket.on('disconnect', () => {
         console.log('❌ Socket.IO client disconnected', socket.id);

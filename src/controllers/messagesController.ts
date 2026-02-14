@@ -10,6 +10,7 @@ import {
   IMessageThread,
   MessageThreadState,
 } from '../models/MessageThread';
+import { getCallLogsCollection } from '../models/CallLog';
 
 const SEND_WINDOW_MS = 60_000;
 const SEND_WINDOW_LIMIT = 45;
@@ -365,6 +366,106 @@ const buildThreadStatePatch = (state: MessageThreadState): Partial<IMessageThrea
 };
 
 export const messagesController = {
+  // GET /api/messages/call-history - Get call history for the active identity
+  getCallHistory: async (req: Request, res: Response) => {
+    try {
+      const authenticatedUserId = (req.user as any)?.id;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+      }
+
+      const actor = await resolveIdentityActor(
+        authenticatedUserId,
+        {
+          ownerType: req.query.ownerType as string,
+          ownerId: (req.query.userId as string) || (req.query.ownerId as string),
+        },
+        req.headers,
+      );
+
+      if (!actor) {
+        return res.status(403).json({ success: false, message: 'Unauthorized access to this identity' });
+      }
+
+      if (!isDBConnected()) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const withId = typeof req.query.withId === 'string' ? req.query.withId.trim() : '';
+      const withTypeRaw = req.query.withType;
+      const withType = withTypeRaw === 'company' || withTypeRaw === 'user' ? withTypeRaw : undefined;
+      const onlyMissed = String(req.query.onlyMissed || '').toLowerCase() === 'true';
+
+      const limitInput = Number(req.query.limit);
+      const limit = Number.isFinite(limitInput) ? Math.min(Math.max(Math.round(limitInput), 1), 200) : 100;
+
+      const query: any = {};
+
+      if (withId) {
+        const resolvedWithType = withType || (await resolveEntityTypeById(withId));
+        if (!resolvedWithType) {
+          return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+        }
+
+        query.$or = [
+          { fromType: actor.type, fromId: actor.id, toType: resolvedWithType, toId: withId },
+          { fromType: resolvedWithType, fromId: withId, toType: actor.type, toId: actor.id },
+        ];
+      } else {
+        query.$or = [
+          { fromType: actor.type, fromId: actor.id },
+          { toType: actor.type, toId: actor.id },
+        ];
+      }
+
+      if (onlyMissed) {
+        query.status = 'missed';
+        query.toType = actor.type;
+        query.toId = actor.id;
+      }
+
+      const rows = await getCallLogsCollection()
+        .find(query)
+        .sort({ startedAt: -1 })
+        .limit(limit)
+        .toArray();
+
+      const data = rows.map((row: any) => {
+        const incoming = row.toType === actor.type && row.toId === actor.id;
+        const peerType = incoming ? row.fromType : row.toType;
+        const peerId = incoming ? row.fromId : row.toId;
+
+        return {
+          callId: row.callId,
+          callType: row.callType,
+          status: row.status,
+          startedAt: row.startedAt,
+          acceptedAt: row.acceptedAt || null,
+          endedAt: row.endedAt || null,
+          durationSeconds: typeof row.durationSeconds === 'number' ? row.durationSeconds : null,
+          endReason: row.endReason || null,
+          fromType: row.fromType,
+          fromId: row.fromId,
+          toType: row.toType,
+          toId: row.toId,
+          direction: incoming ? 'incoming' : 'outgoing',
+          peerType,
+          peerId,
+          conversationKey: `${peerType}:${peerId}`,
+          isMissedForActor: row.status === 'missed' && incoming,
+        };
+      });
+
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Error fetching call history:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch call history',
+      });
+    }
+  },
+
   // GET /api/messages/conversations - Get all conversations for an actor (personal or company)
   getConversations: async (req: Request, res: Response) => {
     try {

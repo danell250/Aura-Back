@@ -8,9 +8,13 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.migrateLegacyCompanies = migrateLegacyCompanies;
 const db_1 = require("../db");
+const crypto_1 = __importDefault(require("crypto"));
 /**
  * Generates a unique handle for a company.
  */
@@ -49,54 +53,68 @@ function migrateLegacyCompanies() {
             let migratedCount = 0;
             let updatedCount = 0;
             for (const user of legacyUsers) {
-                // Check if this user already has a company entry with their ID
-                const existingCompany = yield db.collection('companies').findOne({ id: user.id });
-                if (!existingCompany) {
-                    // Create new company entry
-                    const handle = user.handle && user.handle.startsWith('@')
-                        ? user.handle
-                        : yield generateCompanyHandle(user.companyName || user.name);
+                const [migratedCompany, legacySameIdCompany] = yield Promise.all([
+                    db.collection('companies').findOne({ legacySourceUserId: user.id }),
+                    db.collection('companies').findOne({ id: user.id, ownerId: user.id }),
+                ]);
+                if (!migratedCompany) {
+                    const name = (user.companyName || (legacySameIdCompany === null || legacySameIdCompany === void 0 ? void 0 : legacySameIdCompany.name) || user.name || 'Company').trim();
+                    const website = (user.companyWebsite || (legacySameIdCompany === null || legacySameIdCompany === void 0 ? void 0 : legacySameIdCompany.website) || '').trim();
+                    const industry = (user.industry || (legacySameIdCompany === null || legacySameIdCompany === void 0 ? void 0 : legacySameIdCompany.industry) || 'Other').trim() || 'Other';
+                    const handle = yield generateCompanyHandle(name);
+                    const companyId = `comp-${crypto_1.default.randomBytes(8).toString('hex')}`;
                     const newCompany = {
-                        id: user.id,
-                        name: user.companyName || user.name,
-                        handle: handle,
-                        website: user.companyWebsite || '',
-                        industry: user.industry || 'Other',
-                        bio: user.bio || '',
-                        isVerified: user.isVerified || false,
+                        id: companyId,
+                        legacySourceUserId: user.id,
+                        name,
+                        handle,
+                        website,
+                        industry,
+                        bio: '',
+                        isVerified: !!website,
                         ownerId: user.id,
-                        avatar: user.avatar || '',
-                        avatarType: user.avatarType || 'image',
-                        coverImage: user.coverImage || '',
-                        coverType: user.coverType || 'image',
-                        createdAt: user.createdAt || new Date(),
-                        updatedAt: user.updatedAt || new Date()
+                        avatar: '',
+                        avatarType: 'image',
+                        coverImage: '',
+                        coverType: 'image',
+                        createdAt: new Date(),
+                        updatedAt: new Date(),
                     };
                     yield db.collection('companies').insertOne(newCompany);
-                    // Remove legacy fields from user object
-                    yield db.collection('users').updateOne({ id: user.id }, {
-                        $unset: {
-                            companyName: "",
-                            companyWebsite: "",
-                            industry: ""
-                        }
-                    });
-                    // Ensure user also has a handle if they didn't have one (though they should)
-                    if (!user.handle) {
-                        yield db.collection('users').updateOne({ id: user.id }, { $set: { handle: handle } });
+                    yield db.collection('company_members').updateOne({ companyId, userId: user.id }, {
+                        $set: {
+                            companyId,
+                            userId: user.id,
+                            role: 'owner',
+                            joinedAt: new Date(),
+                            updatedAt: new Date(),
+                        },
+                    }, { upsert: true });
+                    if (legacySameIdCompany) {
+                        yield db.collection('companies').updateOne({ id: legacySameIdCompany.id }, {
+                            $set: {
+                                legacyArchived: true,
+                                supersededByCompanyId: companyId,
+                                updatedAt: new Date(),
+                            },
+                        });
                     }
                     migratedCount++;
                     console.log(`✅ Migrated legacy company: ${newCompany.name} (${newCompany.handle})`);
                 }
-                else if (!existingCompany.handle) {
-                    // Update existing company if it's missing a handle
-                    const handle = user.handle && user.handle.startsWith('@')
-                        ? user.handle
-                        : yield generateCompanyHandle(existingCompany.name);
-                    yield db.collection('companies').updateOne({ id: existingCompany.id }, { $set: { handle: handle, updatedAt: new Date() } });
+                else if (!migratedCompany.handle) {
+                    const handle = yield generateCompanyHandle(migratedCompany.name || user.companyName || user.name);
+                    yield db.collection('companies').updateOne({ id: migratedCompany.id }, { $set: { handle, updatedAt: new Date() } });
                     updatedCount++;
-                    console.log(`✅ Updated handle for company: ${existingCompany.name} (${handle})`);
+                    console.log(`✅ Updated handle for company: ${migratedCompany.name} (${handle})`);
                 }
+                yield db.collection('users').updateOne({ id: user.id }, {
+                    $unset: {
+                        companyName: '',
+                        companyWebsite: '',
+                        industry: '',
+                    },
+                });
             }
             console.log(`🏁 Migration complete. Migrated: ${migratedCount}, Updated: ${updatedCount}`);
         }

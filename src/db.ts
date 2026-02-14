@@ -5,6 +5,7 @@ import { initializeMessageThreadCollection } from "./models/MessageThread";
 import { initializeUserCollection } from "./models/User";
 import { initializeAdAnalyticsDailyCollection } from "./models/AdAnalyticsDaily";
 import { initializeAdEventDedupesCollection } from "./models/AdEventDedupe";
+import { initializeCallLogsCollection } from "./models/CallLog";
 
 dotenv.config();
 
@@ -69,6 +70,9 @@ export async function connectDB(): Promise<Db | null> {
 
       await initializeMessageThreadCollection(db);
       console.log("✅ Message thread collection initialized");
+
+      await initializeCallLogsCollection(db);
+      console.log("✅ Call logs collection initialized");
       
       await initializeUserCollection(db);
       

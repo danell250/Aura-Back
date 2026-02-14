@@ -181,10 +181,10 @@ const buildAuthorPrivacyConditions = (context) => {
     }
     return conditions;
 };
-const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, void 0, function* () {
+const emitAuthorInsightsUpdate = (app_1, authorId_1, ...args_1) => __awaiter(void 0, [app_1, authorId_1, ...args_1], void 0, function* (app, authorId, authorType = 'user') {
     var _a, _b, _c, _d, _e, _f, _g;
     try {
-        if (!authorId)
+        if (!authorId || authorType !== 'user')
             return;
         const io = (app === null || app === void 0 ? void 0 : app.get) && app.get('io');
         if (!io || typeof io.to !== 'function') {
@@ -192,8 +192,15 @@ const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, vo
             return;
         }
         const db = (0, db_1.getDB)();
+        const personalAuthorMatch = {
+            'author.id': authorId,
+            $or: [
+                { 'author.type': 'user' },
+                { 'author.type': { $exists: false } },
+            ],
+        };
         const [agg] = yield db.collection(POSTS_COLLECTION).aggregate([
-            { $match: { 'author.id': authorId } },
+            { $match: personalAuthorMatch },
             {
                 $group: {
                     _id: null,
@@ -205,7 +212,7 @@ const emitAuthorInsightsUpdate = (app, authorId) => __awaiter(void 0, void 0, vo
             }
         ]).toArray();
         const topPosts = yield db.collection(POSTS_COLLECTION)
-            .find({ 'author.id': authorId })
+            .find(personalAuthorMatch)
             .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
             .sort({ viewCount: -1 })
             .limit(5)
@@ -337,17 +344,41 @@ exports.postsController = {
                     $addFields: {
                         authorDetails: {
                             $cond: {
-                                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
-                                then: { $arrayElemAt: ['$authorUserDetails', 0] },
-                                else: { $arrayElemAt: ['$authorCompanyDetails', 0] }
-                            }
+                                if: { $eq: ['$author.type', 'company'] },
+                                then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
+                                else: {
+                                    $cond: {
+                                        if: { $eq: ['$author.type', 'user'] },
+                                        then: { $arrayElemAt: ['$authorUserDetails', 0] },
+                                        else: {
+                                            $cond: {
+                                                if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
+                                                then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
+                                                else: { $arrayElemAt: ['$authorUserDetails', 0] }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                         },
                         authorType: {
                             $cond: {
-                                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
-                                then: 'user',
-                                else: 'company'
-                            }
+                                if: { $eq: ['$author.type', 'company'] },
+                                then: 'company',
+                                else: {
+                                    $cond: {
+                                        if: { $eq: ['$author.type', 'user'] },
+                                        then: 'user',
+                                        else: {
+                                            $cond: {
+                                                if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
+                                                then: 'company',
+                                                else: 'user'
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                         }
                     }
                 },
@@ -460,17 +491,41 @@ exports.postsController = {
                     $addFields: {
                         authorDetails: {
                             $cond: {
-                                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
-                                then: { $arrayElemAt: ['$authorUserDetails', 0] },
-                                else: { $arrayElemAt: ['$authorCompanyDetails', 0] }
-                            }
+                                if: { $eq: ['$author.type', 'company'] },
+                                then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
+                                else: {
+                                    $cond: {
+                                        if: { $eq: ['$author.type', 'user'] },
+                                        then: { $arrayElemAt: ['$authorUserDetails', 0] },
+                                        else: {
+                                            $cond: {
+                                                if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
+                                                then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
+                                                else: { $arrayElemAt: ['$authorUserDetails', 0] }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                         },
                         authorType: {
                             $cond: {
-                                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
-                                then: 'user',
-                                else: 'company'
-                            }
+                                if: { $eq: ['$author.type', 'company'] },
+                                then: 'company',
+                                else: {
+                                    $cond: {
+                                        if: { $eq: ['$author.type', 'user'] },
+                                        then: 'user',
+                                        else: {
+                                            $cond: {
+                                                if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
+                                                then: 'company',
+                                                else: 'user'
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                         }
                     }
                 },
@@ -582,17 +637,41 @@ exports.postsController = {
                     $addFields: {
                         authorDetails: {
                             $cond: {
-                                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
-                                then: { $arrayElemAt: ['$authorUserDetails', 0] },
-                                else: { $arrayElemAt: ['$authorCompanyDetails', 0] }
-                            }
+                                if: { $eq: ['$author.type', 'company'] },
+                                then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
+                                else: {
+                                    $cond: {
+                                        if: { $eq: ['$author.type', 'user'] },
+                                        then: { $arrayElemAt: ['$authorUserDetails', 0] },
+                                        else: {
+                                            $cond: {
+                                                if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
+                                                then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
+                                                else: { $arrayElemAt: ['$authorUserDetails', 0] }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                         },
                         authorType: {
                             $cond: {
-                                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
-                                then: 'user',
-                                else: 'company'
-                            }
+                                if: { $eq: ['$author.type', 'company'] },
+                                then: 'company',
+                                else: {
+                                    $cond: {
+                                        if: { $eq: ['$author.type', 'user'] },
+                                        then: 'user',
+                                        else: {
+                                            $cond: {
+                                                if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
+                                                then: 'company',
+                                                else: 'user'
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                         }
                     }
                 },
@@ -648,7 +727,7 @@ exports.postsController = {
     }),
     // GET /api/posts/:id - Get post by ID
     getPostById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
@@ -694,17 +773,41 @@ exports.postsController = {
                     $addFields: {
                         authorDetails: {
                             $cond: {
-                                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
-                                then: { $arrayElemAt: ['$authorUserDetails', 0] },
-                                else: { $arrayElemAt: ['$authorCompanyDetails', 0] }
-                            }
+                                if: { $eq: ['$author.type', 'company'] },
+                                then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
+                                else: {
+                                    $cond: {
+                                        if: { $eq: ['$author.type', 'user'] },
+                                        then: { $arrayElemAt: ['$authorUserDetails', 0] },
+                                        else: {
+                                            $cond: {
+                                                if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
+                                                then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
+                                                else: { $arrayElemAt: ['$authorUserDetails', 0] }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                         },
                         authorType: {
                             $cond: {
-                                if: { $gt: [{ $size: '$authorUserDetails' }, 0] },
-                                then: 'user',
-                                else: 'company'
-                            }
+                                if: { $eq: ['$author.type', 'company'] },
+                                then: 'company',
+                                else: {
+                                    $cond: {
+                                        if: { $eq: ['$author.type', 'user'] },
+                                        then: 'user',
+                                        else: {
+                                            $cond: {
+                                                if: { $gt: [{ $size: '$authorCompanyDetails' }, 0] },
+                                                then: 'company',
+                                                else: 'user'
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                         },
                         commentCount: { $size: '$fetchedComments' },
                         comments: '$fetchedComments',
@@ -734,7 +837,7 @@ exports.postsController = {
                 post.viewCount = (post.viewCount || 0) + 1;
                 // Trigger insights update for author
                 if (post.author.id) {
-                    (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id);
+                    (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id, ((_b = post.author) === null || _b === void 0 ? void 0 : _b.type) === 'company' ? 'company' : 'user');
                 }
             }
             // Check privacy settings
@@ -864,7 +967,7 @@ exports.postsController = {
         }
     }),
     incrementPostViews: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
+        var _a, _b, _c;
         try {
             const { id } = req.params;
             if (!(0, db_1.isDBConnected)()) {
@@ -913,7 +1016,7 @@ exports.postsController = {
             }
             if (authorId) {
                 // Trigger live insights update for the author (asynchronously)
-                (0, exports.emitAuthorInsightsUpdate)(req.app, authorId).catch(err => {
+                (0, exports.emitAuthorInsightsUpdate)(req.app, authorId, ((_c = post.author) === null || _c === void 0 ? void 0 : _c.type) === 'company' ? 'company' : 'user').catch(err => {
                     console.error('Failed to emit insights update in incrementPostViews:', err);
                 });
             }
@@ -1033,7 +1136,8 @@ exports.postsController = {
                 handle: '@user',
                 avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${authorId}`,
                 avatarType: 'image',
-                activeGlow: 'none'
+                activeGlow: 'none',
+                type: authorType,
             };
             const safeContent = typeof content === 'string' ? content : '';
             const requestedVisibility = typeof visibility === 'string' ? visibility : 'public';
@@ -1088,7 +1192,7 @@ exports.postsController = {
                     // For now, we don't emit to avoid leaking to public
                 }
                 // Trigger live insights update for the author
-                (0, exports.emitAuthorInsightsUpdate)(req.app, authorEmbed.id);
+                (0, exports.emitAuthorInsightsUpdate)(req.app, authorEmbed.id, authorEmbed.type || 'user');
             }
             res.status(201).json({
                 success: true,
@@ -1103,7 +1207,7 @@ exports.postsController = {
     }),
     // PUT /api/posts/:id - Update post (author only)
     updatePost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
+        var _a, _b, _c;
         try {
             const { id } = req.params;
             const updates = req.body || {};
@@ -1148,7 +1252,7 @@ exports.postsController = {
                 updatedDoc.author = Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(updatedDoc.author)), { type: updatedDoc.author.type || 'user' });
             }
             // Trigger live insights update for the author
-            (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id);
+            (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id, ((_c = post.author) === null || _c === void 0 ? void 0 : _c.type) === 'company' ? 'company' : 'user');
             res.json({
                 success: true,
                 data: Object.assign(Object.assign({}, updatedDoc), { type: 'post' }),
@@ -1162,7 +1266,7 @@ exports.postsController = {
     }),
     // DELETE /api/posts/:id - Delete post (author only)
     deletePost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
@@ -1183,7 +1287,7 @@ exports.postsController = {
             }
             yield db.collection(POSTS_COLLECTION).deleteOne({ id });
             // Trigger live insights update for the author
-            (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id);
+            (0, exports.emitAuthorInsightsUpdate)(req.app, post.author.id, ((_b = post.author) === null || _b === void 0 ? void 0 : _b.type) === 'company' ? 'company' : 'user');
             res.json({ success: true, message: 'Post deleted successfully' });
         }
         catch (error) {
@@ -1193,7 +1297,7 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/react - Add reaction to post
     reactToPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const { id } = req.params;
             const { reaction, action: forceAction } = req.body;
@@ -1258,7 +1362,7 @@ exports.postsController = {
                 updatedPost.userReactions = [];
             }
             if (updatedPost.author && updatedPost.author.id) {
-                (0, exports.emitAuthorInsightsUpdate)(req.app, updatedPost.author.id);
+                (0, exports.emitAuthorInsightsUpdate)(req.app, updatedPost.author.id, ((_b = updatedPost.author) === null || _b === void 0 ? void 0 : _b.type) === 'company' ? 'company' : 'user');
             }
             // Broadcast post update to all connected clients for real-time reactions
             const io = req.app.get('io');
@@ -1274,7 +1378,7 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/boost - Boost post and deduct credits server-side
     boostPost: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
+        var _a, _b, _c, _d;
         try {
             const { id } = req.params;
             const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
@@ -1350,7 +1454,7 @@ exports.postsController = {
                     const appInstance = req.app;
                     const authorId = ((_b = boostedDoc.author) === null || _b === void 0 ? void 0 : _b.id) || post.author.id;
                     if (authorId) {
-                        yield (0, exports.emitAuthorInsightsUpdate)(appInstance, authorId);
+                        yield (0, exports.emitAuthorInsightsUpdate)(appInstance, authorId, ((_c = boostedDoc.author) === null || _c === void 0 ? void 0 : _c.type) === 'company' || ((_d = post.author) === null || _d === void 0 ? void 0 : _d.type) === 'company' ? 'company' : 'user');
                     }
                 }
                 catch (e) {

@@ -186,7 +186,11 @@ export const commentsController = {
         }
 
         if (post && post.author && post.author.id) {
-          emitAuthorInsightsUpdate(req.app, post.author.id);
+          emitAuthorInsightsUpdate(
+            req.app,
+            post.author.id,
+            post.author?.type === 'company' ? 'company' : 'user'
+          );
         }
       } catch (e) {
         console.error('Error creating comment notification:', e);
@@ -279,7 +283,11 @@ export const commentsController = {
       try {
         const post = await db.collection('posts').findOne({ id: existing.postId });
         if (post && post.author && post.author.id) {
-          emitAuthorInsightsUpdate(req.app, post.author.id);
+          emitAuthorInsightsUpdate(
+            req.app,
+            post.author.id,
+            post.author?.type === 'company' ? 'company' : 'user'
+          );
         }
       } catch (e) {
         console.error('Error triggering insights update on comment delete:', e);
@@ -389,7 +397,11 @@ export const commentsController = {
         try {
           const post = await db.collection('posts').findOne({ id: updatedComment.postId });
           if (post && post.author && post.author.id) {
-            emitAuthorInsightsUpdate(req.app, post.author.id);
+            emitAuthorInsightsUpdate(
+              req.app,
+              post.author.id,
+              post.author?.type === 'company' ? 'company' : 'user'
+            );
           }
         } catch (e) {
           console.error('Error triggering insights update on comment reaction:', e);

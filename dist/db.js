@@ -25,6 +25,7 @@ const MessageThread_1 = require("./models/MessageThread");
 const User_1 = require("./models/User");
 const AdAnalyticsDaily_1 = require("./models/AdAnalyticsDaily");
 const AdEventDedupe_1 = require("./models/AdEventDedupe");
+const CallLog_1 = require("./models/CallLog");
 dotenv_1.default.config();
 const mongoUri = process.env.MONGO_URI;
 // Enhanced MongoDB connection configuration
@@ -79,6 +80,8 @@ function connectDB() {
                 console.log("✅ Message collection initialized");
                 yield (0, MessageThread_1.initializeMessageThreadCollection)(db);
                 console.log("✅ Message thread collection initialized");
+                yield (0, CallLog_1.initializeCallLogsCollection)(db);
+                console.log("✅ Call logs collection initialized");
                 yield (0, User_1.initializeUserCollection)(db);
                 yield (0, AdAnalyticsDaily_1.initializeAdAnalyticsDailyCollection)(db);
                 console.log("✅ AdAnalyticsDaily collection initialized");

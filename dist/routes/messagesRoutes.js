@@ -11,6 +11,8 @@ const router = express_1.default.Router();
 router.use(authMiddleware_1.requireAuth);
 // GET /api/messages/conversations - Get all conversations for a user
 router.get('/conversations', messagesController_1.messagesController.getConversations);
+// GET /api/messages/call-history - Get call history for an identity
+router.get('/call-history', messagesController_1.messagesController.getCallHistory);
 // Alias for conversation-specific messages
 router.get('/conversation/:userId', messagesController_1.messagesController.getMessages);
 // PUT /api/messages/mark-read - Mark messages as read

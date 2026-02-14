@@ -14,7 +14,10 @@ const generateCompanyHandle = async (name: string): Promise<string> => {
 
   // Try base handle first
   const existingUser = await db.collection('users').findOne({ handle: baseHandle });
-  const existingCompany = await db.collection('companies').findOne({ handle: baseHandle });
+  const existingCompany = await db.collection('companies').findOne({
+    handle: baseHandle,
+    legacyArchived: { $ne: true }
+  });
 
   if (!existingUser && !existingCompany) return baseHandle;
 
@@ -22,7 +25,10 @@ const generateCompanyHandle = async (name: string): Promise<string> => {
   for (let i = 0; i < 10; i++) {
     const candidate = `${baseHandle}${Math.floor(Math.random() * 1000)}`;
     const user = await db.collection('users').findOne({ handle: candidate });
-    const comp = await db.collection('companies').findOne({ handle: candidate });
+    const comp = await db.collection('companies').findOne({
+      handle: candidate,
+      legacyArchived: { $ne: true }
+    });
     if (!user && !comp) return candidate;
   }
 
@@ -37,40 +43,28 @@ router.get('/me', requireAuth, async (req, res) => {
     const currentUser = (req as any).user;
     const db = getDB();
 
-    const memberships = await db.collection('company_members').find({ userId: currentUser.id }).toArray();
-    const companyIds = memberships.map(m => m.companyId);
+    const [memberships, ownedCompanies] = await Promise.all([
+      db.collection('company_members').find({ userId: currentUser.id }).toArray(),
+      db.collection('companies').find({ ownerId: currentUser.id, legacyArchived: { $ne: true } }).toArray(),
+    ]);
 
-    // Also include the legacy company if it exists (where userId === companyId)
-    if (!companyIds.includes(currentUser.id)) {
-      const user = await db.collection('users').findOne({ id: currentUser.id });
-      if (user?.companyName) {
-        companyIds.push(currentUser.id);
-      }
-    }
+    const membershipCompanyIds = memberships
+      .map((m: any) => m.companyId)
+      .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
 
-    const companies: any[] = await db.collection('companies').find({ id: { $in: companyIds } }).toArray();
+    const ownerCompanyIds = ownedCompanies
+      .map((company: any) => company.id)
+      .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
 
-    // Fallback for legacy companies not in 'companies' collection yet
-    const legacyIds = companyIds.filter(id => !companies.some(c => c.id === id));
-    for (const lid of legacyIds) {
-      const u = await db.collection('users').findOne({ id: lid });
-      if (u) {
-        companies.push({
-          id: u.id,
-          name: u.companyName || u.name,
-          website: u.companyWebsite,
-          industry: u.industry,
-          location: u.location || '',
-          employeeCount: u.employeeCount,
-          email: u.companyEmail || '',
-          bio: u.bio,
-          isVerified: !!u.companyWebsite,
-          ownerId: u.id,
-          createdAt: u.createdAt || new Date(),
-          updatedAt: u.updatedAt || new Date()
-        } as any);
-      }
-    }
+    const companyIds = Array.from(new Set([...membershipCompanyIds, ...ownerCompanyIds]))
+      .filter((companyId) => companyId !== currentUser.id);
+
+    const companies: any[] = companyIds.length > 0
+      ? await db.collection('companies').find({
+          id: { $in: companyIds },
+          legacyArchived: { $ne: true }
+        }).toArray()
+      : [];
 
     // Merge role into company data
     const data = companies.map(c => {
@@ -116,7 +110,7 @@ router.post('/', requireAuth, async (req, res) => {
         return res.status(400).json({ success: false, error: 'Handle must be between 3 and 30 characters' });
       }
       const existingUser = await db.collection('users').findOne({ handle });
-      const existingCompany = await db.collection('companies').findOne({ handle });
+      const existingCompany = await db.collection('companies').findOne({ handle, legacyArchived: { $ne: true } });
       if (existingUser || existingCompany) {
         return res.status(409).json({ success: false, error: 'Handle already taken' });
       }
@@ -125,7 +119,10 @@ router.post('/', requireAuth, async (req, res) => {
     }
 
     // 1. Limit validation: Check how many companies the user owns
-    const ownedCompaniesCount = await db.collection('companies').countDocuments({ ownerId: currentUser.id });
+    const ownedCompaniesCount = await db.collection('companies').countDocuments({
+      ownerId: currentUser.id,
+      legacyArchived: { $ne: true }
+    });
     const MAX_COMPANIES = 5;
     if (ownedCompaniesCount >= MAX_COMPANIES) {
       return res.status(403).json({
@@ -198,8 +195,12 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
       userId: currentUser.id,
       role: { $in: ['owner', 'admin'] }
     });
+    const company = await db.collection('companies').findOne(
+      { id: companyId, legacyArchived: { $ne: true } },
+      { projection: { ownerId: 1 } }
+    );
 
-    if (!membership && currentUser.id !== companyId) {
+    if (!membership && company?.ownerId !== currentUser.id) {
       return res.status(403).json({ success: false, error: 'Unauthorized to update this corporate identity' });
     }
 
@@ -246,7 +247,11 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
       }
 
       const existingUser = await db.collection('users').findOne({ handle: normalizedHandle });
-      const existingCompany = await db.collection('companies').findOne({ handle: normalizedHandle, id: { $ne: companyId } });
+      const existingCompany = await db.collection('companies').findOne({
+        handle: normalizedHandle,
+        id: { $ne: companyId },
+        legacyArchived: { $ne: true }
+      });
 
       if (existingUser || existingCompany) {
         return res.status(409).json({ success: false, error: 'Handle already taken' });
@@ -257,29 +262,9 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
     updates.updatedAt = new Date();
 
     const result = await db.collection('companies').updateOne(
-      { id: companyId },
+      { id: companyId, legacyArchived: { $ne: true } },
       { $set: updates }
     );
-
-    // If it was a legacy company in users collection
-    if (result.matchedCount === 0 && companyId === currentUser.id) {
-      await db.collection('users').updateOne(
-        { id: companyId },
-        {
-          $set: {
-            companyName: updates.name,
-            companyWebsite: updates.website,
-            industry: updates.industry,
-            location: updates.location,
-            employeeCount: updates.employeeCount,
-            companyEmail: updates.email,
-            bio: updates.bio,
-            isVerified: updates.isVerified,
-            updatedAt: new Date().toISOString()
-          }
-        }
-      );
-    }
 
     res.json({ success: true, message: 'Corporate identity updated successfully' });
   } catch (error) {
@@ -295,7 +280,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     const currentUser = (req as any).user;
     const db = getDB();
 
-    const company = await db.collection('companies').findOne({ id });
+    const company = await db.collection('companies').findOne({ id, legacyArchived: { $ne: true } });
     if (!company) {
       return res.status(404).json({ success: false, error: 'Corporate identity not found' });
     }
@@ -307,7 +292,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       userId: currentUser.id
     });
 
-    if (!membership && company.ownerId !== currentUser.id && id !== currentUser.id) {
+    if (!membership && company.ownerId !== currentUser.id) {
       // Check if this is a request for basic public info vs management info
       // For now, restrict this route to members only as it's used in management views
       return res.status(403).json({ success: false, error: 'You are not a member of this corporate identity' });
@@ -339,9 +324,15 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
       userId: currentUser.id,
       role: { $in: ['owner', 'admin'] }
     });
+    const company = await db.collection('companies').findOne(
+      { id: companyId, legacyArchived: { $ne: true } },
+      { projection: { id: 1, ownerId: 1, name: 1 } }
+    );
+    if (!company) {
+      return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+    }
 
-    // If not in company_members, check if they ARE the company (initial setup)
-    if (!member && currentUser.id !== companyId) {
+    if (!member && company.ownerId !== currentUser.id) {
       return res.status(403).json({ success: false, error: 'Unauthorized to invite' });
     }
 
@@ -368,16 +359,7 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
     const insertResult = await db.collection('company_invites').insertOne(invite);
     const inviteId = insertResult.insertedId.toString();
 
-    // Get company name for the email/notification
-    let companyName = 'A Company';
-    const company = await db.collection('companies').findOne({ id: companyId });
-    if (company) {
-      companyName = company.name;
-    } else {
-      // Fallback for legacy
-      const legacyUser = await db.collection('users').findOne({ id: companyId });
-      companyName = legacyUser?.companyName || legacyUser?.name || 'A Company';
-    }
+    const companyName = company.name || 'A Company';
 
     if (invitedUser) {
       await createNotificationInDB(
@@ -481,8 +463,15 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
       userId: currentUser.id,
       role: { $in: ['owner', 'admin'] }
     });
+    const company = await db.collection('companies').findOne(
+      { id: companyId, legacyArchived: { $ne: true } },
+      { projection: { id: 1, ownerId: 1, name: 1 } }
+    );
+    if (!company) {
+      return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+    }
 
-    if (!requester && currentUser.id !== companyId) {
+    if (!requester && company.ownerId !== currentUser.id) {
       return res.status(403).json({ success: false, error: 'Unauthorized' });
     }
 
@@ -514,15 +503,7 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
       }
     );
 
-    // Get company name
-    let companyName = 'A Company';
-    const company = await db.collection('companies').findOne({ id: companyId });
-    if (company) {
-      companyName = company.name;
-    } else {
-      const legacyUser = await db.collection('users').findOne({ id: companyId });
-      companyName = legacyUser?.companyName || legacyUser?.name || 'A Company';
-    }
+    const companyName = company.name || 'A Company';
 
     if (invite.targetUserId) {
       await createNotificationInDB(
@@ -558,8 +539,15 @@ router.get('/:companyId/members', requireAuth, async (req, res) => {
       companyId,
       userId: currentUser.id
     });
+    const companyAccess = await db.collection('companies').findOne(
+      { id: companyId, legacyArchived: { $ne: true } },
+      { projection: { ownerId: 1 } }
+    );
+    if (!companyAccess) {
+      return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+    }
 
-    if (!isMember && currentUser.id !== companyId) {
+    if (!isMember && companyAccess.ownerId !== currentUser.id) {
       return res.status(403).json({ success: false, error: 'Unauthorized to view members' });
     }
 
@@ -606,8 +594,15 @@ router.get('/:companyId/invites', requireAuth, async (req, res) => {
       userId: currentUser.id,
       role: { $in: ['owner', 'admin'] }
     });
+    const companyAccess = await db.collection('companies').findOne(
+      { id: companyId, legacyArchived: { $ne: true } },
+      { projection: { ownerId: 1 } }
+    );
+    if (!companyAccess) {
+      return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+    }
 
-    if (!requester && currentUser.id !== companyId) {
+    if (!requester && companyAccess.ownerId !== currentUser.id) {
       return res.status(403).json({ success: false, error: 'Unauthorized to view invites' });
     }
 
@@ -639,8 +634,15 @@ router.delete('/:companyId/invites/:inviteId', requireAuth, async (req, res) => 
       userId: currentUser.id,
       role: { $in: ['owner', 'admin'] }
     });
+    const companyAccess = await db.collection('companies').findOne(
+      { id: companyId, legacyArchived: { $ne: true } },
+      { projection: { ownerId: 1 } }
+    );
+    if (!companyAccess) {
+      return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+    }
 
-    if (!requester && currentUser.id !== companyId) {
+    if (!requester && companyAccess.ownerId !== currentUser.id) {
       return res.status(403).json({ success: false, error: 'Unauthorized' });
     }
 
@@ -822,8 +824,15 @@ router.delete('/:companyId/members/:userId', requireAuth, async (req, res) => {
       userId: currentUser.id,
       role: { $in: ['owner', 'admin'] }
     });
+    const companyAccess = await db.collection('companies').findOne(
+      { id: companyId, legacyArchived: { $ne: true } },
+      { projection: { ownerId: 1 } }
+    );
+    if (!companyAccess) {
+      return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+    }
 
-    if (!requester && currentUser.id !== companyId) {
+    if (!requester && companyAccess.ownerId !== currentUser.id) {
       return res.status(403).json({ success: false, error: 'Unauthorized' });
     }
 
@@ -841,7 +850,7 @@ router.post('/:companyId/subscribe', requireAuth, async (req, res) => {
   const currentUser = (req as any).user;
   const db = getDB();
 
-  const company = await db.collection('companies').findOne({ id: companyId });
+  const company = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
   if (!company) return res.status(404).json({ success: false, error: 'Company not found' });
 
   await db.collection('users').updateOne(
@@ -850,14 +859,14 @@ router.post('/:companyId/subscribe', requireAuth, async (req, res) => {
   );
 
   await db.collection('companies').updateOne(
-    { id: companyId },
+    { id: companyId, legacyArchived: { $ne: true } },
     { $addToSet: { subscribers: currentUser.id }, $set: { updatedAt: new Date() } }
   );
 
-  const refreshed = await db.collection('companies').findOne({ id: companyId });
+  const refreshed = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
   const subscribers = Array.isArray(refreshed?.subscribers) ? [...new Set(refreshed.subscribers)] : [];
   await db.collection('companies').updateOne(
-    { id: companyId },
+    { id: companyId, legacyArchived: { $ne: true } },
     { $set: { subscriberCount: subscribers.length, subscribers } }
   );
 
@@ -875,14 +884,14 @@ router.post('/:companyId/unsubscribe', requireAuth, async (req, res) => {
   );
 
   await db.collection('companies').updateOne(
-    { id: companyId },
+    { id: companyId, legacyArchived: { $ne: true } },
     ({ $pull: { subscribers: currentUser.id }, $set: { updatedAt: new Date() } } as any)
   );
 
-  const refreshed = await db.collection('companies').findOne({ id: companyId });
+  const refreshed = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
   const subscribers = Array.isArray(refreshed?.subscribers) ? [...new Set(refreshed.subscribers)] : [];
   await db.collection('companies').updateOne(
-    { id: companyId },
+    { id: companyId, legacyArchived: { $ne: true } },
     { $set: { subscriberCount: subscribers.length, subscribers } }
   );
 
@@ -892,7 +901,7 @@ router.post('/:companyId/unsubscribe', requireAuth, async (req, res) => {
 router.get('/:companyId/subscribers', requireAuth, async (req, res) => {
   const { companyId } = req.params;
   const db = getDB();
-  const company = await db.collection('companies').findOne({ id: companyId });
+  const company = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
   if (!company) return res.status(404).json({ success: false, error: 'Company not found' });
 
   const ids: string[] = Array.isArray(company.subscribers) ? company.subscribers : [];

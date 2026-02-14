@@ -32,12 +32,6 @@ const validateIdentityAccess = (userId, identityId) => __awaiter(void 0, void 0,
     if (membership) {
         return true;
     }
-    // 3. Legacy Company Check (where user is the owner and the company ID matches user ID)
-    // This is for cases where the user has a companyName but isn't explicitly in company_members yet
-    const user = yield db.collection('users').findOne({ id: userId });
-    if ((user === null || user === void 0 ? void 0 : user.companyName) && userId === identityId) {
-        return true;
-    }
     return false;
 });
 exports.validateIdentityAccess = validateIdentityAccess;

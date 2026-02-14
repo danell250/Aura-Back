@@ -9,6 +9,8 @@ router.use(requireAuth);
 
 // GET /api/messages/conversations - Get all conversations for a user
 router.get('/conversations', messagesController.getConversations);
+// GET /api/messages/call-history - Get call history for an identity
+router.get('/call-history', messagesController.getCallHistory);
 // Alias for conversation-specific messages
 router.get('/conversation/:userId', messagesController.getMessages);
 

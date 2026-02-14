@@ -112,6 +112,7 @@ exports.commentsController = {
         }
     }),
     createComment: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { postId } = req.params;
             const { text, authorId, parentId, taggedUserIds, tempId } = req.body;
@@ -166,7 +167,7 @@ exports.commentsController = {
                     })));
                 }
                 if (post && post.author && post.author.id) {
-                    (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id);
+                    (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id, ((_a = post.author) === null || _a === void 0 ? void 0 : _a.type) === 'company' ? 'company' : 'user');
                 }
             }
             catch (e) {
@@ -231,6 +232,7 @@ exports.commentsController = {
     }),
     // DELETE /api/comments/:id - Delete comment (author-only)
     deleteComment: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
@@ -247,7 +249,7 @@ exports.commentsController = {
             try {
                 const post = yield db.collection('posts').findOne({ id: existing.postId });
                 if (post && post.author && post.author.id) {
-                    (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id);
+                    (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id, ((_a = post.author) === null || _a === void 0 ? void 0 : _a.type) === 'company' ? 'company' : 'user');
                 }
             }
             catch (e) {
@@ -269,7 +271,7 @@ exports.commentsController = {
     }),
     // POST /api/comments/:id/react - Add reaction to comment
     reactToComment: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
+        var _a, _b;
         try {
             const { id } = req.params;
             const { reaction, action: forceAction } = req.body;
@@ -344,7 +346,7 @@ exports.commentsController = {
                 try {
                     const post = yield db.collection('posts').findOne({ id: updatedComment.postId });
                     if (post && post.author && post.author.id) {
-                        (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id);
+                        (0, postsController_1.emitAuthorInsightsUpdate)(req.app, post.author.id, ((_b = post.author) === null || _b === void 0 ? void 0 : _b.type) === 'company' ? 'company' : 'user');
                     }
                 }
                 catch (e) {

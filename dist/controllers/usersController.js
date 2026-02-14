@@ -302,7 +302,10 @@ exports.usersController = {
                 });
             }
             // Try to find company
-            const company = yield db.collection('companies').findOne({ id });
+            const company = yield db.collection('companies').findOne({
+                id,
+                legacyArchived: { $ne: true }
+            });
             if (company) {
                 // Map company fields to user-like structure for profile view compatibility
                 const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'company', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, subscribers: Array.isArray(company.subscribers) ? company.subscribers : [], subscriberCount: typeof company.subscriberCount === 'number'
@@ -354,7 +357,8 @@ exports.usersController = {
             }
             // Try to find company
             const company = yield db.collection('companies').findOne({
-                handle: { $regex: new RegExp(`^${handle}$`, 'i') }
+                handle: { $regex: new RegExp(`^${handle}$`, 'i') },
+                legacyArchived: { $ne: true }
             });
             if (company) {
                 // Map company fields to user-like structure for profile view compatibility
@@ -517,19 +521,53 @@ exports.usersController = {
             if (mutableUpdates.activeGlow) {
                 try {
                     // 1. Update Posts
-                    yield db.collection('posts').updateMany({ "author.id": id }, { $set: { "author.activeGlow": mutableUpdates.activeGlow } });
+                    yield db.collection('posts').updateMany({
+                        "author.id": id,
+                        $or: [
+                            { "author.type": "user" },
+                            { "author.type": { $exists: false } }
+                        ]
+                    }, { $set: { "author.activeGlow": mutableUpdates.activeGlow } });
                     // 2. Update Comments
-                    yield db.collection('comments').updateMany({ "author.id": id }, { $set: { "author.activeGlow": mutableUpdates.activeGlow } });
+                    yield db.collection('comments').updateMany({
+                        "author.id": id,
+                        $or: [
+                            { "author.type": "user" },
+                            { "author.type": { $exists: false } }
+                        ]
+                    }, { $set: { "author.activeGlow": mutableUpdates.activeGlow } });
                     // 3. Update Notifications
-                    yield db.collection('users').updateMany({ "notifications.fromUser.id": id }, {
+                    yield db.collection('users').updateMany({
+                        notifications: {
+                            $elemMatch: {
+                                "fromUser.id": id,
+                                $or: [
+                                    { "fromUser.type": "user" },
+                                    { "fromUser.type": { $exists: false } }
+                                ]
+                            }
+                        }
+                    }, {
                         $set: {
                             "notifications.$[elem].fromUser.activeGlow": mutableUpdates.activeGlow
                         }
                     }, {
-                        arrayFilters: [{ "elem.fromUser.id": id }]
+                        arrayFilters: [{
+                                "elem.fromUser.id": id,
+                                $or: [
+                                    { "elem.fromUser.type": "user" },
+                                    { "elem.fromUser.type": { $exists: false } }
+                                ]
+                            }]
                     });
                     // 4. Update Ads
-                    yield db.collection('ads').updateMany({ "ownerId": id }, { $set: { "ownerActiveGlow": mutableUpdates.activeGlow } });
+                    yield db.collection('ads').updateMany({
+                        ownerId: id,
+                        $or: [
+                            { ownerType: "user" },
+                            { ownerType: { $exists: false } }
+                        ]
+                    }, { $set: { "ownerActiveGlow": mutableUpdates.activeGlow } });
                     console.log(`Propagated activeGlow update for user ${id} to posts, comments, notifications, and ads.`);
                 }
                 catch (propError) {
@@ -623,7 +661,13 @@ exports.usersController = {
             if (updates.avatar) {
                 try {
                     // 1. Update Posts
-                    yield db.collection('posts').updateMany({ "author.id": userId }, {
+                    yield db.collection('posts').updateMany({
+                        "author.id": userId,
+                        $or: [
+                            { "author.type": "user" },
+                            { "author.type": { $exists: false } }
+                        ]
+                    }, {
                         $set: {
                             "author.avatar": updates.avatar,
                             "author.avatarType": updates.avatarType,
@@ -631,7 +675,13 @@ exports.usersController = {
                         }
                     });
                     // 2. Update Comments
-                    yield db.collection('comments').updateMany({ "author.id": userId }, {
+                    yield db.collection('comments').updateMany({
+                        "author.id": userId,
+                        $or: [
+                            { "author.type": "user" },
+                            { "author.type": { $exists: false } }
+                        ]
+                    }, {
                         $set: {
                             "author.avatar": updates.avatar,
                             "author.avatarType": updates.avatarType,
@@ -639,14 +689,30 @@ exports.usersController = {
                         }
                     });
                     // 3. Update Notifications (in all users who have notifications from this user)
-                    yield db.collection('users').updateMany({ "notifications.fromUser.id": userId }, {
+                    yield db.collection('users').updateMany({
+                        notifications: {
+                            $elemMatch: {
+                                "fromUser.id": userId,
+                                $or: [
+                                    { "fromUser.type": "user" },
+                                    { "fromUser.type": { $exists: false } }
+                                ]
+                            }
+                        }
+                    }, {
                         $set: {
                             "notifications.$[elem].fromUser.avatar": updates.avatar,
                             "notifications.$[elem].fromUser.avatarType": updates.avatarType,
                             "notifications.$[elem].fromUser.avatarKey": updates.avatarKey
                         }
                     }, {
-                        arrayFilters: [{ "elem.fromUser.id": userId }]
+                        arrayFilters: [{
+                                "elem.fromUser.id": userId,
+                                $or: [
+                                    { "elem.fromUser.type": "user" },
+                                    { "elem.fromUser.type": { $exists: false } }
+                                ]
+                            }]
                     });
                     console.log(`Propagated avatar update for user ${userId} to posts, comments, and notifications.`);
                 }
@@ -1040,11 +1106,16 @@ exports.usersController = {
                 .toArray();
             // Search companies
             const companiesResults = yield db.collection('companies').find({
-                $or: [
-                    { name: searchRegex },
-                    { handle: searchRegex },
-                    { industry: searchRegex },
-                    { description: searchRegex }
+                $and: [
+                    { legacyArchived: { $ne: true } },
+                    {
+                        $or: [
+                            { name: searchRegex },
+                            { handle: searchRegex },
+                            { industry: searchRegex },
+                            { description: searchRegex }
+                        ]
+                    }
                 ]
             })
                 .project({

@@ -42,69 +42,86 @@ export async function migrateLegacyCompanies(): Promise<void> {
     let updatedCount = 0;
 
     for (const user of legacyUsers) {
-      // Check if this user already has a company entry with their ID
-      const existingCompany = await db.collection('companies').findOne({ id: user.id });
-      
-      if (!existingCompany) {
-        // Create new company entry
-        const handle = user.handle && user.handle.startsWith('@') 
-          ? user.handle 
-          : await generateCompanyHandle(user.companyName || user.name);
+      const [migratedCompany, legacySameIdCompany] = await Promise.all([
+        db.collection('companies').findOne({ legacySourceUserId: user.id }),
+        db.collection('companies').findOne({ id: user.id, ownerId: user.id }),
+      ]);
+
+      if (!migratedCompany) {
+        const name = (user.companyName || legacySameIdCompany?.name || user.name || 'Company').trim();
+        const website = (user.companyWebsite || legacySameIdCompany?.website || '').trim();
+        const industry = (user.industry || legacySameIdCompany?.industry || 'Other').trim() || 'Other';
+        const handle = await generateCompanyHandle(name);
+        const companyId = `comp-${crypto.randomBytes(8).toString('hex')}`;
 
         const newCompany = {
-          id: user.id,
-          name: user.companyName || user.name,
-          handle: handle,
-          website: user.companyWebsite || '',
-          industry: user.industry || 'Other',
-          bio: user.bio || '',
-          isVerified: user.isVerified || false,
+          id: companyId,
+          legacySourceUserId: user.id,
+          name,
+          handle,
+          website,
+          industry,
+          bio: '',
+          isVerified: !!website,
           ownerId: user.id,
-          avatar: user.avatar || '',
-          avatarType: user.avatarType || 'image',
-          coverImage: user.coverImage || '',
-          coverType: user.coverType || 'image',
-          createdAt: user.createdAt || new Date(),
-          updatedAt: user.updatedAt || new Date()
+          avatar: '',
+          avatarType: 'image',
+          coverImage: '',
+          coverType: 'image',
+          createdAt: new Date(),
+          updatedAt: new Date(),
         };
 
         await db.collection('companies').insertOne(newCompany);
-        
-        // Remove legacy fields from user object
-        await db.collection('users').updateOne(
-          { id: user.id },
-          { 
-            $unset: { 
-              companyName: "", 
-              companyWebsite: "", 
-              industry: "" 
-            } 
-          }
+        await db.collection('company_members').updateOne(
+          { companyId, userId: user.id },
+          {
+            $set: {
+              companyId,
+              userId: user.id,
+              role: 'owner',
+              joinedAt: new Date(),
+              updatedAt: new Date(),
+            },
+          },
+          { upsert: true },
         );
-        
-        // Ensure user also has a handle if they didn't have one (though they should)
-        if (!user.handle) {
-          await db.collection('users').updateOne(
-            { id: user.id },
-            { $set: { handle: handle } }
+
+        if (legacySameIdCompany) {
+          await db.collection('companies').updateOne(
+            { id: legacySameIdCompany.id },
+            {
+              $set: {
+                legacyArchived: true,
+                supersededByCompanyId: companyId,
+                updatedAt: new Date(),
+              },
+            },
           );
         }
 
         migratedCount++;
         console.log(`✅ Migrated legacy company: ${newCompany.name} (${newCompany.handle})`);
-      } else if (!existingCompany.handle) {
-        // Update existing company if it's missing a handle
-        const handle = user.handle && user.handle.startsWith('@') 
-          ? user.handle 
-          : await generateCompanyHandle(existingCompany.name);
-          
+      } else if (!migratedCompany.handle) {
+        const handle = await generateCompanyHandle(migratedCompany.name || user.companyName || user.name);
         await db.collection('companies').updateOne(
-          { id: existingCompany.id },
-          { $set: { handle: handle, updatedAt: new Date() } }
+          { id: migratedCompany.id },
+          { $set: { handle, updatedAt: new Date() } },
         );
         updatedCount++;
-        console.log(`✅ Updated handle for company: ${existingCompany.name} (${handle})`);
+        console.log(`✅ Updated handle for company: ${migratedCompany.name} (${handle})`);
       }
+
+      await db.collection('users').updateOne(
+        { id: user.id },
+        {
+          $unset: {
+            companyName: '',
+            companyWebsite: '',
+            industry: '',
+          },
+        },
+      );
     }
     
     console.log(`🏁 Migration complete. Migrated: ${migratedCount}, Updated: ${updatedCount}`);

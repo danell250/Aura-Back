@@ -16,6 +16,7 @@ const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
 const identityUtils_1 = require("../utils/identityUtils");
 const MessageThread_1 = require("../models/MessageThread");
+const CallLog_1 = require("../models/CallLog");
 const SEND_WINDOW_MS = 60000;
 const SEND_WINDOW_LIMIT = 45;
 const sendRateState = new Map();
@@ -300,6 +301,91 @@ const buildThreadStatePatch = (state) => {
     }
 };
 exports.messagesController = {
+    // GET /api/messages/call-history - Get call history for the active identity
+    getCallHistory: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, message: 'Authentication required' });
+            }
+            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                ownerType: req.query.ownerType,
+                ownerId: req.query.userId || req.query.ownerId,
+            }, req.headers);
+            if (!actor) {
+                return res.status(403).json({ success: false, message: 'Unauthorized access to this identity' });
+            }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({ success: true, data: [] });
+            }
+            const withId = typeof req.query.withId === 'string' ? req.query.withId.trim() : '';
+            const withTypeRaw = req.query.withType;
+            const withType = withTypeRaw === 'company' || withTypeRaw === 'user' ? withTypeRaw : undefined;
+            const onlyMissed = String(req.query.onlyMissed || '').toLowerCase() === 'true';
+            const limitInput = Number(req.query.limit);
+            const limit = Number.isFinite(limitInput) ? Math.min(Math.max(Math.round(limitInput), 1), 200) : 100;
+            const query = {};
+            if (withId) {
+                const resolvedWithType = withType || (yield resolveEntityTypeById(withId));
+                if (!resolvedWithType) {
+                    return res.status(404).json({ success: false, message: 'Conversation peer not found' });
+                }
+                query.$or = [
+                    { fromType: actor.type, fromId: actor.id, toType: resolvedWithType, toId: withId },
+                    { fromType: resolvedWithType, fromId: withId, toType: actor.type, toId: actor.id },
+                ];
+            }
+            else {
+                query.$or = [
+                    { fromType: actor.type, fromId: actor.id },
+                    { toType: actor.type, toId: actor.id },
+                ];
+            }
+            if (onlyMissed) {
+                query.status = 'missed';
+                query.toType = actor.type;
+                query.toId = actor.id;
+            }
+            const rows = yield (0, CallLog_1.getCallLogsCollection)()
+                .find(query)
+                .sort({ startedAt: -1 })
+                .limit(limit)
+                .toArray();
+            const data = rows.map((row) => {
+                const incoming = row.toType === actor.type && row.toId === actor.id;
+                const peerType = incoming ? row.fromType : row.toType;
+                const peerId = incoming ? row.fromId : row.toId;
+                return {
+                    callId: row.callId,
+                    callType: row.callType,
+                    status: row.status,
+                    startedAt: row.startedAt,
+                    acceptedAt: row.acceptedAt || null,
+                    endedAt: row.endedAt || null,
+                    durationSeconds: typeof row.durationSeconds === 'number' ? row.durationSeconds : null,
+                    endReason: row.endReason || null,
+                    fromType: row.fromType,
+                    fromId: row.fromId,
+                    toType: row.toType,
+                    toId: row.toId,
+                    direction: incoming ? 'incoming' : 'outgoing',
+                    peerType,
+                    peerId,
+                    conversationKey: `${peerType}:${peerId}`,
+                    isMissedForActor: row.status === 'missed' && incoming,
+                };
+            });
+            res.json({ success: true, data });
+        }
+        catch (error) {
+            console.error('Error fetching call history:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to fetch call history',
+            });
+        }
+    }),
     // GET /api/messages/conversations - Get all conversations for an actor (personal or company)
     getConversations: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;

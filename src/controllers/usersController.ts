@@ -314,7 +314,10 @@ export const usersController = {
       }
 
       // Try to find company
-      const company = await db.collection('companies').findOne({ id });
+      const company = await db.collection('companies').findOne({
+        id,
+        legacyArchived: { $ne: true }
+      });
 
       if (company) {
         // Map company fields to user-like structure for profile view compatibility
@@ -395,7 +398,8 @@ export const usersController = {
 
       // Try to find company
       const company = await db.collection('companies').findOne({
-        handle: { $regex: new RegExp(`^${handle}$`, 'i') }
+        handle: { $regex: new RegExp(`^${handle}$`, 'i') },
+        legacyArchived: { $ne: true }
       });
 
       if (company) {
@@ -611,32 +615,66 @@ export const usersController = {
         try {
           // 1. Update Posts
           await db.collection('posts').updateMany(
-            { "author.id": id },
+            {
+              "author.id": id,
+              $or: [
+                { "author.type": "user" },
+                { "author.type": { $exists: false } }
+              ]
+            },
             { $set: { "author.activeGlow": mutableUpdates.activeGlow } }
           );
 
           // 2. Update Comments
           await db.collection('comments').updateMany(
-            { "author.id": id },
+            {
+              "author.id": id,
+              $or: [
+                { "author.type": "user" },
+                { "author.type": { $exists: false } }
+              ]
+            },
             { $set: { "author.activeGlow": mutableUpdates.activeGlow } }
           );
 
           // 3. Update Notifications
           await db.collection('users').updateMany(
-            { "notifications.fromUser.id": id },
+            {
+              notifications: {
+                $elemMatch: {
+                  "fromUser.id": id,
+                  $or: [
+                    { "fromUser.type": "user" },
+                    { "fromUser.type": { $exists: false } }
+                  ]
+                }
+              }
+            },
             {
               $set: {
                 "notifications.$[elem].fromUser.activeGlow": mutableUpdates.activeGlow
               }
             },
             {
-              arrayFilters: [{ "elem.fromUser.id": id }]
+              arrayFilters: [{
+                "elem.fromUser.id": id,
+                $or: [
+                  { "elem.fromUser.type": "user" },
+                  { "elem.fromUser.type": { $exists: false } }
+                ]
+              }]
             }
           );
 
           // 4. Update Ads
           await db.collection('ads').updateMany(
-            { "ownerId": id },
+            {
+              ownerId: id,
+              $or: [
+                { ownerType: "user" },
+                { ownerType: { $exists: false } }
+              ]
+            },
             { $set: { "ownerActiveGlow": mutableUpdates.activeGlow } }
           );
 
@@ -763,7 +801,13 @@ export const usersController = {
         try {
           // 1. Update Posts
           await db.collection('posts').updateMany(
-            { "author.id": userId },
+            {
+              "author.id": userId,
+              $or: [
+                { "author.type": "user" },
+                { "author.type": { $exists: false } }
+              ]
+            },
             {
               $set: {
                 "author.avatar": updates.avatar,
@@ -775,7 +819,13 @@ export const usersController = {
 
           // 2. Update Comments
           await db.collection('comments').updateMany(
-            { "author.id": userId },
+            {
+              "author.id": userId,
+              $or: [
+                { "author.type": "user" },
+                { "author.type": { $exists: false } }
+              ]
+            },
             {
               $set: {
                 "author.avatar": updates.avatar,
@@ -787,7 +837,17 @@ export const usersController = {
 
           // 3. Update Notifications (in all users who have notifications from this user)
           await db.collection('users').updateMany(
-            { "notifications.fromUser.id": userId },
+            {
+              notifications: {
+                $elemMatch: {
+                  "fromUser.id": userId,
+                  $or: [
+                    { "fromUser.type": "user" },
+                    { "fromUser.type": { $exists: false } }
+                  ]
+                }
+              }
+            },
             {
               $set: {
                 "notifications.$[elem].fromUser.avatar": updates.avatar,
@@ -796,7 +856,13 @@ export const usersController = {
               }
             },
             {
-              arrayFilters: [{ "elem.fromUser.id": userId }]
+              arrayFilters: [{
+                "elem.fromUser.id": userId,
+                $or: [
+                  { "elem.fromUser.type": "user" },
+                  { "elem.fromUser.type": { $exists: false } }
+                ]
+              }]
             }
           );
 
@@ -1257,11 +1323,16 @@ export const usersController = {
 
       // Search companies
       const companiesResults = await db.collection('companies').find({
-        $or: [
-          { name: searchRegex },
-          { handle: searchRegex },
-          { industry: searchRegex },
-          { description: searchRegex }
+        $and: [
+          { legacyArchived: { $ne: true } },
+          {
+            $or: [
+              { name: searchRegex },
+              { handle: searchRegex },
+              { industry: searchRegex },
+              { description: searchRegex }
+            ]
+          }
         ]
       })
         .project({

@@ -30,13 +30,6 @@ export const validateIdentityAccess = async (userId: string, identityId: string)
     return true;
   }
 
-  // 3. Legacy Company Check (where user is the owner and the company ID matches user ID)
-  // This is for cases where the user has a companyName but isn't explicitly in company_members yet
-  const user = await db.collection('users').findOne({ id: userId });
-  if (user?.companyName && userId === identityId) {
-    return true;
-  }
-
   return false;
 };
 
