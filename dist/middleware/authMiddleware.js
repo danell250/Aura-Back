@@ -51,6 +51,15 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id: decoded.id });
             if (user) {
+                if (user.isSuspended) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Account suspended',
+                        message: user.suspensionReason
+                            ? `Your account is suspended: ${user.suspensionReason}`
+                            : 'Your account is suspended. Please contact support.'
+                    });
+                }
                 req.user = (0, userUtils_1.transformUser)(user);
                 req.isAuthenticated = (() => true);
                 return next();
@@ -81,6 +90,15 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decodedToken.uid });
                 if (user) {
+                    if (user.isSuspended) {
+                        return res.status(403).json({
+                            success: false,
+                            error: 'Account suspended',
+                            message: user.suspensionReason
+                                ? `Your account is suspended: ${user.suspensionReason}`
+                                : 'Your account is suspended. Please contact support.'
+                        });
+                    }
                     req.user = (0, userUtils_1.transformUser)(user);
                 }
                 else {

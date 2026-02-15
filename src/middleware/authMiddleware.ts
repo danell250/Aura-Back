@@ -44,6 +44,15 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
       const user = await db.collection('users').findOne({ id: decoded.id });
       
       if (user) {
+        if (user.isSuspended) {
+          return res.status(403).json({
+            success: false,
+            error: 'Account suspended',
+            message: user.suspensionReason
+              ? `Your account is suspended: ${user.suspensionReason}`
+              : 'Your account is suspended. Please contact support.'
+          });
+        }
         req.user = transformUser(user) as unknown as User;
         req.isAuthenticated = (() => true) as any;
         return next();
@@ -79,6 +88,15 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
         const user = await db.collection('users').findOne({ id: decodedToken.uid });
         
         if (user) {
+          if ((user as any).isSuspended) {
+            return res.status(403).json({
+              success: false,
+              error: 'Account suspended',
+              message: (user as any).suspensionReason
+                ? `Your account is suspended: ${(user as any).suspensionReason}`
+                : 'Your account is suspended. Please contact support.'
+            });
+          }
           req.user = transformUser(user) as unknown as User;
         } else {
           // User authenticated but not in DB yet
