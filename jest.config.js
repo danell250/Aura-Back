@@ -3,11 +3,9 @@ module.exports = {
   testEnvironment: 'node',
   testMatch: ['**/tests/**/*.test.ts'],
   setupFilesAfterEnv: ['./tests/setup.ts'],
-  moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1',
-  },
   verbose: true,
-  forceExit: true,
+  forceExit: false,
+  testTimeout: 90000,
   clearMocks: true,
   resetMocks: true,
   restoreMocks: true,

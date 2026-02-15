@@ -242,11 +242,13 @@ export const adSubscriptionsController = {
       const db = getDB();
       const now = Date.now();
 
-      // Calculate end date for one-time packages
-      const endDate = durationDays ? now + (durationDays * 24 * 60 * 60 * 1000) : undefined;
-
-      // For subscriptions, next billing is typically 30 days from start
-      const nextBillingDate = !durationDays ? now + (30 * 24 * 60 * 60 * 1000) : undefined;
+      // Billing windows are 30 days for recurring plans.
+      const recurringBillingEnd = now + (30 * 24 * 60 * 60 * 1000);
+      const nextBillingDate = !durationDays ? recurringBillingEnd : undefined;
+      // One-time plans end after their explicit duration. Recurring plans must renew by next billing date.
+      const endDate = durationDays
+        ? now + (durationDays * 24 * 60 * 60 * 1000)
+        : recurringBillingEnd;
 
       const plan = AD_PLANS[packageId as keyof typeof AD_PLANS];
       const impressionLimit = plan ? plan.impressionLimit : 0;
@@ -705,13 +707,22 @@ export const adSubscriptionsController = {
           });
 
           if (subscription) {
+            const renewalNow = Date.now();
+            const renewalDays = subscription.durationDays || 30;
+            const nextBillingDate = renewalNow + (30 * 24 * 60 * 60 * 1000);
+            const nextPeriodEnd = renewalNow + (renewalDays * 24 * 60 * 60 * 1000);
+
             await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
               { _id: subscription._id },
               {
                 $set: {
                   adsUsed: 0,
                   impressionsUsed: 0,
-                  updatedAt: Date.now(),
+                  periodStart: renewalNow,
+                  periodEnd: nextPeriodEnd,
+                  nextBillingDate,
+                  endDate: nextBillingDate,
+                  updatedAt: renewalNow,
                   status: 'active'
                 }
               }

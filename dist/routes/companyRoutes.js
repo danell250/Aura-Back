@@ -178,12 +178,43 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
         const rawUpdates = req.body || {};
         const updates = {};
         const db = (0, db_1.getDB)();
-        const allowedFields = ['name', 'industry', 'bio', 'website', 'location', 'employeeCount', 'email', 'handle'];
+        const allowedFields = [
+            'name',
+            'industry',
+            'bio',
+            'website',
+            'location',
+            'employeeCount',
+            'email',
+            'handle',
+            'avatar',
+            'avatarType',
+            'avatarKey',
+            'coverImage',
+            'coverType',
+            'coverKey',
+            'avatarCrop',
+            'coverCrop'
+        ];
         for (const field of allowedFields) {
             if (rawUpdates[field] !== undefined) {
                 updates[field] = rawUpdates[field];
             }
         }
+        const normalizeCrop = (input) => {
+            if (!input || typeof input !== 'object')
+                return null;
+            const zoom = Number(input.zoom);
+            const x = Number(input.x);
+            const y = Number(input.y);
+            if (!Number.isFinite(zoom) || !Number.isFinite(x) || !Number.isFinite(y))
+                return null;
+            return {
+                zoom: Math.min(3, Math.max(1, zoom)),
+                x: Math.min(50, Math.max(-50, x)),
+                y: Math.min(50, Math.max(-50, y))
+            };
+        };
         // Verify currentUser is owner/admin
         const membership = yield db.collection('company_members').findOne({
             companyId,
@@ -213,6 +244,20 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
             }
             updates.email = normalizedCompanyEmail;
         }
+        if (rawUpdates.avatarCrop !== undefined) {
+            const normalizedAvatarCrop = normalizeCrop(rawUpdates.avatarCrop);
+            if (!normalizedAvatarCrop) {
+                return res.status(400).json({ success: false, error: 'Invalid avatar crop payload' });
+            }
+            updates.avatarCrop = normalizedAvatarCrop;
+        }
+        if (rawUpdates.coverCrop !== undefined) {
+            const normalizedCoverCrop = normalizeCrop(rawUpdates.coverCrop);
+            if (!normalizedCoverCrop) {
+                return res.status(400).json({ success: false, error: 'Invalid cover crop payload' });
+            }
+            updates.coverCrop = normalizedCoverCrop;
+        }
         // Auto-verify if website is added
         if (updates.website) {
             updates.isVerified = true;
@@ -240,7 +285,11 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
         }
         updates.updatedAt = new Date();
         const result = yield db.collection('companies').updateOne({ id: companyId, legacyArchived: { $ne: true } }, { $set: updates });
-        res.json({ success: true, message: 'Corporate identity updated successfully' });
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+        }
+        const updatedCompany = yield db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
+        res.json({ success: true, data: updatedCompany, message: 'Corporate identity updated successfully' });
     }
     catch (error) {
         console.error('Update company error:', error);

@@ -419,6 +419,59 @@ export const adsController = {
             current: subscription.impressionsUsed
           });
         }
+
+        if (subscription.adsUsed >= subscription.adLimit) {
+          return res.status(403).json({
+            success: false,
+            code: 'AD_LIMIT_REACHED',
+            error: 'Ad placement limit reached for this billing cycle',
+            message: `You have used ${subscription.adsUsed} of ${subscription.adLimit} ad placements for this billing cycle.`,
+            currentUsage: subscription.adsUsed,
+            limit: subscription.adLimit,
+            resetDate: subscription.periodEnd ? new Date(subscription.periodEnd).toISOString() : undefined
+          });
+        }
+
+        // Reserve one ad slot atomically so concurrent requests cannot bypass quota.
+        const reserveFilter: any = {
+          _id: subscription._id,
+          status: 'active',
+          adsUsed: { $lt: subscription.adLimit },
+          $or: [
+            { endDate: { $exists: false } },
+            { endDate: { $gt: now } }
+          ]
+        };
+
+        // Ensure we are still in the same billing window that was validated above.
+        if (subscription.periodEnd) {
+          reserveFilter.periodEnd = subscription.periodEnd;
+        }
+
+        const reserved = await db.collection('adSubscriptions').findOneAndUpdate(
+          reserveFilter,
+          {
+            $inc: { adsUsed: 1 },
+            $set: { updatedAt: Date.now() }
+          },
+          { returnDocument: 'after' }
+        );
+
+        const reservedDoc: any = reserved && typeof reserved === 'object' && 'value' in reserved
+          ? (reserved as any).value
+          : reserved;
+
+        if (!reservedDoc) {
+          return res.status(403).json({
+            success: false,
+            code: 'AD_LIMIT_REACHED',
+            error: 'Ad placement limit reached for this billing cycle',
+            message: 'No ad slots are currently available. Please wait for renewal or upgrade your plan.'
+          });
+        }
+
+        reservedSubscriptionId = subscription.id;
+        subscription = reservedDoc;
       }
 
       const newAd = {
@@ -451,15 +504,39 @@ export const adsController = {
         });
       } catch (error) {
         console.error('Error during ad creation transaction:', error);
-        // If ad was created but subsequent steps failed, we might want to clean up
-        // But for now, we just throw to ensure the client gets an error
+        // Roll back reserved quota if insertion fails after slot reservation.
+        if (reservedSubscriptionId && !isSpecialUser) {
+          try {
+            await db.collection('adSubscriptions').updateOne(
+              {
+                id: reservedSubscriptionId,
+                ownerId: effectiveOwnerId,
+                ownerType: effectiveOwnerType,
+                adsUsed: { $gt: 0 }
+              },
+              {
+                $inc: { adsUsed: -1 },
+                $set: { updatedAt: Date.now() }
+              }
+            );
+          } catch (rollbackError) {
+            console.error('Failed to roll back reserved ad slot:', rollbackError);
+          }
+        }
         throw error;
       }
 
       res.status(201).json({
         success: true,
         data: newAd,
-        message: 'Ad created successfully'
+        message: 'Ad created successfully',
+        subscriptionUsage: subscription
+          ? {
+              adsUsed: subscription.adsUsed,
+              adLimit: subscription.adLimit,
+              resetDate: subscription.periodEnd ? new Date(subscription.periodEnd).toISOString() : undefined
+            }
+          : undefined
       });
     } catch (error) {
       console.error('Error creating ad:', error);

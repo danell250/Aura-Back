@@ -16,6 +16,7 @@ exports.isConnected = void 0;
 exports.isDBConnected = isDBConnected;
 exports.connectDB = connectDB;
 exports.getDB = getDB;
+exports.getDBOptional = getDBOptional;
 exports.checkDBHealth = checkDBHealth;
 exports.closeDB = closeDB;
 const mongodb_1 = require("mongodb");
@@ -27,37 +28,41 @@ const AdAnalyticsDaily_1 = require("./models/AdAnalyticsDaily");
 const AdEventDedupe_1 = require("./models/AdEventDedupe");
 const CallLog_1 = require("./models/CallLog");
 dotenv_1.default.config();
-const mongoUri = process.env.MONGO_URI;
-// Enhanced MongoDB connection configuration
-const connectionOptions = {
-    maxPoolSize: 10,
-    serverSelectionTimeoutMS: 10000, // Increased timeout
-    socketTimeoutMS: 45000,
-    connectTimeoutMS: 10000,
-    heartbeatFrequencyMS: 10000,
-    maxIdleTimeMS: 30000,
-    // Retry configuration
-    retryWrites: true,
-    retryReads: true,
-    // Connection pool settings
-    minPoolSize: 2,
-    maxConnecting: 2,
+const DEFAULT_MONGO_URI = "mongodb://localhost:27017/aura";
+const DEFAULT_DB_NAME = "aura";
+const getMongoUri = () => process.env.MONGO_URI || DEFAULT_MONGO_URI;
+const getDbName = () => process.env.MONGO_DB_NAME || DEFAULT_DB_NAME;
+const buildConnectionOptions = (uri) => {
+    const options = {
+        maxPoolSize: 10,
+        serverSelectionTimeoutMS: 10000,
+        socketTimeoutMS: 45000,
+        connectTimeoutMS: 10000,
+        heartbeatFrequencyMS: 10000,
+        maxIdleTimeMS: 30000,
+        retryWrites: true,
+        retryReads: true,
+        minPoolSize: 2,
+        maxConnecting: 2,
+    };
+    if (uri.includes('mongodb+srv') || uri.includes('mongodb.net')) {
+        Object.assign(options, {
+            tls: true,
+            tlsAllowInvalidCertificates: false,
+            tlsAllowInvalidHostnames: false,
+        });
+    }
+    return options;
 };
-// Add TLS options only if connecting to Atlas (contains mongodb+srv or mongodb.net)
-if (mongoUri && (mongoUri.includes('mongodb+srv') || mongoUri.includes('mongodb.net'))) {
-    Object.assign(connectionOptions, {
-        tls: true,
-        tlsAllowInvalidCertificates: false,
-        tlsAllowInvalidHostnames: false,
-    });
-}
-const client = new mongodb_1.MongoClient(mongoUri || "mongodb://localhost:27017/aura", connectionOptions);
+let client = null;
+let clientUri = null;
 let db;
 let isConnected = false;
 exports.isConnected = isConnected;
 let connectionAttempts = 0;
 const maxRetries = 5;
 let reconnectInterval = null;
+let monitoringClient = null;
 // Connection state management
 function isDBConnected() {
     return isConnected;
@@ -68,9 +73,23 @@ function connectDB() {
         connectionAttempts++;
         try {
             console.log(`🔄 Attempting to connect to MongoDB (attempt ${connectionAttempts}/${maxRetries})...`);
+            const mongoUri = getMongoUri();
+            if (!client || clientUri !== mongoUri) {
+                if (client) {
+                    try {
+                        yield client.close();
+                    }
+                    catch (_a) {
+                        // Ignore close failures when rotating clients.
+                    }
+                }
+                client = new mongodb_1.MongoClient(mongoUri, buildConnectionOptions(mongoUri));
+                clientUri = mongoUri;
+                setupConnectionMonitoring();
+            }
             yield client.connect();
             // Test the connection
-            db = client.db("aura");
+            db = client.db(getDbName());
             yield db.command({ ping: 1 });
             exports.isConnected = isConnected = true;
             connectionAttempts = 0; // Reset on successful connection
@@ -129,7 +148,6 @@ function connectDB() {
             console.log("✅ Connected to MongoDB successfully");
             console.log(`📊 MongoDB connected to database: aura`);
             // Set up connection monitoring
-            setupConnectionMonitoring();
             return db;
         }
         catch (err) {
@@ -183,24 +201,28 @@ function connectDB() {
 }
 // Set up connection monitoring
 function setupConnectionMonitoring() {
+    if (!client || monitoringClient === client) {
+        return;
+    }
+    monitoringClient = client;
     // Monitor connection events
-    client.on('serverHeartbeatFailed', (event) => {
+    monitoringClient.on('serverHeartbeatFailed', (event) => {
         console.warn('⚠️  MongoDB heartbeat failed:', event);
     });
-    client.on('serverClosed', (event) => {
+    monitoringClient.on('serverClosed', (event) => {
         console.warn('⚠️  MongoDB server connection closed:', event);
         exports.isConnected = isConnected = false;
         startPeriodicReconnection();
     });
-    client.on('topologyClosed', () => {
+    monitoringClient.on('topologyClosed', () => {
         console.warn('⚠️  MongoDB topology closed');
         exports.isConnected = isConnected = false;
         startPeriodicReconnection();
     });
-    client.on('serverOpening', () => {
+    monitoringClient.on('serverOpening', () => {
         console.log('✅ MongoDB server connection opening');
     });
-    client.on('topologyOpening', () => {
+    monitoringClient.on('topologyOpening', () => {
         console.log('✅ MongoDB topology opening');
     });
 }
@@ -233,6 +255,12 @@ function getDB() {
     }
     return db;
 }
+function getDBOptional() {
+    if (!isConnected || !db) {
+        return null;
+    }
+    return db;
+}
 // Health check function
 function checkDBHealth() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -262,6 +290,9 @@ function closeDB() {
             if (client) {
                 yield client.close();
                 exports.isConnected = isConnected = false;
+                client = null;
+                clientUri = null;
+                monitoringClient = null;
             }
             console.log("✅ MongoDB connection closed gracefully");
         }

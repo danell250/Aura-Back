@@ -18,7 +18,9 @@ exports.AD_PLANS = {
             '14-Day Signal Visibility Window',
             'Standard Feed Distribution',
             'Signal View & Click Tracking',
-            'Basic Engagement Insights'
+            'Basic Engagement Insights',
+            'Daily Scheduled Reports',
+            'PDF/CSV Report Export'
         ],
         gradient: 'from-slate-400 to-slate-600',
         paymentType: 'one-time'
@@ -39,6 +41,8 @@ exports.AD_PLANS = {
             'Priority Distribution (relative to free & entry users)',
             'Smart CTA Button (click tracking)',
             'Creator Analytics Dashboard',
+            'Weekly & Monthly Scheduled Reports',
+            'PDF/CSV Report Export',
             'Cancel anytime'
         ],
         gradient: 'from-emerald-500 to-emerald-700',
@@ -63,6 +67,8 @@ exports.AD_PLANS = {
             '– audience behavior',
             '– timing performance',
             '– signal interaction trends',
+            'Weekly & Monthly Scheduled Reports',
+            'PDF/CSV Report Export',
             'Verified Aura Badge',
             'Priority / White-Glove Support'
         ],
