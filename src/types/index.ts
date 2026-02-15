@@ -143,10 +143,12 @@ export interface MediaItemMetrics {
 export interface MediaItem {
   id: string;
   url: string;
-  type: 'image' | 'video';
+  type: 'image' | 'video' | 'document';
   key?: string;
   mimeType?: string;
   size?: number;
+  title?: string;
+  description?: string;
   caption?: string;
   order: number;
   metrics: MediaItemMetrics;
@@ -198,7 +200,7 @@ export interface Post {
   isBoosted?: boolean;
   hashtags?: string[];
   mediaUrl?: string;
-  mediaType?: 'image' | 'video';
+  mediaType?: 'image' | 'video' | 'document';
   mediaItems?: MediaItem[];
   visibility?: 'public' | 'acquaintances' | 'private';
 }

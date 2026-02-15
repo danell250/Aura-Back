@@ -1285,13 +1285,19 @@ exports.postsController = {
                     const sanitize = (name) => name.replace(/[^a-zA-Z0-9.-]/g, '_');
                     const path = `${authorId}/${Date.now()}-${sanitize(file.originalname)}`;
                     const url = yield (0, s3Upload_1.uploadToS3)('media', path, file.buffer, file.mimetype);
-                    const type = file.mimetype.startsWith('video/') ? 'video' : 'image';
+                    const type = file.mimetype.startsWith('video/')
+                        ? 'video'
+                        : file.mimetype.startsWith('image/')
+                            ? 'image'
+                            : 'document';
                     uploadedMediaItems.push({
                         url,
                         type,
                         key: path,
                         mimeType: file.mimetype,
                         size: file.size,
+                        title: '',
+                        description: '',
                         caption: '', // Default caption
                         id: `media-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` // Generate ID immediately
                     });
@@ -1313,14 +1319,21 @@ exports.postsController = {
             const mergedItems = [...(parsedMediaItems || []), ...uploadedMediaItems];
             // Enhance media items with metrics and order
             const finalMediaItems = mergedItems.map((item, index) => ({
+                // Persist optional per-item metadata while preserving old caption-only payloads.
+                title: typeof item.title === 'string' ? item.title.trim() : '',
+                description: typeof item.description === 'string' ? item.description.trim() : '',
                 // Strong rule: use mediaKey as id if available, otherwise create one
                 id: item.key || item.id || `mi-${index}-${Date.now()}`,
                 url: item.url,
-                type: item.type,
+                type: (item.type === 'video' || item.type === 'document' || item.type === 'image'
+                    ? item.type
+                    : 'image'),
                 key: item.key,
                 mimeType: item.mimeType,
                 size: item.size,
-                caption: item.caption || '',
+                caption: (typeof item.caption === 'string' ? item.caption.trim() : '') ||
+                    (typeof item.description === 'string' ? item.description.trim() : '') ||
+                    (typeof item.title === 'string' ? item.title.trim() : ''),
                 order: index,
                 metrics: item.metrics || {
                     views: 0,
@@ -1918,6 +1931,8 @@ exports.postsController = {
                 return {
                     id: item.id,
                     order: item.order,
+                    title: item.title,
+                    description: item.description,
                     caption: item.caption,
                     type: item.type,
                     url: item.url,
