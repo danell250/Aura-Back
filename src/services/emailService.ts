@@ -89,6 +89,11 @@ export async function sendCompanyInviteEmail(to: string, companyName: string, in
 interface ReportPreviewPayload {
   periodLabel?: string;
   scope?: string;
+  deliveryMode?: 'inline_email' | 'pdf_attachment';
+  pdfAttachment?: {
+    filename?: string;
+    contentBase64?: string;
+  };
   metrics?: {
     reach?: number;
     ctr?: number;
@@ -125,6 +130,12 @@ export async function sendReportPreviewEmail(to: string, payload: ReportPreviewP
   const scopeLabel = safeText(payload.scope, 'all_signals').replace('_', ' ');
   const topSignals = Array.isArray(payload.topSignals) ? payload.topSignals.slice(0, 3) : [];
   const recommendations = Array.isArray(payload.recommendations) ? payload.recommendations.slice(0, 3) : [];
+  const deliveryMode = payload.deliveryMode === 'pdf_attachment' ? 'pdf_attachment' : 'inline_email';
+  const attachmentName = safeText(payload.pdfAttachment?.filename, `aura-scheduled-report-${new Date().toISOString().split('T')[0]}.pdf`);
+  const attachmentContent = typeof payload.pdfAttachment?.contentBase64 === 'string'
+    ? payload.pdfAttachment.contentBase64.replace(/^data:application\/pdf;base64,/, '').trim()
+    : '';
+  const shouldAttachPdf = deliveryMode === 'pdf_attachment' && attachmentContent.length > 0;
 
   if (!process.env.SENDGRID_API_KEY) {
     console.warn('⚠️ SendGrid credentials not found. Report preview email will be logged to console only.');
@@ -137,7 +148,7 @@ export async function sendReportPreviewEmail(to: string, payload: ReportPreviewP
   }
 
   try {
-    await sgMail.send({
+    const message: any = {
       to,
       from,
       subject: `Aura Scheduled Report Preview • ${periodLabel}`,
@@ -146,7 +157,8 @@ export async function sendReportPreviewEmail(to: string, payload: ReportPreviewP
           <div style="background: linear-gradient(135deg, #0f172a 0%, #0b1120 70%); color: white; padding: 28px 28px 20px 28px;">
             <p style="margin:0;font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#6ee7b7;font-weight:800;">Aura Reports</p>
             <h2 style="margin:10px 0 6px 0;font-size:24px;line-height:1.2;">Scheduled Report Preview</h2>
-            <p style="margin:0;color:#cbd5e1;font-size:13px;">Sender: reports@ • ${periodLabel} • Scope: ${scopeLabel}</p>
+            <p style="margin:0;color:#cbd5e1;font-size:13px;">${periodLabel} • Scope: ${scopeLabel}</p>
+            ${shouldAttachPdf ? '<p style="margin:8px 0 0 0;color:#a7f3d0;font-size:12px;">Full report PDF attached.</p>' : ''}
           </div>
           <div style="padding: 24px 28px;">
             <h3 style="margin:0 0 12px 0;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;">Executive Summary</h3>
@@ -173,7 +185,20 @@ export async function sendReportPreviewEmail(to: string, payload: ReportPreviewP
           </div>
         </div>
       `
-    });
+    };
+
+    if (shouldAttachPdf) {
+      message.attachments = [
+        {
+          content: attachmentContent,
+          filename: attachmentName,
+          type: 'application/pdf',
+          disposition: 'attachment'
+        }
+      ];
+    }
+
+    await sgMail.send(message);
     console.log('✓ Report preview email sent via SendGrid to:', to);
   } catch (error: any) {
     console.error('Error sending report preview email:', error);

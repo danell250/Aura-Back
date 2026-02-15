@@ -114,7 +114,7 @@ const safeNumber = (value, digits = 2) => {
 };
 function sendReportPreviewEmail(to, payload) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e, _f, _g, _h;
         const from = `${process.env.SENDGRID_REPORTS_FROM_NAME || 'Aura Reports'} <${process.env.SENDGRID_REPORTS_FROM_EMAIL || 'reports@aura.net.za'}>`;
         const metricReach = Number(((_a = payload.metrics) === null || _a === void 0 ? void 0 : _a.reach) || 0).toLocaleString();
         const metricCtr = safeNumber((_b = payload.metrics) === null || _b === void 0 ? void 0 : _b.ctr, 2);
@@ -126,6 +126,12 @@ function sendReportPreviewEmail(to, payload) {
         const scopeLabel = safeText(payload.scope, 'all_signals').replace('_', ' ');
         const topSignals = Array.isArray(payload.topSignals) ? payload.topSignals.slice(0, 3) : [];
         const recommendations = Array.isArray(payload.recommendations) ? payload.recommendations.slice(0, 3) : [];
+        const deliveryMode = payload.deliveryMode === 'pdf_attachment' ? 'pdf_attachment' : 'inline_email';
+        const attachmentName = safeText((_g = payload.pdfAttachment) === null || _g === void 0 ? void 0 : _g.filename, `aura-scheduled-report-${new Date().toISOString().split('T')[0]}.pdf`);
+        const attachmentContent = typeof ((_h = payload.pdfAttachment) === null || _h === void 0 ? void 0 : _h.contentBase64) === 'string'
+            ? payload.pdfAttachment.contentBase64.replace(/^data:application\/pdf;base64,/, '').trim()
+            : '';
+        const shouldAttachPdf = deliveryMode === 'pdf_attachment' && attachmentContent.length > 0;
         if (!process.env.SENDGRID_API_KEY) {
             console.warn('⚠️ SendGrid credentials not found. Report preview email will be logged to console only.');
             console.log('--- REPORT PREVIEW EMAIL ---');
@@ -136,7 +142,7 @@ function sendReportPreviewEmail(to, payload) {
             return;
         }
         try {
-            yield mail_1.default.send({
+            const message = {
                 to,
                 from,
                 subject: `Aura Scheduled Report Preview • ${periodLabel}`,
@@ -145,7 +151,8 @@ function sendReportPreviewEmail(to, payload) {
           <div style="background: linear-gradient(135deg, #0f172a 0%, #0b1120 70%); color: white; padding: 28px 28px 20px 28px;">
             <p style="margin:0;font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#6ee7b7;font-weight:800;">Aura Reports</p>
             <h2 style="margin:10px 0 6px 0;font-size:24px;line-height:1.2;">Scheduled Report Preview</h2>
-            <p style="margin:0;color:#cbd5e1;font-size:13px;">Sender: reports@ • ${periodLabel} • Scope: ${scopeLabel}</p>
+            <p style="margin:0;color:#cbd5e1;font-size:13px;">${periodLabel} • Scope: ${scopeLabel}</p>
+            ${shouldAttachPdf ? '<p style="margin:8px 0 0 0;color:#a7f3d0;font-size:12px;">Full report PDF attached.</p>' : ''}
           </div>
           <div style="padding: 24px 28px;">
             <h3 style="margin:0 0 12px 0;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;">Executive Summary</h3>
@@ -172,7 +179,18 @@ function sendReportPreviewEmail(to, payload) {
           </div>
         </div>
       `
-            });
+            };
+            if (shouldAttachPdf) {
+                message.attachments = [
+                    {
+                        content: attachmentContent,
+                        filename: attachmentName,
+                        type: 'application/pdf',
+                        disposition: 'attachment'
+                    }
+                ];
+            }
+            yield mail_1.default.send(message);
             console.log('✓ Report preview email sent via SendGrid to:', to);
         }
         catch (error) {

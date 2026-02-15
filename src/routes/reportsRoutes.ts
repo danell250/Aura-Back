@@ -30,8 +30,33 @@ router.post('/preview-email', requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, error: 'One or more recipients are invalid' });
     }
 
-    const summary = req.body?.summary || {};
-    await Promise.all(recipients.map((recipient: string) => sendReportPreviewEmail(recipient, summary)));
+    const summary = typeof req.body?.summary === 'object' && req.body?.summary ? req.body.summary : {};
+    const deliveryMode = req.body?.deliveryMode === 'pdf_attachment' ? 'pdf_attachment' : 'inline_email';
+
+    let pdfAttachment: { filename?: string; contentBase64?: string } | undefined;
+    const rawAttachment = req.body?.pdfAttachment;
+    if (rawAttachment && typeof rawAttachment === 'object') {
+      const filename = typeof rawAttachment.filename === 'string' ? rawAttachment.filename.trim() : '';
+      const contentBase64 = typeof rawAttachment.contentBase64 === 'string' ? rawAttachment.contentBase64.trim() : '';
+      if (contentBase64.length > 0) {
+        const normalizedBase64 = contentBase64.replace(/^data:application\/pdf;base64,/, '');
+        if (normalizedBase64.length > 8_000_000) {
+          return res.status(400).json({ success: false, error: 'PDF attachment is too large' });
+        }
+        pdfAttachment = {
+          filename: filename || 'aura-scheduled-report.pdf',
+          contentBase64: normalizedBase64
+        };
+      }
+    }
+
+    const payload = {
+      ...summary,
+      deliveryMode,
+      ...(pdfAttachment ? { pdfAttachment } : {})
+    };
+
+    await Promise.all(recipients.map((recipient: string) => sendReportPreviewEmail(recipient, payload)));
 
     return res.json({
       success: true,
