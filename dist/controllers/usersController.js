@@ -8,17 +8,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __rest = (this && this.__rest) || function (s, e) {
-    var t = {};
-    for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
-        t[p] = s[p];
-    if (s != null && typeof Object.getOwnPropertySymbols === "function")
-        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
-            if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
-                t[p[i]] = s[p[i]];
-        }
-    return t;
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -98,6 +87,51 @@ const CREDIT_BUNDLE_CONFIG = {
     'Neural Surge': { credits: 2000, price: 149.99 },
     'Universal Core': { credits: 5000, price: 349.99 }
 };
+const USER_SELF_UPDATE_ALLOWLIST = new Set([
+    'firstName',
+    'lastName',
+    'name',
+    'handle',
+    'bio',
+    'phone',
+    'country',
+    'dob',
+    'zodiacSign',
+    'avatar',
+    'avatarType',
+    'avatarCrop',
+    'avatarKey',
+    'coverImage',
+    'coverType',
+    'coverCrop',
+    'coverKey',
+    'isPrivate',
+    'activeGlow',
+    'userMode'
+]);
+const USER_SENSITIVE_UPDATE_FIELDS = new Set([
+    'id',
+    'googleId',
+    'email',
+    'auraCredits',
+    'auraCreditsSpent',
+    'trustScore',
+    'isVerified',
+    'isAdmin',
+    'notifications',
+    'blockedUsers',
+    'acquaintances',
+    'sentConnectionRequests',
+    'sentAcquaintanceRequests',
+    'profileViews',
+    'subscribedCompanyIds',
+    'companyName',
+    'companyWebsite',
+    'industry',
+    'employeeCount',
+    'createdAt',
+    'updatedAt'
+]);
 const sanitizePublicUserProfile = (user) => {
     if (!user)
         return user;
@@ -553,7 +587,9 @@ exports.usersController = {
     updateUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
             const { id } = req.params;
-            const updates = req.body || {};
+            const incomingUpdates = (req.body && typeof req.body === 'object')
+                ? req.body
+                : {};
             const db = (0, db_1.getDB)();
             const existingUser = yield db.collection('users').findOne({ id });
             if (!existingUser) {
@@ -563,7 +599,31 @@ exports.usersController = {
                     message: `User with ID ${id} does not exist`
                 });
             }
-            const { googleId, id: _ignoredId, companyName, companyWebsite, industry, isVerified: _ignoredIsVerified } = updates, mutableUpdates = __rest(updates, ["googleId", "id", "companyName", "companyWebsite", "industry", "isVerified"]);
+            const blockedSensitiveFields = Object.keys(incomingUpdates).filter((field) => USER_SENSITIVE_UPDATE_FIELDS.has(field));
+            if (blockedSensitiveFields.length > 0) {
+                (0, securityLogger_1.logSecurityEvent)({
+                    req,
+                    type: 'forbidden_update_attempt',
+                    userId: id,
+                    metadata: {
+                        source: 'update_user',
+                        blockedFields: blockedSensitiveFields
+                    }
+                });
+            }
+            const mutableUpdates = Object.entries(incomingUpdates).reduce((acc, [key, value]) => {
+                if (USER_SELF_UPDATE_ALLOWLIST.has(key)) {
+                    acc[key] = value;
+                }
+                return acc;
+            }, {});
+            if (Object.keys(mutableUpdates).length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'No valid fields to update',
+                    message: 'No mutable profile fields were provided.'
+                });
+            }
             const updateData = Object.assign({}, mutableUpdates);
             if (typeof mutableUpdates.handle === 'string') {
                 const handleValidation = validateHandleFormat(mutableUpdates.handle);
@@ -594,13 +654,13 @@ exports.usersController = {
             // Handle avatarKey/coverKey updates.
             // We save ONLY the key to MongoDB as per requirements.
             // The avatar/coverImage URLs are constructed on read via transformUser.
-            if (mutableUpdates.avatarKey) {
-                updateData.avatarKey = mutableUpdates.avatarKey;
+            if (typeof mutableUpdates.avatarKey === 'string' && mutableUpdates.avatarKey.trim()) {
+                updateData.avatarKey = mutableUpdates.avatarKey.trim();
                 // Ensure we don't save the URL if it was passed in updates or previously existed
                 delete updateData.avatar;
             }
-            if (mutableUpdates.coverKey) {
-                updateData.coverKey = mutableUpdates.coverKey;
+            if (typeof mutableUpdates.coverKey === 'string' && mutableUpdates.coverKey.trim()) {
+                updateData.coverKey = mutableUpdates.coverKey.trim();
                 // Ensure we don't save the URL if it was passed in updates or previously existed
                 delete updateData.coverImage;
             }
@@ -614,7 +674,7 @@ exports.usersController = {
                 });
             }
             // Propagate activeGlow changes to related collections
-            if (mutableUpdates.activeGlow) {
+            if (typeof mutableUpdates.activeGlow === 'string' && mutableUpdates.activeGlow) {
                 try {
                     // 1. Update Posts
                     yield db.collection('posts').updateMany({
@@ -1254,9 +1314,18 @@ exports.usersController = {
     }),
     // POST /api/users/:id/purchase-credits - Purchase credits
     purchaseCredits: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { id } = req.params;
-            const { credits, bundleName, transactionId, paymentMethod, orderId } = req.body;
+            const payload = (req.body && typeof req.body === 'object')
+                ? req.body
+                : {};
+            const bundleName = typeof payload.bundleName === 'string' ? payload.bundleName.trim() : '';
+            const orderId = typeof payload.orderId === 'string' ? payload.orderId.trim() : '';
+            const transactionId = typeof payload.transactionId === 'string' ? payload.transactionId.trim() : '';
+            const paymentMethod = typeof payload.paymentMethod === 'string' && payload.paymentMethod.trim()
+                ? payload.paymentMethod.trim().toLowerCase()
+                : 'paypal';
             // Validate required fields
             if (!bundleName) {
                 return res.status(400).json({
@@ -1275,141 +1344,156 @@ exports.usersController = {
                 });
             }
             const creditsToAdd = bundleConfig.credits;
-            if (paymentMethod === 'paypal') {
-                if (!orderId) {
-                    return res.status(400).json({
+            const expectedAmount = bundleConfig.price;
+            if (paymentMethod !== 'paypal') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Unsupported payment method',
+                    message: 'Only PayPal credit purchases are supported.'
+                });
+            }
+            if (!orderId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing order ID',
+                    message: 'orderId is required for PayPal credit purchases'
+                });
+            }
+            const paymentReferenceKey = `paypal_order:${orderId}`;
+            const finalTransactionId = transactionId || orderId;
+            const duplicateTx = yield db.collection('transactions').findOne({
+                type: 'credit_purchase',
+                $or: [
+                    { paymentReferenceKey },
+                    { orderId },
+                    { transactionId: finalTransactionId }
+                ]
+            });
+            if (duplicateTx) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'Duplicate transaction',
+                    message: 'This payment has already been processed'
+                });
+            }
+            let verifiedCaptureId = null;
+            const isDevFallback = orderId === 'dev-fallback' && process.env.NODE_ENV !== 'production';
+            if (!isDevFallback) {
+                const clientId = process.env.PAYPAL_CLIENT_ID;
+                const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+                const apiBase = process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com';
+                if (!clientId || !clientSecret) {
+                    (0, securityLogger_1.logSecurityEvent)({
+                        req,
+                        type: 'payment_failure',
+                        userId: id,
+                        metadata: {
+                            source: 'credit_purchase',
+                            reason: 'missing_paypal_credentials'
+                        }
+                    });
+                    return res.status(500).json({
                         success: false,
-                        error: 'Missing order ID',
-                        message: 'orderId is required for PayPal credit purchases'
+                        error: 'Payment configuration error',
+                        message: 'PayPal credentials not configured'
                     });
                 }
-                const isDevFallback = orderId === 'dev-fallback' && process.env.NODE_ENV !== 'production';
-                if (!isDevFallback) {
-                    const clientId = process.env.PAYPAL_CLIENT_ID;
-                    const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
-                    const apiBase = process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com';
-                    if (!clientId || !clientSecret) {
+                try {
+                    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+                    const tokenResponse = yield axios_1.default.post(`${apiBase}/v1/oauth2/token`, 'grant_type=client_credentials', {
+                        headers: {
+                            Authorization: `Basic ${basicAuth}`,
+                            'Content-Type': 'application/x-www-form-urlencoded'
+                        }
+                    });
+                    const accessToken = tokenResponse.data.access_token;
+                    const orderResponse = yield axios_1.default.get(`${apiBase}/v2/checkout/orders/${orderId}`, {
+                        headers: {
+                            Authorization: `Bearer ${accessToken}`
+                        }
+                    });
+                    const order = orderResponse.data;
+                    if (!order || order.status !== 'COMPLETED') {
                         (0, securityLogger_1.logSecurityEvent)({
                             req,
                             type: 'payment_failure',
                             userId: id,
                             metadata: {
                                 source: 'credit_purchase',
-                                reason: 'missing_paypal_credentials'
+                                reason: 'paypal_order_not_completed',
+                                orderStatus: order && order.status
                             }
                         });
-                        return res.status(500).json({
+                        return res.status(400).json({
                             success: false,
-                            error: 'Payment configuration error',
-                            message: 'PayPal credentials not configured'
+                            error: 'Payment not completed',
+                            message: 'PayPal order is not completed'
                         });
                     }
-                    if (transactionId) {
-                        const existingTx = yield db.collection('transactions').findOne({
-                            transactionId,
-                            type: 'credit_purchase'
-                        });
-                        if (existingTx) {
-                            return res.status(409).json({
-                                success: false,
-                                error: 'Duplicate transaction',
-                                message: 'This payment has already been processed'
-                            });
-                        }
-                    }
-                    try {
-                        const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-                        const tokenResponse = yield axios_1.default.post(`${apiBase}/v1/oauth2/token`, 'grant_type=client_credentials', {
-                            headers: {
-                                Authorization: `Basic ${basicAuth}`,
-                                'Content-Type': 'application/x-www-form-urlencoded'
-                            }
-                        });
-                        const accessToken = tokenResponse.data.access_token;
-                        const orderResponse = yield axios_1.default.get(`${apiBase}/v2/checkout/orders/${orderId}`, {
-                            headers: {
-                                Authorization: `Bearer ${accessToken}`
-                            }
-                        });
-                        const order = orderResponse.data;
-                        if (!order || order.status !== 'COMPLETED') {
-                            (0, securityLogger_1.logSecurityEvent)({
-                                req,
-                                type: 'payment_failure',
-                                userId: id,
-                                metadata: {
-                                    source: 'credit_purchase',
-                                    reason: 'paypal_order_not_completed',
-                                    orderStatus: order && order.status
-                                }
-                            });
-                            return res.status(400).json({
-                                success: false,
-                                error: 'Payment not completed',
-                                message: 'PayPal order is not completed'
-                            });
-                        }
-                        const purchaseUnits = order.purchase_units || [];
-                        const firstUnit = purchaseUnits[0];
-                        const amount = firstUnit && firstUnit.amount;
-                        if (!amount || amount.currency_code !== 'USD') {
-                            (0, securityLogger_1.logSecurityEvent)({
-                                req,
-                                type: 'payment_failure',
-                                userId: id,
-                                metadata: {
-                                    source: 'credit_purchase',
-                                    reason: 'invalid_paypal_currency',
-                                    currency: amount && amount.currency_code
-                                }
-                            });
-                            return res.status(400).json({
-                                success: false,
-                                error: 'Invalid payment currency',
-                                message: 'PayPal payment must be in USD'
-                            });
-                        }
-                        const paidAmount = parseFloat(amount.value);
-                        const expectedAmount = bundleConfig.price;
-                        if (!Number.isFinite(paidAmount) || Math.abs(paidAmount - expectedAmount) > 0.01) {
-                            (0, securityLogger_1.logSecurityEvent)({
-                                req,
-                                type: 'payment_failure',
-                                userId: id,
-                                metadata: {
-                                    source: 'credit_purchase',
-                                    reason: 'amount_mismatch',
-                                    paidAmount,
-                                    expectedAmount,
-                                    bundleName
-                                }
-                            });
-                            return res.status(400).json({
-                                success: false,
-                                error: 'Invalid payment amount',
-                                message: 'PayPal payment amount does not match selected bundle'
-                            });
-                        }
-                    }
-                    catch (error) {
-                        console.error('Error verifying PayPal order:', error);
+                    const purchaseUnits = Array.isArray(order.purchase_units) ? order.purchase_units : [];
+                    const firstUnit = purchaseUnits[0];
+                    const amount = firstUnit && firstUnit.amount;
+                    if (!amount || amount.currency_code !== 'USD') {
                         (0, securityLogger_1.logSecurityEvent)({
                             req,
                             type: 'payment_failure',
                             userId: id,
                             metadata: {
                                 source: 'credit_purchase',
-                                reason: 'paypal_verification_exception',
-                                errorMessage: error instanceof Error ? error.message : String(error),
-                                orderId
+                                reason: 'invalid_paypal_currency',
+                                currency: amount && amount.currency_code
                             }
                         });
-                        return res.status(502).json({
+                        return res.status(400).json({
                             success: false,
-                            error: 'Payment verification failed',
-                            message: 'Unable to verify PayPal payment'
+                            error: 'Invalid payment currency',
+                            message: 'PayPal payment must be in USD'
                         });
                     }
+                    const paidAmount = parseFloat(amount.value);
+                    if (!Number.isFinite(paidAmount) || Math.abs(paidAmount - expectedAmount) > 0.01) {
+                        (0, securityLogger_1.logSecurityEvent)({
+                            req,
+                            type: 'payment_failure',
+                            userId: id,
+                            metadata: {
+                                source: 'credit_purchase',
+                                reason: 'amount_mismatch',
+                                paidAmount,
+                                expectedAmount,
+                                bundleName
+                            }
+                        });
+                        return res.status(400).json({
+                            success: false,
+                            error: 'Invalid payment amount',
+                            message: 'PayPal payment amount does not match selected bundle'
+                        });
+                    }
+                    const captures = Array.isArray((_a = firstUnit === null || firstUnit === void 0 ? void 0 : firstUnit.payments) === null || _a === void 0 ? void 0 : _a.captures) ? firstUnit.payments.captures : [];
+                    const completedCapture = captures.find((capture) => capture && capture.status === 'COMPLETED');
+                    verifiedCaptureId = completedCapture && typeof completedCapture.id === 'string'
+                        ? completedCapture.id
+                        : null;
+                }
+                catch (error) {
+                    console.error('Error verifying PayPal order:', error);
+                    (0, securityLogger_1.logSecurityEvent)({
+                        req,
+                        type: 'payment_failure',
+                        userId: id,
+                        metadata: {
+                            source: 'credit_purchase',
+                            reason: 'paypal_verification_exception',
+                            errorMessage: error instanceof Error ? error.message : String(error),
+                            orderId
+                        }
+                    });
+                    return res.status(502).json({
+                        success: false,
+                        error: 'Payment verification failed',
+                        message: 'Unable to verify PayPal payment'
+                    });
                 }
             }
             // Find user
@@ -1422,26 +1506,78 @@ exports.usersController = {
                 });
             }
             // Update user credits
-            const currentCredits = user.auraCredits || 0;
-            const newCredits = currentCredits + creditsToAdd;
-            yield db.collection('users').updateOne({ id }, {
-                $set: {
-                    auraCredits: newCredits,
-                    updatedAt: new Date().toISOString()
+            const currentCredits = typeof user.auraCredits === 'number' ? user.auraCredits : 0;
+            const nowIso = new Date().toISOString();
+            let pendingTransactionId = null;
+            try {
+                const pendingInsert = yield db.collection('transactions').insertOne({
+                    userId: id,
+                    type: 'credit_purchase',
+                    amount: creditsToAdd,
+                    bundleName,
+                    orderId,
+                    transactionId: finalTransactionId,
+                    paymentMethod,
+                    paymentReferenceKey,
+                    status: 'processing',
+                    creditsApplied: false,
+                    details: {
+                        expectedAmountUsd: expectedAmount,
+                        captureId: verifiedCaptureId
+                    },
+                    createdAt: nowIso,
+                    updatedAt: nowIso
+                });
+                pendingTransactionId = pendingInsert.insertedId;
+            }
+            catch (insertError) {
+                if (insertError && insertError.code === 11000) {
+                    return res.status(409).json({
+                        success: false,
+                        error: 'Duplicate transaction',
+                        message: 'This payment has already been processed'
+                    });
                 }
-            });
-            // Log the transaction
-            const finalTransactionId = transactionId || orderId || `tx-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-            yield db.collection('transactions').insertOne({
-                userId: id,
-                type: 'credit_purchase',
-                amount: creditsToAdd,
-                bundleName,
-                transactionId: finalTransactionId,
-                paymentMethod,
-                status: 'completed',
-                createdAt: new Date().toISOString()
-            });
+                throw insertError;
+            }
+            let newCredits = currentCredits;
+            try {
+                const updatedUserResult = yield db.collection('users').findOneAndUpdate({ id }, {
+                    $inc: { auraCredits: creditsToAdd },
+                    $set: { updatedAt: nowIso }
+                }, {
+                    returnDocument: 'after',
+                    projection: { auraCredits: 1 }
+                });
+                const updatedUserDoc = updatedUserResult && typeof updatedUserResult === 'object' && 'value' in updatedUserResult
+                    ? updatedUserResult.value
+                    : updatedUserResult;
+                if (!updatedUserDoc) {
+                    throw new Error('Failed to update user credits');
+                }
+                newCredits = typeof updatedUserDoc.auraCredits === 'number'
+                    ? updatedUserDoc.auraCredits
+                    : currentCredits + creditsToAdd;
+                yield db.collection('transactions').updateOne({ _id: pendingTransactionId }, {
+                    $set: {
+                        status: 'completed',
+                        creditsApplied: true,
+                        updatedAt: new Date().toISOString()
+                    }
+                });
+            }
+            catch (creditApplyError) {
+                if (pendingTransactionId) {
+                    yield db.collection('transactions').updateOne({ _id: pendingTransactionId }, {
+                        $set: {
+                            status: 'failed',
+                            updatedAt: new Date().toISOString(),
+                            errorMessage: creditApplyError instanceof Error ? creditApplyError.message : String(creditApplyError)
+                        }
+                    });
+                }
+                throw creditApplyError;
+            }
             console.log('Credit purchase processed and logged:', {
                 userId: id,
                 bundleName,
@@ -1450,7 +1586,8 @@ exports.usersController = {
                 newCredits,
                 transactionId: finalTransactionId,
                 paymentMethod,
-                timestamp: new Date().toISOString()
+                orderId,
+                timestamp: nowIso
             });
             // Trigger real-time insights update
             (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id);

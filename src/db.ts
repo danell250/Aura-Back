@@ -140,6 +140,45 @@ export async function connectDB(): Promise<Db | null> {
       } catch (postIndexError) {
         console.warn("⚠️  Warning: Could not initialize post indexes:", postIndexError);
       }
+
+      // Initialize payment/idempotency indexes
+      try {
+        await db.collection('transactions').createIndex(
+          { type: 1, paymentReferenceKey: 1 },
+          {
+            unique: true,
+            partialFilterExpression: { paymentReferenceKey: { $type: 'string' } },
+            name: 'tx_type_payment_reference_unique'
+          }
+        );
+        await db.collection('transactions').createIndex(
+          { type: 1, transactionId: 1 },
+          { name: 'tx_type_transaction_id_idx' }
+        );
+        await db.collection('transactions').createIndex(
+          { orderId: 1 },
+          { sparse: true, name: 'tx_order_id_idx' }
+        );
+        await db.collection('adSubscriptions').createIndex(
+          { paypalSubscriptionId: 1 },
+          {
+            unique: true,
+            partialFilterExpression: { paypalSubscriptionId: { $type: 'string' } },
+            name: 'ad_sub_paypal_subscription_unique'
+          }
+        );
+        await db.collection('adSubscriptions').createIndex(
+          { paypalOrderId: 1 },
+          {
+            unique: true,
+            partialFilterExpression: { paypalOrderId: { $type: 'string' } },
+            name: 'ad_sub_paypal_order_unique'
+          }
+        );
+        console.log("✅ Payment idempotency indexes initialized");
+      } catch (paymentIndexError) {
+        console.warn("⚠️  Warning: Could not initialize payment indexes:", paymentIndexError);
+      }
     } catch (error) {
       console.warn("⚠️  Warning: Could not initialize collections:", error);
     }

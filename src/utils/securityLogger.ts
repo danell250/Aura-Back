@@ -9,6 +9,7 @@ export type SecurityEventType =
   | 'webhook_signature_failed'
   | 'rate_limit_triggered'
   | 'payment_failure'
+  | 'forbidden_update_attempt'
   | 'alert_login_spike'
   | 'magic_link_requested'
   | 'login_magic_link';
@@ -97,4 +98,3 @@ function trackLoginSpike(now: number, event: SecurityEvent): void {
     console.error('Error tracking login spike', error);
   }
 }
-

@@ -365,142 +365,136 @@ export const adsController = {
       const effectiveOwnerId = actor.id;
       const effectiveOwnerType = actor.type;
 
-      const isSpecialUser =
-        adData.ownerEmail &&
-        adData.ownerEmail.toLowerCase() === 'danelloosthuizen3@gmail.com';
-
       let reservedSubscriptionId: string | null = null;
       let subscription: any | null = null;
       const now = Date.now();
 
       // Check subscription limits and enforce at ACTION TIME
-      if (!isSpecialUser) {
-        // Fetch active subscription for the owner (user or company)
-        const subscriptionQuery: any = {
-          status: 'active',
-          $or: [
-            { endDate: { $exists: false } },
-            { endDate: { $gt: now } }
-          ],
-          $and: [
-            {
-              $or: [
-                { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-              ]
-            }
-          ]
-        };
-
-        // If looking for user type, also match legacy documents without ownerType
-        if (effectiveOwnerType === 'user') {
-          (subscriptionQuery.$and[0] as any).$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-        }
-
-        subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
-
-        if (subscription) {
-           // Ensure period is current before checking limits
-           subscription = await ensureCurrentPeriod(db, subscription);
-        }
-
-        // If no active subscription, allow creation only if they have credits? 
-        // OR strictly enforce plan.
-        // Based on "pkg-starter" being $39, we should require a subscription.
-        if (!subscription) {
-           return res.status(403).json({
-             success: false,
-             error: 'No active ad plan',
-             message: 'No active ad plan found. Please purchase a plan to create ads.'
-           });
-        }
-
-        // Check active ads limit
-        const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
-        const activeAdsLimit = plan ? plan.activeAdsLimit : 0;
-
-        if (activeAdsLimit > 0) {
-          const activeAdsCount = await db.collection('ads').countDocuments({
-            ownerId: effectiveOwnerId,
-            ownerType: effectiveOwnerType,
-            status: 'active'
-          });
-
-          if (activeAdsCount >= activeAdsLimit) {
-            return res.status(403).json({
-              success: false,
-              code: 'ACTIVE_AD_LIMIT_REACHED',
-              error: 'Active ad limit reached',
-              message: `You have reached your limit of ${activeAdsLimit} active ads for your current plan. Please deactivate an existing ad or upgrade your plan.`,
-              limit: activeAdsLimit,
-              current: activeAdsCount
-            });
-          }
-        }
-
-        // Check impression limit
-        if (subscription.impressionsUsed >= subscription.impressionLimit) {
-          return res.status(403).json({
-            success: false,
-            error: `Monthly impression limit reached (${subscription.impressionLimit}). Upgrade or wait for renewal.`,
-            limit: subscription.impressionLimit,
-            current: subscription.impressionsUsed
-          });
-        }
-
-        if (subscription.adsUsed >= subscription.adLimit) {
-          return res.status(403).json({
-            success: false,
-            code: 'AD_LIMIT_REACHED',
-            error: 'Ad placement limit reached for this billing cycle',
-            message: `You have used ${subscription.adsUsed} of ${subscription.adLimit} ad placements for this billing cycle.`,
-            currentUsage: subscription.adsUsed,
-            limit: subscription.adLimit,
-            resetDate: subscription.periodEnd ? new Date(subscription.periodEnd).toISOString() : undefined
-          });
-        }
-
-        // Reserve one ad slot atomically so concurrent requests cannot bypass quota.
-        const reserveFilter: any = {
-          _id: subscription._id,
-          status: 'active',
-          adsUsed: { $lt: subscription.adLimit },
-          $or: [
-            { endDate: { $exists: false } },
-            { endDate: { $gt: now } }
-          ]
-        };
-
-        // Ensure we are still in the same billing window that was validated above.
-        if (subscription.periodEnd) {
-          reserveFilter.periodEnd = subscription.periodEnd;
-        }
-
-        const reserved = await db.collection('adSubscriptions').findOneAndUpdate(
-          reserveFilter,
+      // Fetch active subscription for the owner (user or company)
+      const subscriptionQuery: any = {
+        status: 'active',
+        $or: [
+          { endDate: { $exists: false } },
+          { endDate: { $gt: now } }
+        ],
+        $and: [
           {
-            $inc: { adsUsed: 1 },
-            $set: { updatedAt: Date.now() }
-          },
-          { returnDocument: 'after' }
-        );
+            $or: [
+              { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
+              { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
+            ]
+          }
+        ]
+      };
 
-        const reservedDoc: any = reserved && typeof reserved === 'object' && 'value' in reserved
-          ? (reserved as any).value
-          : reserved;
+      // If looking for user type, also match legacy documents without ownerType
+      if (effectiveOwnerType === 'user') {
+        (subscriptionQuery.$and[0] as any).$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
+      }
 
-        if (!reservedDoc) {
+      subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
+
+      if (subscription) {
+         // Ensure period is current before checking limits
+         subscription = await ensureCurrentPeriod(db, subscription);
+      }
+
+      // If no active subscription, allow creation only if they have credits? 
+      // OR strictly enforce plan.
+      // Based on "pkg-starter" being $39, we should require a subscription.
+      if (!subscription) {
+         return res.status(403).json({
+           success: false,
+           error: 'No active ad plan',
+           message: 'No active ad plan found. Please purchase a plan to create ads.'
+         });
+      }
+
+      // Check active ads limit
+      const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
+      const activeAdsLimit = plan ? plan.activeAdsLimit : 0;
+
+      if (activeAdsLimit > 0) {
+        const activeAdsCount = await db.collection('ads').countDocuments({
+          ownerId: effectiveOwnerId,
+          ownerType: effectiveOwnerType,
+          status: 'active'
+        });
+
+        if (activeAdsCount >= activeAdsLimit) {
           return res.status(403).json({
             success: false,
-            code: 'AD_LIMIT_REACHED',
-            error: 'Ad placement limit reached for this billing cycle',
-            message: 'No ad slots are currently available. Please wait for renewal or upgrade your plan.'
+            code: 'ACTIVE_AD_LIMIT_REACHED',
+            error: 'Active ad limit reached',
+            message: `You have reached your limit of ${activeAdsLimit} active ads for your current plan. Please deactivate an existing ad or upgrade your plan.`,
+            limit: activeAdsLimit,
+            current: activeAdsCount
           });
         }
-
-        reservedSubscriptionId = subscription.id;
-        subscription = reservedDoc;
       }
+
+      // Check impression limit
+      if (subscription.impressionsUsed >= subscription.impressionLimit) {
+        return res.status(403).json({
+          success: false,
+          error: `Monthly impression limit reached (${subscription.impressionLimit}). Upgrade or wait for renewal.`,
+          limit: subscription.impressionLimit,
+          current: subscription.impressionsUsed
+        });
+      }
+
+      if (subscription.adsUsed >= subscription.adLimit) {
+        return res.status(403).json({
+          success: false,
+          code: 'AD_LIMIT_REACHED',
+          error: 'Ad placement limit reached for this billing cycle',
+          message: `You have used ${subscription.adsUsed} of ${subscription.adLimit} ad placements for this billing cycle.`,
+          currentUsage: subscription.adsUsed,
+          limit: subscription.adLimit,
+          resetDate: subscription.periodEnd ? new Date(subscription.periodEnd).toISOString() : undefined
+        });
+      }
+
+      // Reserve one ad slot atomically so concurrent requests cannot bypass quota.
+      const reserveFilter: any = {
+        _id: subscription._id,
+        status: 'active',
+        adsUsed: { $lt: subscription.adLimit },
+        $or: [
+          { endDate: { $exists: false } },
+          { endDate: { $gt: now } }
+        ]
+      };
+
+      // Ensure we are still in the same billing window that was validated above.
+      if (subscription.periodEnd) {
+        reserveFilter.periodEnd = subscription.periodEnd;
+      }
+
+      const reserved = await db.collection('adSubscriptions').findOneAndUpdate(
+        reserveFilter,
+        {
+          $inc: { adsUsed: 1 },
+          $set: { updatedAt: Date.now() }
+        },
+        { returnDocument: 'after' }
+      );
+
+      const reservedDoc: any = reserved && typeof reserved === 'object' && 'value' in reserved
+        ? (reserved as any).value
+        : reserved;
+
+      if (!reservedDoc) {
+        return res.status(403).json({
+          success: false,
+          code: 'AD_LIMIT_REACHED',
+          error: 'Ad placement limit reached for this billing cycle',
+          message: 'No ad slots are currently available. Please wait for renewal or upgrade your plan.'
+        });
+      }
+
+      reservedSubscriptionId = subscription.id;
+      subscription = reservedDoc;
 
       const newAd = {
         ...adData,
@@ -533,7 +527,7 @@ export const adsController = {
       } catch (error) {
         console.error('Error during ad creation transaction:', error);
         // Roll back reserved quota if insertion fails after slot reservation.
-        if (reservedSubscriptionId && !isSpecialUser) {
+        if (reservedSubscriptionId) {
           try {
             await db.collection('adSubscriptions').updateOne(
               {

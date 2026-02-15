@@ -179,7 +179,7 @@ exports.adSubscriptionsController = {
     }),
     // POST /api/ad-subscriptions - Create new ad subscription
     createSubscription: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
+        var _a, _b, _c;
         try {
             const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             if (!authenticatedUserId) {
@@ -188,86 +188,330 @@ exports.adSubscriptionsController = {
                     error: 'Authentication required'
                 });
             }
-            const { userId, packageId, packageName, paypalSubscriptionId, adLimit, durationDays, ownerType = 'user' } = req.body;
-            const normalizedOwnerType = parseOwnerType(ownerType);
-            if (!normalizedOwnerType) {
+            const payload = (req.body && typeof req.body === 'object')
+                ? req.body
+                : {};
+            const userId = typeof payload.userId === 'string' ? payload.userId : undefined;
+            const packageId = typeof payload.packageId === 'string' ? payload.packageId.trim() : '';
+            const ownerType = parseOwnerType(payload.ownerType);
+            const paypalSubscriptionId = typeof payload.paypalSubscriptionId === 'string'
+                ? payload.paypalSubscriptionId.trim()
+                : '';
+            const paypalOrderId = typeof payload.paypalOrderId === 'string'
+                ? payload.paypalOrderId.trim()
+                : '';
+            if (!ownerType) {
                 return res.status(400).json({
                     success: false,
                     error: 'Invalid ownerType. Use "user" or "company".'
                 });
             }
-            const requestedOwnerId = typeof userId === 'string' && userId ? userId : authenticatedUserId;
+            const requestedOwnerId = userId && userId.trim() ? userId : authenticatedUserId;
             const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
-                ownerType: normalizedOwnerType,
+                ownerType,
                 ownerId: requestedOwnerId
             });
-            if (!actor || actor.id !== requestedOwnerId || actor.type !== normalizedOwnerType) {
+            if (!actor || actor.id !== requestedOwnerId || actor.type !== ownerType) {
                 return res.status(403).json({
                     success: false,
                     error: 'Forbidden',
                     message: 'Unauthorized to create subscription for this identity'
                 });
             }
-            if (!packageId || !packageName || !adLimit) {
+            if (!packageId) {
                 return res.status(400).json({
                     success: false,
                     error: 'Missing required fields',
-                    message: 'packageId, packageName, and adLimit are required'
+                    message: 'packageId is required'
                 });
             }
-            const db = (0, db_1.getDB)();
-            const now = Date.now();
-            // Billing windows are 30 days for recurring plans.
-            const recurringBillingEnd = now + (30 * 24 * 60 * 60 * 1000);
-            const nextBillingDate = !durationDays ? recurringBillingEnd : undefined;
-            // One-time plans end after their explicit duration. Recurring plans must renew by next billing date.
-            const endDate = durationDays
-                ? now + (durationDays * 24 * 60 * 60 * 1000)
-                : recurringBillingEnd;
             const plan = adPlans_1.AD_PLANS[packageId];
-            const impressionLimit = plan ? plan.impressionLimit : 0;
+            if (!plan) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid package',
+                    message: `Unknown ad package: ${packageId}`
+                });
+            }
+            const isRecurringPlan = plan.paymentType === 'subscription';
+            if (isRecurringPlan && !paypalSubscriptionId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing payment proof',
+                    message: 'paypalSubscriptionId is required for recurring plans'
+                });
+            }
+            if (!isRecurringPlan && !paypalOrderId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing payment proof',
+                    message: 'paypalOrderId is required for one-time plans'
+                });
+            }
+            const paymentReferenceKey = isRecurringPlan
+                ? `paypal_subscription:${paypalSubscriptionId}`
+                : `paypal_order:${paypalOrderId}`;
+            const db = (0, db_1.getDB)();
+            const existingPayment = yield db.collection('transactions').findOne({
+                type: 'ad_subscription',
+                paymentReferenceKey
+            });
+            if (existingPayment) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'Duplicate transaction',
+                    message: 'This ad subscription payment was already processed'
+                });
+            }
+            const existingSubscription = isRecurringPlan
+                ? yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ paypalSubscriptionId })
+                : yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ paypalOrderId });
+            if (existingSubscription) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'Duplicate subscription',
+                    message: 'A subscription already exists for this payment reference'
+                });
+            }
+            const apiBase = process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com';
+            const clientId = process.env.PAYPAL_CLIENT_ID;
+            const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+            if (!clientId || !clientSecret) {
+                (0, securityLogger_1.logSecurityEvent)({
+                    req,
+                    type: 'payment_failure',
+                    userId: actor.id,
+                    metadata: {
+                        source: 'ad_subscriptions',
+                        reason: 'missing_paypal_credentials',
+                        packageId
+                    }
+                });
+                return res.status(500).json({
+                    success: false,
+                    error: 'Payment configuration error',
+                    message: 'PayPal credentials not configured'
+                });
+            }
+            const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+            let accessToken;
+            try {
+                const tokenResponse = yield axios_1.default.post(`${apiBase}/v1/oauth2/token`, 'grant_type=client_credentials', {
+                    headers: {
+                        Authorization: `Basic ${basicAuth}`,
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    }
+                });
+                accessToken = tokenResponse.data.access_token;
+            }
+            catch (tokenError) {
+                console.error('[AdSubscriptions] Failed to obtain PayPal access token:', tokenError);
+                return res.status(502).json({
+                    success: false,
+                    error: 'Payment verification failed',
+                    message: 'Unable to verify PayPal payment credentials'
+                });
+            }
+            let verifiedAmountUsd = null;
+            let verifiedCaptureId = null;
+            let verifiedPlanId = null;
+            if (isRecurringPlan) {
+                try {
+                    const subscriptionResponse = yield axios_1.default.get(`${apiBase}/v1/billing/subscriptions/${paypalSubscriptionId}`, {
+                        headers: {
+                            Authorization: `Bearer ${accessToken}`
+                        }
+                    });
+                    const subscription = subscriptionResponse.data;
+                    const subscriptionStatus = typeof (subscription === null || subscription === void 0 ? void 0 : subscription.status) === 'string' ? subscription.status : '';
+                    const allowedStatuses = new Set(['ACTIVE', 'APPROVAL_PENDING']);
+                    if (!allowedStatuses.has(subscriptionStatus)) {
+                        return res.status(400).json({
+                            success: false,
+                            error: 'Subscription not active',
+                            message: `PayPal subscription status is ${subscriptionStatus || 'UNKNOWN'}`
+                        });
+                    }
+                    verifiedPlanId = typeof (subscription === null || subscription === void 0 ? void 0 : subscription.plan_id) === 'string' ? subscription.plan_id : null;
+                    const expectedSubscriptionPlanId = 'subscriptionPlanId' in plan && typeof plan.subscriptionPlanId === 'string'
+                        ? plan.subscriptionPlanId
+                        : null;
+                    if (expectedSubscriptionPlanId && verifiedPlanId !== expectedSubscriptionPlanId) {
+                        (0, securityLogger_1.logSecurityEvent)({
+                            req,
+                            type: 'payment_failure',
+                            userId: actor.id,
+                            metadata: {
+                                source: 'ad_subscriptions',
+                                reason: 'paypal_plan_mismatch',
+                                expectedPlanId: expectedSubscriptionPlanId,
+                                actualPlanId: verifiedPlanId,
+                                packageId
+                            }
+                        });
+                        return res.status(400).json({
+                            success: false,
+                            error: 'Invalid PayPal plan',
+                            message: 'PayPal subscription does not match the selected package'
+                        });
+                    }
+                }
+                catch (verificationError) {
+                    console.error('[AdSubscriptions] Failed to verify PayPal subscription:', verificationError);
+                    return res.status(502).json({
+                        success: false,
+                        error: 'Payment verification failed',
+                        message: 'Unable to verify PayPal subscription'
+                    });
+                }
+            }
+            else {
+                try {
+                    const orderResponse = yield axios_1.default.get(`${apiBase}/v2/checkout/orders/${paypalOrderId}`, {
+                        headers: {
+                            Authorization: `Bearer ${accessToken}`
+                        }
+                    });
+                    const order = orderResponse.data;
+                    if (!order || order.status !== 'COMPLETED') {
+                        return res.status(400).json({
+                            success: false,
+                            error: 'Payment not completed',
+                            message: 'PayPal order is not completed'
+                        });
+                    }
+                    const purchaseUnits = Array.isArray(order.purchase_units) ? order.purchase_units : [];
+                    const firstUnit = purchaseUnits[0];
+                    const amount = firstUnit === null || firstUnit === void 0 ? void 0 : firstUnit.amount;
+                    const currency = typeof (amount === null || amount === void 0 ? void 0 : amount.currency_code) === 'string' ? amount.currency_code : '';
+                    const rawAmount = typeof (amount === null || amount === void 0 ? void 0 : amount.value) === 'string' ? amount.value : '';
+                    const paidAmount = parseFloat(rawAmount);
+                    if (currency !== 'USD') {
+                        return res.status(400).json({
+                            success: false,
+                            error: 'Invalid payment currency',
+                            message: 'PayPal payment must be in USD'
+                        });
+                    }
+                    if (!Number.isFinite(paidAmount) || Math.abs(paidAmount - plan.numericPrice) > 0.01) {
+                        (0, securityLogger_1.logSecurityEvent)({
+                            req,
+                            type: 'payment_failure',
+                            userId: actor.id,
+                            metadata: {
+                                source: 'ad_subscriptions',
+                                reason: 'amount_mismatch',
+                                packageId,
+                                paidAmount,
+                                expectedAmount: plan.numericPrice
+                            }
+                        });
+                        return res.status(400).json({
+                            success: false,
+                            error: 'Invalid payment amount',
+                            message: 'PayPal payment amount does not match selected package'
+                        });
+                    }
+                    const captures = Array.isArray((_b = firstUnit === null || firstUnit === void 0 ? void 0 : firstUnit.payments) === null || _b === void 0 ? void 0 : _b.captures) ? firstUnit.payments.captures : [];
+                    const completedCapture = captures.find((capture) => capture && capture.status === 'COMPLETED');
+                    verifiedCaptureId = completedCapture && typeof completedCapture.id === 'string'
+                        ? completedCapture.id
+                        : null;
+                    verifiedAmountUsd = paidAmount;
+                }
+                catch (verificationError) {
+                    console.error('[AdSubscriptions] Failed to verify PayPal order:', verificationError);
+                    return res.status(502).json({
+                        success: false,
+                        error: 'Payment verification failed',
+                        message: 'Unable to verify PayPal order payment'
+                    });
+                }
+            }
+            const now = Date.now();
+            const durationDays = typeof plan.durationDays === 'number' && plan.durationDays > 0 ? plan.durationDays : 30;
+            const recurringBillingEnd = now + BILLING_MS;
+            const nextBillingDate = isRecurringPlan ? recurringBillingEnd : undefined;
+            const endDate = isRecurringPlan
+                ? recurringBillingEnd
+                : now + (durationDays * 24 * 60 * 60 * 1000);
             const periodStart = now;
-            const periodEnd = nextBillingDate || (now + BILLING_MS);
+            const periodEnd = now + (durationDays * 24 * 60 * 60 * 1000);
             const newSubscription = {
                 id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
                 userId: actor.id, // Legacy field
                 ownerId: actor.id, // New standardized field
                 ownerType: actor.type,
-                packageId,
-                packageName,
+                packageId: plan.id,
+                packageName: plan.name,
                 status: 'active',
                 startDate: now,
+                durationDays,
                 endDate,
                 nextBillingDate,
-                paypalSubscriptionId: paypalSubscriptionId || null,
+                paypalSubscriptionId: isRecurringPlan ? paypalSubscriptionId : null,
+                paypalOrderId: isRecurringPlan ? null : paypalOrderId,
+                paymentReferenceKey,
                 periodStart,
                 periodEnd,
                 adsUsed: 0,
                 impressionsUsed: 0,
-                adLimit,
-                impressionLimit,
+                adLimit: plan.adLimit,
+                impressionLimit: plan.impressionLimit,
                 createdAt: now,
                 updatedAt: now
             };
-            yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).insertOne(newSubscription);
-            // Log the transaction
-            yield db.collection('transactions').insertOne({
-                userId: actor.id,
-                ownerId: actor.id,
-                ownerType: actor.type,
-                type: 'ad_subscription',
-                packageId,
-                packageName,
-                transactionId: paypalSubscriptionId || `tx-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
-                paymentMethod: 'paypal',
-                status: 'completed',
-                details: {
-                    adLimit,
-                    durationDays,
-                    subscriptionId: newSubscription.id
-                },
-                createdAt: now
-            });
+            try {
+                yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).insertOne(newSubscription);
+            }
+            catch (insertError) {
+                if (insertError && insertError.code === 11000) {
+                    return res.status(409).json({
+                        success: false,
+                        error: 'Duplicate subscription',
+                        message: 'A subscription for this payment reference already exists'
+                    });
+                }
+                throw insertError;
+            }
+            const transactionId = isRecurringPlan
+                ? paypalSubscriptionId
+                : (verifiedCaptureId || paypalOrderId);
+            try {
+                yield db.collection('transactions').insertOne({
+                    userId: actor.id,
+                    ownerId: actor.id,
+                    ownerType: actor.type,
+                    type: 'ad_subscription',
+                    packageId: plan.id,
+                    packageName: plan.name,
+                    transactionId,
+                    paymentMethod: isRecurringPlan ? 'paypal_subscription' : 'paypal_order',
+                    paymentReferenceKey,
+                    status: 'completed',
+                    details: {
+                        adLimit: plan.adLimit,
+                        durationDays,
+                        subscriptionId: newSubscription.id,
+                        paypalOrderId: isRecurringPlan ? null : paypalOrderId,
+                        paypalSubscriptionId: isRecurringPlan ? paypalSubscriptionId : null,
+                        verifiedCaptureId,
+                        verifiedPlanId,
+                        verifiedAmountUsd
+                    },
+                    createdAt: now
+                });
+            }
+            catch (txInsertError) {
+                if (txInsertError && txInsertError.code === 11000) {
+                    return res.status(409).json({
+                        success: false,
+                        error: 'Duplicate transaction',
+                        message: 'This ad subscription payment was already processed'
+                    });
+                }
+                throw txInsertError;
+            }
             res.status(201).json({
                 success: true,
                 data: newSubscription,
@@ -279,12 +523,13 @@ exports.adSubscriptionsController = {
             (0, securityLogger_1.logSecurityEvent)({
                 req,
                 type: 'payment_failure',
-                userId: ((_b = req.user) === null || _b === void 0 ? void 0 : _b.id) || (req.body && req.body.userId),
+                userId: ((_c = req.user) === null || _c === void 0 ? void 0 : _c.id) || (req.body && req.body.userId),
                 metadata: {
                     source: 'ad_subscriptions',
                     reason: 'create_subscription_exception',
                     packageId: req.body && req.body.packageId,
-                    packageName: req.body && req.body.packageName,
+                    paypalOrderId: req.body && req.body.paypalOrderId,
+                    paypalSubscriptionId: req.body && req.body.paypalSubscriptionId,
                     errorMessage: error instanceof Error ? error.message : String(error)
                 }
             });
