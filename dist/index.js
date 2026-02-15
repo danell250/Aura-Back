@@ -1325,16 +1325,29 @@ function startServer() {
             // Then attempt database connection (non-blocking)
             console.log('🔄 Attempting database connection...');
             try {
-                yield (0, db_1.connectDB)();
-                console.log('✅ Database connection established');
-                yield seedDummyPostsIfEmpty();
-                yield seedDummyAdsIfEmpty();
-                // Run legacy company migration
-                yield (0, migrationService_1.migrateLegacyCompanies)();
+                const db = yield (0, db_1.connectDB)();
+                const isProduction = process.env.NODE_ENV === 'production';
+                if (!db) {
+                    if (isProduction) {
+                        throw new Error('Database connection is required in production.');
+                    }
+                    console.warn('⚠️  Database connection not available. Some features will be unavailable until DB reconnects.');
+                }
+                else {
+                    console.log('✅ Database connection established');
+                    const shouldSeedDemoData = process.env.NODE_ENV !== 'production' &&
+                        process.env.DISABLE_DEMO_SEEDING !== 'true';
+                    if (shouldSeedDemoData) {
+                        yield seedDummyPostsIfEmpty();
+                        yield seedDummyAdsIfEmpty();
+                    }
+                    // Run legacy company migration
+                    yield (0, migrationService_1.migrateLegacyCompanies)();
+                }
             }
             catch (error) {
-                console.warn('⚠️  Database connection failed, but server is still running');
-                console.warn('⚠️  The application will work with mock data until database is available');
+                console.error('❌ Database initialization failed:', error);
+                throw error;
             }
             // Set up periodic health checks
             setInterval(() => __awaiter(this, void 0, void 0, function* () {

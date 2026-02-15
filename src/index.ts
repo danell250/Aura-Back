@@ -1431,16 +1431,32 @@ async function startServer() {
     // Then attempt database connection (non-blocking)
     console.log('🔄 Attempting database connection...');
     try {
-      await connectDB();
-      console.log('✅ Database connection established');
-      await seedDummyPostsIfEmpty();
-      await seedDummyAdsIfEmpty();
-      
-      // Run legacy company migration
-      await migrateLegacyCompanies();
+      const db = await connectDB();
+      const isProduction = process.env.NODE_ENV === 'production';
+
+      if (!db) {
+        if (isProduction) {
+          throw new Error('Database connection is required in production.');
+        }
+        console.warn('⚠️  Database connection not available. Some features will be unavailable until DB reconnects.');
+      } else {
+        console.log('✅ Database connection established');
+
+        const shouldSeedDemoData =
+          process.env.NODE_ENV !== 'production' &&
+          process.env.DISABLE_DEMO_SEEDING !== 'true';
+
+        if (shouldSeedDemoData) {
+          await seedDummyPostsIfEmpty();
+          await seedDummyAdsIfEmpty();
+        }
+
+        // Run legacy company migration
+        await migrateLegacyCompanies();
+      }
     } catch (error) {
-      console.warn('⚠️  Database connection failed, but server is still running');
-      console.warn('⚠️  The application will work with mock data until database is available');
+      console.error('❌ Database initialization failed:', error);
+      throw error;
     }
     
     // Set up periodic health checks

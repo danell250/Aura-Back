@@ -7,8 +7,16 @@ services:
   startCommand: "npm start"
   healthCheckPath: "/"
   envVars:
+  - key: NODE_ENV
+    value: production
   - key: NODE_VERSION
     value: 22.16.0
   - key: PORT
     value: 5002
+  - key: SESSION_SECRET
+    generateValue: true
+  - key: JWT_SECRET
+    generateValue: true
+  - key: REFRESH_TOKEN_SECRET
+    generateValue: true
   rootDirectory: "backend"
