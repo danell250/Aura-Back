@@ -8,24 +8,33 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
+const crypto_1 = __importDefault(require("crypto"));
+const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = require("../db");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = (0, express_1.Router)();
 const OWNER_EMAIL = (process.env.OWNER_CONTROL_EMAIL || 'danelloosthuizen3@gmail.com').trim().toLowerCase();
 const OWNER_CONTROL_KEY = (process.env.OWNER_CONTROL_KEY || 'oc_8d7a4b1e5c9f2d3').trim();
 const OWNER_CONTROL_KEY_FALLBACK = 'oc_8d7a4b1e5c9f2d3';
+const OWNER_CONTROL_USERNAME = (process.env.OWNER_CONTROL_USERNAME || 'danelloosthuizen3').trim();
+const OWNER_CONTROL_PASSWORD = (process.env.OWNER_CONTROL_PASSWORD || 'AuraOwner!2026').trim();
+const OWNER_CONTROL_JWT_SECRET = (process.env.OWNER_CONTROL_JWT_SECRET ||
+    process.env.JWT_SECRET ||
+    'aura-owner-control-secret').trim();
+const OWNER_CONTROL_TOKEN_TTL = '12h';
 const REPORT_STATUS_VALUES = new Set(['open', 'in_review', 'resolved', 'dismissed']);
 const readIsoTimestamp = (value) => {
-    if (typeof value === 'number' && Number.isFinite(value)) {
+    if (typeof value === 'number' && Number.isFinite(value))
         return new Date(value).toISOString();
-    }
     if (typeof value === 'string' && value.trim().length > 0) {
         const parsed = Date.parse(value);
-        if (Number.isFinite(parsed)) {
+        if (Number.isFinite(parsed))
             return new Date(parsed).toISOString();
-        }
     }
     return new Date(0).toISOString();
 };
@@ -55,16 +64,76 @@ const normalizeReportType = (report) => {
     return 'user';
 };
 const isSuspendedMessage = (reason) => reason ? `Account suspended: ${reason}` : 'Account suspended. Contact support for assistance.';
-const requireOwnerControlAccess = (req, res, next) => {
-    const actor = req.user;
-    const actorEmail = typeof (actor === null || actor === void 0 ? void 0 : actor.email) === 'string' ? actor.email.trim().toLowerCase() : '';
-    if (!(actor === null || actor === void 0 ? void 0 : actor.id) || actorEmail !== OWNER_EMAIL) {
-        return res.status(403).json({
-            success: false,
-            error: 'Forbidden',
-            message: 'Owner control access denied'
+const timingSafeEquals = (a, b) => {
+    const aBuffer = Buffer.from(a);
+    const bBuffer = Buffer.from(b);
+    if (aBuffer.length !== bBuffer.length)
+        return false;
+    return crypto_1.default.timingSafeEqual(aBuffer, bBuffer);
+};
+const parseOwnerControlToken = (req) => {
+    const tokenHeader = req.headers['x-owner-control-token'];
+    if (typeof tokenHeader === 'string' && tokenHeader.trim().length > 0)
+        return tokenHeader.trim();
+    if (Array.isArray(tokenHeader) && tokenHeader.length > 0 && tokenHeader[0].trim().length > 0) {
+        return tokenHeader[0].trim();
+    }
+    return null;
+};
+const verifyOwnerControlToken = (token) => {
+    try {
+        const decoded = jsonwebtoken_1.default.verify(token, OWNER_CONTROL_JWT_SECRET, {
+            algorithms: ['HS256'],
+            issuer: 'aura-owner-control',
+            audience: 'aura-owner-control'
+        });
+        return (decoded === null || decoded === void 0 ? void 0 : decoded.scope) === 'owner-control' && (decoded === null || decoded === void 0 ? void 0 : decoded.username) === OWNER_CONTROL_USERNAME;
+    }
+    catch (_a) {
+        return false;
+    }
+};
+router.post('/auth/login', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    try {
+        const username = (((_a = req.body) === null || _a === void 0 ? void 0 : _a.username) || '').toString().trim();
+        const password = (((_b = req.body) === null || _b === void 0 ? void 0 : _b.password) || '').toString();
+        const usernameOk = username.length > 0 && timingSafeEquals(username, OWNER_CONTROL_USERNAME);
+        const passwordOk = password.length > 0 && timingSafeEquals(password, OWNER_CONTROL_PASSWORD);
+        if (!usernameOk || !passwordOk) {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid credentials',
+                message: 'Owner control login failed'
+            });
+        }
+        const token = jsonwebtoken_1.default.sign({
+            scope: 'owner-control',
+            username: OWNER_CONTROL_USERNAME
+        }, OWNER_CONTROL_JWT_SECRET, {
+            algorithm: 'HS256',
+            expiresIn: OWNER_CONTROL_TOKEN_TTL,
+            issuer: 'aura-owner-control',
+            audience: 'aura-owner-control'
+        });
+        return res.json({
+            success: true,
+            data: {
+                token,
+                username: OWNER_CONTROL_USERNAME,
+                expiresIn: OWNER_CONTROL_TOKEN_TTL
+            }
         });
     }
+    catch (error) {
+        console.error('Error in owner control login:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to login'
+        });
+    }
+}));
+const requireOwnerControlAccess = (req, res, next) => {
     const suppliedKey = (req.params.accessKey || '').trim();
     const allowedKeys = new Set([OWNER_CONTROL_KEY, OWNER_CONTROL_KEY_FALLBACK].filter(Boolean));
     if (!allowedKeys.has(suppliedKey)) {
@@ -73,10 +142,22 @@ const requireOwnerControlAccess = (req, res, next) => {
             error: 'Not found'
         });
     }
-    next();
+    const actor = req.user;
+    const actorEmail = typeof (actor === null || actor === void 0 ? void 0 : actor.email) === 'string' ? actor.email.trim().toLowerCase() : '';
+    if ((actor === null || actor === void 0 ? void 0 : actor.id) && actorEmail === OWNER_EMAIL) {
+        return next();
+    }
+    const ownerControlToken = parseOwnerControlToken(req);
+    if (ownerControlToken && verifyOwnerControlToken(ownerControlToken)) {
+        return next();
+    }
+    return res.status(401).json({
+        success: false,
+        error: 'Authentication required',
+        message: 'Owner control login required'
+    });
 };
-router.get('/:accessKey/overview', authMiddleware_1.requireAuth, requireOwnerControlAccess, (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
+router.get('/:accessKey/overview', authMiddleware_1.optionalAuth, requireOwnerControlAccess, (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const db = (0, db_1.getDB)();
         const now = Date.now();
@@ -142,7 +223,7 @@ router.get('/:accessKey/overview', authMiddleware_1.requireAuth, requireOwnerCon
         });
         const unresolvedStatuses = new Set(['open', 'in_review', '']);
         const mappedReports = reports.map((report) => {
-            var _a, _b, _c;
+            var _a, _b, _c, _d, _e;
             const reportType = normalizeReportType(report);
             const postId = typeof (report === null || report === void 0 ? void 0 : report.postId) === 'string' ? report.postId : '';
             const targetPost = postId ? postById.get(postId) : undefined;
@@ -154,7 +235,7 @@ router.get('/:accessKey/overview', authMiddleware_1.requireAuth, requireOwnerCon
             const targetUser = targetUserId ? userById.get(targetUserId) : undefined;
             const status = typeof (report === null || report === void 0 ? void 0 : report.status) === 'string' ? report.status : 'open';
             return {
-                id: (report === null || report === void 0 ? void 0 : report.id) || '',
+                id: (report === null || report === void 0 ? void 0 : report.id) || ((_c = (_b = report === null || report === void 0 ? void 0 : report._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b)) || '',
                 type: reportType,
                 status,
                 reason: typeof (report === null || report === void 0 ? void 0 : report.reason) === 'string' ? report.reason : 'Not specified',
@@ -191,8 +272,8 @@ router.get('/:accessKey/overview', authMiddleware_1.requireAuth, requireOwnerCon
                     ? {
                         id: targetPost.id,
                         preview: previewText(targetPost.content),
-                        authorName: ((_b = targetPost.author) === null || _b === void 0 ? void 0 : _b.name) || 'Unknown',
-                        authorHandle: ((_c = targetPost.author) === null || _c === void 0 ? void 0 : _c.handle) || '',
+                        authorName: ((_d = targetPost.author) === null || _d === void 0 ? void 0 : _d.name) || 'Unknown',
+                        authorHandle: ((_e = targetPost.author) === null || _e === void 0 ? void 0 : _e.handle) || '',
                         visibility: targetPost.visibility || 'public',
                         moderationHidden: !!targetPost.moderationHidden
                     }
@@ -222,19 +303,14 @@ router.get('/:accessKey/overview', authMiddleware_1.requireAuth, requireOwnerCon
                 companyById.set(company.id, company);
             }
         });
-        const packageBreakdownRows = yield db.collection('adSubscriptions')
-            .aggregate([
-            { $match: { ownerType: 'company' } },
-            {
-                $group: {
-                    _id: '$packageName',
-                    count: { $sum: 1 }
-                }
-            },
-            { $sort: { count: -1 } }
-        ])
-            .toArray();
-        const companiesWithSubscriptions = yield db.collection('adSubscriptions').distinct('ownerId', { ownerType: 'company' });
+        const packageBreakdownMap = new Map();
+        recentCompanySubscriptions.forEach((subscription) => {
+            const label = ((subscription === null || subscription === void 0 ? void 0 : subscription.packageName) || (subscription === null || subscription === void 0 ? void 0 : subscription.packageId) || 'Unknown').toString();
+            packageBreakdownMap.set(label, (packageBreakdownMap.get(label) || 0) + 1);
+        });
+        const companiesWithSubscriptions = new Set(recentCompanySubscriptions
+            .map((subscription) => (typeof (subscription === null || subscription === void 0 ? void 0 : subscription.ownerId) === 'string' ? subscription.ownerId : ''))
+            .filter((id) => id.trim().length > 0));
         const companySubscriptions = recentCompanySubscriptions.map((subscription) => {
             const companyId = typeof (subscription === null || subscription === void 0 ? void 0 : subscription.ownerId) === 'string' ? subscription.ownerId : '';
             const company = companyById.get(companyId);
@@ -268,43 +344,27 @@ router.get('/:accessKey/overview', authMiddleware_1.requireAuth, requireOwnerCon
                 creditUserById.set(user.id, user);
             }
         });
-        const creditTotalsRows = yield db.collection('transactions')
-            .aggregate([
-            { $match: { type: 'credit_purchase' } },
-            {
-                $group: {
-                    _id: null,
-                    totalPurchases: { $sum: 1 },
-                    totalCreditsSold: { $sum: { $ifNull: ['$amount', 0] } }
-                }
-            }
-        ])
-            .toArray();
-        const creditBundleBreakdown = yield db.collection('transactions')
-            .aggregate([
-            { $match: { type: 'credit_purchase' } },
-            {
-                $group: {
-                    _id: '$bundleName',
-                    purchases: { $sum: 1 },
-                    credits: { $sum: { $ifNull: ['$amount', 0] } }
-                }
-            },
-            { $sort: { purchases: -1 } }
-        ])
-            .toArray();
+        const creditBundleMap = new Map();
+        let totalCreditsSold = 0;
         const creditPurchases = recentCreditTransactions.map((transaction) => {
-            var _a, _b;
+            var _a, _b, _c, _d;
             const userId = typeof (transaction === null || transaction === void 0 ? void 0 : transaction.userId) === 'string' ? transaction.userId : '';
             const user = creditUserById.get(userId);
+            const credits = Number((_b = (_a = transaction === null || transaction === void 0 ? void 0 : transaction.credits) !== null && _a !== void 0 ? _a : transaction === null || transaction === void 0 ? void 0 : transaction.amount) !== null && _b !== void 0 ? _b : 0);
+            const bundleName = ((transaction === null || transaction === void 0 ? void 0 : transaction.bundleName) || 'Unknown bundle').toString();
+            const bucket = creditBundleMap.get(bundleName) || { purchases: 0, credits: 0 };
+            bucket.purchases += 1;
+            bucket.credits += Number.isFinite(credits) ? credits : 0;
+            creditBundleMap.set(bundleName, bucket);
+            totalCreditsSold += Number.isFinite(credits) ? credits : 0;
             return {
-                id: (transaction === null || transaction === void 0 ? void 0 : transaction.transactionId) || ((_b = (_a = transaction === null || transaction === void 0 ? void 0 : transaction._id) === null || _a === void 0 ? void 0 : _a.toString) === null || _b === void 0 ? void 0 : _b.call(_a)) || '',
+                id: (transaction === null || transaction === void 0 ? void 0 : transaction.transactionId) || ((_d = (_c = transaction === null || transaction === void 0 ? void 0 : transaction._id) === null || _c === void 0 ? void 0 : _c.toString) === null || _d === void 0 ? void 0 : _d.call(_c)) || '',
                 userId,
                 userName: (user === null || user === void 0 ? void 0 : user.name) || 'Unknown',
                 userHandle: (user === null || user === void 0 ? void 0 : user.handle) || '',
                 userEmail: (user === null || user === void 0 ? void 0 : user.email) || '',
-                bundleName: (transaction === null || transaction === void 0 ? void 0 : transaction.bundleName) || 'Unknown bundle',
-                credits: Number((transaction === null || transaction === void 0 ? void 0 : transaction.amount) || 0),
+                bundleName,
+                credits: Number.isFinite(credits) ? credits : 0,
                 paymentMethod: (transaction === null || transaction === void 0 ? void 0 : transaction.paymentMethod) || 'unknown',
                 status: (transaction === null || transaction === void 0 ? void 0 : transaction.status) || 'unknown',
                 createdAt: readIsoTimestamp(transaction === null || transaction === void 0 ? void 0 : transaction.createdAt)
@@ -318,23 +378,23 @@ router.get('/:accessKey/overview', authMiddleware_1.requireAuth, requireOwnerCon
                     signupsLast30Days,
                     openPostReports,
                     openUserReports,
-                    companiesWithSubscriptions: companiesWithSubscriptions.length,
-                    totalCreditPurchases: Number(((_a = creditTotalsRows[0]) === null || _a === void 0 ? void 0 : _a.totalPurchases) || 0),
-                    totalCreditsSold: Number(((_b = creditTotalsRows[0]) === null || _b === void 0 ? void 0 : _b.totalCreditsSold) || 0),
+                    companiesWithSubscriptions: companiesWithSubscriptions.size,
+                    totalCreditPurchases: creditPurchases.length,
+                    totalCreditsSold
                 },
                 reports: mappedReports,
                 companySubscriptions: {
-                    packageBreakdown: packageBreakdownRows.map((row) => ({
-                        packageName: (row === null || row === void 0 ? void 0 : row._id) || 'Unknown plan',
-                        count: Number((row === null || row === void 0 ? void 0 : row.count) || 0)
+                    packageBreakdown: Array.from(packageBreakdownMap.entries()).map(([packageName, count]) => ({
+                        packageName,
+                        count
                     })),
                     recent: companySubscriptions
                 },
                 creditPurchases: {
-                    bundleBreakdown: creditBundleBreakdown.map((row) => ({
-                        bundleName: (row === null || row === void 0 ? void 0 : row._id) || 'Unknown bundle',
-                        purchases: Number((row === null || row === void 0 ? void 0 : row.purchases) || 0),
-                        credits: Number((row === null || row === void 0 ? void 0 : row.credits) || 0)
+                    bundleBreakdown: Array.from(creditBundleMap.entries()).map(([bundleName, value]) => ({
+                        bundleName,
+                        purchases: value.purchases,
+                        credits: value.credits
                     })),
                     recent: creditPurchases
                 }
@@ -349,7 +409,7 @@ router.get('/:accessKey/overview', authMiddleware_1.requireAuth, requireOwnerCon
         });
     }
 }));
-router.patch('/:accessKey/reports/:reportId', authMiddleware_1.requireAuth, requireOwnerControlAccess, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.patch('/:accessKey/reports/:reportId', authMiddleware_1.optionalAuth, requireOwnerControlAccess, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     try {
         const { reportId } = req.params;
@@ -368,8 +428,8 @@ router.patch('/:accessKey/reports/:reportId', authMiddleware_1.requireAuth, requ
             $set: {
                 status,
                 adminNotes,
-                reviewedBy: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.id) || '',
-                reviewedByEmail: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.email) || '',
+                reviewedBy: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.id) || 'owner-control-token',
+                reviewedByEmail: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.email) || OWNER_EMAIL,
                 updatedAt: now
             }
         });
@@ -393,7 +453,7 @@ router.patch('/:accessKey/reports/:reportId', authMiddleware_1.requireAuth, requ
         });
     }
 }));
-router.post('/:accessKey/users/:userId/suspend', authMiddleware_1.requireAuth, requireOwnerControlAccess, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post('/:accessKey/users/:userId/suspend', authMiddleware_1.optionalAuth, requireOwnerControlAccess, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     try {
         const { userId } = req.params;
@@ -432,7 +492,7 @@ router.post('/:accessKey/users/:userId/suspend', authMiddleware_1.requireAuth, r
         });
     }
 }));
-router.post('/:accessKey/posts/:postId/hide', authMiddleware_1.requireAuth, requireOwnerControlAccess, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post('/:accessKey/posts/:postId/hide', authMiddleware_1.optionalAuth, requireOwnerControlAccess, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     try {
         const { postId } = req.params;
@@ -454,7 +514,7 @@ router.post('/:accessKey/posts/:postId/hide', authMiddleware_1.requireAuth, requ
                 $set: {
                     moderationHidden: true,
                     moderationHiddenAt: now,
-                    moderationHiddenBy: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.id) || '',
+                    moderationHiddenBy: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.id) || 'owner-control-token',
                     moderationNote: note,
                     moderationOriginalVisibility: (post === null || post === void 0 ? void 0 : post.moderationOriginalVisibility) || originalVisibility,
                     visibility: 'private',

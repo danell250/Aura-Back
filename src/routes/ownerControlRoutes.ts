@@ -1,23 +1,29 @@
 import { NextFunction, Request, Response, Router } from 'express';
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import { getDB } from '../db';
-import { requireAuth } from '../middleware/authMiddleware';
+import { optionalAuth } from '../middleware/authMiddleware';
 
 const router = Router();
 
 const OWNER_EMAIL = (process.env.OWNER_CONTROL_EMAIL || 'danelloosthuizen3@gmail.com').trim().toLowerCase();
 const OWNER_CONTROL_KEY = (process.env.OWNER_CONTROL_KEY || 'oc_8d7a4b1e5c9f2d3').trim();
 const OWNER_CONTROL_KEY_FALLBACK = 'oc_8d7a4b1e5c9f2d3';
+const OWNER_CONTROL_USERNAME = (process.env.OWNER_CONTROL_USERNAME || 'danelloosthuizen3').trim();
+const OWNER_CONTROL_PASSWORD = (process.env.OWNER_CONTROL_PASSWORD || 'AuraOwner!2026').trim();
+const OWNER_CONTROL_JWT_SECRET = (
+  process.env.OWNER_CONTROL_JWT_SECRET ||
+  process.env.JWT_SECRET ||
+  'aura-owner-control-secret'
+).trim();
+const OWNER_CONTROL_TOKEN_TTL = '12h';
 const REPORT_STATUS_VALUES = new Set(['open', 'in_review', 'resolved', 'dismissed']);
 
 const readIsoTimestamp = (value: unknown): string => {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return new Date(value).toISOString();
-  }
+  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
   if (typeof value === 'string' && value.trim().length > 0) {
     const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return new Date(parsed).toISOString();
-    }
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
   }
   return new Date(0).toISOString();
 };
@@ -47,20 +53,87 @@ const normalizeReportType = (report: any): 'post' | 'user' => {
 const isSuspendedMessage = (reason?: string) =>
   reason ? `Account suspended: ${reason}` : 'Account suspended. Contact support for assistance.';
 
-const requireOwnerControlAccess = (req: Request, res: Response, next: NextFunction) => {
-  const actor = (req as any).user;
-  const actorEmail = typeof actor?.email === 'string' ? actor.email.trim().toLowerCase() : '';
+const timingSafeEquals = (a: string, b: string): boolean => {
+  const aBuffer = Buffer.from(a);
+  const bBuffer = Buffer.from(b);
+  if (aBuffer.length !== bBuffer.length) return false;
+  return crypto.timingSafeEqual(aBuffer, bBuffer);
+};
 
-  if (!actor?.id || actorEmail !== OWNER_EMAIL) {
-    return res.status(403).json({
+const parseOwnerControlToken = (req: Request): string | null => {
+  const tokenHeader = req.headers['x-owner-control-token'];
+  if (typeof tokenHeader === 'string' && tokenHeader.trim().length > 0) return tokenHeader.trim();
+  if (Array.isArray(tokenHeader) && tokenHeader.length > 0 && tokenHeader[0].trim().length > 0) {
+    return tokenHeader[0].trim();
+  }
+  return null;
+};
+
+const verifyOwnerControlToken = (token: string): boolean => {
+  try {
+    const decoded = jwt.verify(token, OWNER_CONTROL_JWT_SECRET, {
+      algorithms: ['HS256'],
+      issuer: 'aura-owner-control',
+      audience: 'aura-owner-control'
+    }) as any;
+
+    return decoded?.scope === 'owner-control' && decoded?.username === OWNER_CONTROL_USERNAME;
+  } catch {
+    return false;
+  }
+};
+
+router.post('/auth/login', async (req: Request, res: Response) => {
+  try {
+    const username = (req.body?.username || '').toString().trim();
+    const password = (req.body?.password || '').toString();
+
+    const usernameOk = username.length > 0 && timingSafeEquals(username, OWNER_CONTROL_USERNAME);
+    const passwordOk = password.length > 0 && timingSafeEquals(password, OWNER_CONTROL_PASSWORD);
+
+    if (!usernameOk || !passwordOk) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid credentials',
+        message: 'Owner control login failed'
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        scope: 'owner-control',
+        username: OWNER_CONTROL_USERNAME
+      },
+      OWNER_CONTROL_JWT_SECRET,
+      {
+        algorithm: 'HS256',
+        expiresIn: OWNER_CONTROL_TOKEN_TTL,
+        issuer: 'aura-owner-control',
+        audience: 'aura-owner-control'
+      }
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        token,
+        username: OWNER_CONTROL_USERNAME,
+        expiresIn: OWNER_CONTROL_TOKEN_TTL
+      }
+    });
+  } catch (error) {
+    console.error('Error in owner control login:', error);
+    return res.status(500).json({
       success: false,
-      error: 'Forbidden',
-      message: 'Owner control access denied'
+      error: 'Failed to login'
     });
   }
+});
 
+const requireOwnerControlAccess = (req: Request, res: Response, next: NextFunction) => {
   const suppliedKey = (req.params.accessKey || '').trim();
   const allowedKeys = new Set([OWNER_CONTROL_KEY, OWNER_CONTROL_KEY_FALLBACK].filter(Boolean));
+
   if (!allowedKeys.has(suppliedKey)) {
     return res.status(404).json({
       success: false,
@@ -68,10 +141,25 @@ const requireOwnerControlAccess = (req: Request, res: Response, next: NextFuncti
     });
   }
 
-  next();
+  const actor = (req as any).user;
+  const actorEmail = typeof actor?.email === 'string' ? actor.email.trim().toLowerCase() : '';
+  if (actor?.id && actorEmail === OWNER_EMAIL) {
+    return next();
+  }
+
+  const ownerControlToken = parseOwnerControlToken(req);
+  if (ownerControlToken && verifyOwnerControlToken(ownerControlToken)) {
+    return next();
+  }
+
+  return res.status(401).json({
+    success: false,
+    error: 'Authentication required',
+    message: 'Owner control login required'
+  });
 };
 
-router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async (_req: Request, res: Response) => {
+router.get('/:accessKey/overview', optionalAuth, requireOwnerControlAccess, async (_req: Request, res: Response) => {
   try {
     const db = getDB();
     const now = Date.now();
@@ -126,16 +214,16 @@ router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async
 
     const reportPosts = reportPostIds.length > 0
       ? await db.collection('posts')
-        .find({ id: { $in: reportPostIds } })
-        .project({
-          _id: 0,
-          id: 1,
-          content: 1,
-          author: 1,
-          visibility: 1,
-          moderationHidden: 1
-        })
-        .toArray()
+          .find({ id: { $in: reportPostIds } })
+          .project({
+            _id: 0,
+            id: 1,
+            content: 1,
+            author: 1,
+            visibility: 1,
+            moderationHidden: 1
+          })
+          .toArray()
       : [];
 
     const postById = new Map<string, any>();
@@ -161,7 +249,7 @@ router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async
       const status = typeof report?.status === 'string' ? report.status : 'open';
 
       return {
-        id: report?.id || '',
+        id: report?.id || report?._id?.toString?.() || '',
         type: reportType,
         status,
         reason: typeof report?.reason === 'string' ? report.reason : 'Not specified',
@@ -169,40 +257,40 @@ router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async
         createdAt: readIsoTimestamp(report?.createdAt),
         reporter: reporter
           ? {
-            id: reporter.id,
-            name: reporter.name || 'Unknown',
-            handle: reporter.handle || '',
-            email: reporter.email || ''
-          }
+              id: reporter.id,
+              name: reporter.name || 'Unknown',
+              handle: reporter.handle || '',
+              email: reporter.email || ''
+            }
           : null,
         targetUser: targetUser
           ? {
-            id: targetUser.id,
-            name: targetUser.name || 'Unknown',
-            handle: targetUser.handle || '',
-            email: targetUser.email || '',
-            isSuspended: !!targetUser.isSuspended,
-            suspensionReason: targetUser.suspensionReason || ''
-          }
-          : (targetUserId
-            ? {
-              id: targetUserId,
-              name: 'Unknown',
-              handle: '',
-              email: '',
-              isSuspended: false,
-              suspensionReason: ''
+              id: targetUser.id,
+              name: targetUser.name || 'Unknown',
+              handle: targetUser.handle || '',
+              email: targetUser.email || '',
+              isSuspended: !!targetUser.isSuspended,
+              suspensionReason: targetUser.suspensionReason || ''
             }
-            : null),
+          : (targetUserId
+              ? {
+                  id: targetUserId,
+                  name: 'Unknown',
+                  handle: '',
+                  email: '',
+                  isSuspended: false,
+                  suspensionReason: ''
+                }
+              : null),
         post: targetPost
           ? {
-            id: targetPost.id,
-            preview: previewText(targetPost.content),
-            authorName: targetPost.author?.name || 'Unknown',
-            authorHandle: targetPost.author?.handle || '',
-            visibility: targetPost.visibility || 'public',
-            moderationHidden: !!targetPost.moderationHidden
-          }
+              id: targetPost.id,
+              preview: previewText(targetPost.content),
+              authorName: targetPost.author?.name || 'Unknown',
+              authorHandle: targetPost.author?.handle || '',
+              visibility: targetPost.visibility || 'public',
+              moderationHidden: !!targetPost.moderationHidden
+            }
           : null,
         isUnresolved: unresolvedStatuses.has(status)
       };
@@ -226,9 +314,9 @@ router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async
 
     const companies = companyIds.length > 0
       ? await db.collection('companies')
-        .find({ id: { $in: companyIds } })
-        .project({ _id: 0, id: 1, name: 1, handle: 1 })
-        .toArray()
+          .find({ id: { $in: companyIds } })
+          .project({ _id: 0, id: 1, name: 1, handle: 1 })
+          .toArray()
       : [];
 
     const companyById = new Map<string, any>();
@@ -238,20 +326,18 @@ router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async
       }
     });
 
-    const packageBreakdownRows = await db.collection('adSubscriptions')
-      .aggregate([
-        { $match: { ownerType: 'company' } },
-        {
-          $group: {
-            _id: '$packageName',
-            count: { $sum: 1 }
-          }
-        },
-        { $sort: { count: -1 } }
-      ])
-      .toArray();
+    const packageBreakdownMap = new Map<string, number>();
+    recentCompanySubscriptions.forEach((subscription: any) => {
+      const label = (subscription?.packageName || subscription?.packageId || 'Unknown').toString();
+      packageBreakdownMap.set(label, (packageBreakdownMap.get(label) || 0) + 1);
+    });
 
-    const companiesWithSubscriptions = await db.collection('adSubscriptions').distinct('ownerId', { ownerType: 'company' });
+    const companiesWithSubscriptions = new Set(
+      recentCompanySubscriptions
+        .map((subscription: any) => (typeof subscription?.ownerId === 'string' ? subscription.ownerId : ''))
+        .filter((id: string) => id.trim().length > 0)
+    );
+
     const companySubscriptions = recentCompanySubscriptions.map((subscription: any) => {
       const companyId = typeof subscription?.ownerId === 'string' ? subscription.ownerId : '';
       const company = companyById.get(companyId);
@@ -282,9 +368,9 @@ router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async
 
     const creditUsers = creditUserIds.length > 0
       ? await db.collection('users')
-        .find({ id: { $in: creditUserIds } })
-        .project({ _id: 0, id: 1, name: 1, handle: 1, email: 1 })
-        .toArray()
+          .find({ id: { $in: creditUserIds } })
+          .project({ _id: 0, id: 1, name: 1, handle: 1, email: 1 })
+          .toArray()
       : [];
 
     const creditUserById = new Map<string, any>();
@@ -294,44 +380,31 @@ router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async
       }
     });
 
-    const creditTotalsRows = await db.collection('transactions')
-      .aggregate([
-        { $match: { type: 'credit_purchase' } },
-        {
-          $group: {
-            _id: null,
-            totalPurchases: { $sum: 1 },
-            totalCreditsSold: { $sum: { $ifNull: ['$amount', 0] } }
-          }
-        }
-      ])
-      .toArray();
-
-    const creditBundleBreakdown = await db.collection('transactions')
-      .aggregate([
-        { $match: { type: 'credit_purchase' } },
-        {
-          $group: {
-            _id: '$bundleName',
-            purchases: { $sum: 1 },
-            credits: { $sum: { $ifNull: ['$amount', 0] } }
-          }
-        },
-        { $sort: { purchases: -1 } }
-      ])
-      .toArray();
+    const creditBundleMap = new Map<string, { purchases: number; credits: number }>();
+    let totalCreditsSold = 0;
 
     const creditPurchases = recentCreditTransactions.map((transaction: any) => {
       const userId = typeof transaction?.userId === 'string' ? transaction.userId : '';
       const user = creditUserById.get(userId);
+      const credits = Number(
+        transaction?.credits ?? transaction?.amount ?? 0
+      );
+      const bundleName = (transaction?.bundleName || 'Unknown bundle').toString();
+
+      const bucket = creditBundleMap.get(bundleName) || { purchases: 0, credits: 0 };
+      bucket.purchases += 1;
+      bucket.credits += Number.isFinite(credits) ? credits : 0;
+      creditBundleMap.set(bundleName, bucket);
+      totalCreditsSold += Number.isFinite(credits) ? credits : 0;
+
       return {
         id: transaction?.transactionId || transaction?._id?.toString?.() || '',
         userId,
         userName: user?.name || 'Unknown',
         userHandle: user?.handle || '',
         userEmail: user?.email || '',
-        bundleName: transaction?.bundleName || 'Unknown bundle',
-        credits: Number(transaction?.amount || 0),
+        bundleName,
+        credits: Number.isFinite(credits) ? credits : 0,
         paymentMethod: transaction?.paymentMethod || 'unknown',
         status: transaction?.status || 'unknown',
         createdAt: readIsoTimestamp(transaction?.createdAt)
@@ -346,23 +419,23 @@ router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async
           signupsLast30Days,
           openPostReports,
           openUserReports,
-          companiesWithSubscriptions: companiesWithSubscriptions.length,
-          totalCreditPurchases: Number(creditTotalsRows[0]?.totalPurchases || 0),
-          totalCreditsSold: Number(creditTotalsRows[0]?.totalCreditsSold || 0),
+          companiesWithSubscriptions: companiesWithSubscriptions.size,
+          totalCreditPurchases: creditPurchases.length,
+          totalCreditsSold
         },
         reports: mappedReports,
         companySubscriptions: {
-          packageBreakdown: packageBreakdownRows.map((row: any) => ({
-            packageName: row?._id || 'Unknown plan',
-            count: Number(row?.count || 0)
+          packageBreakdown: Array.from(packageBreakdownMap.entries()).map(([packageName, count]) => ({
+            packageName,
+            count
           })),
           recent: companySubscriptions
         },
         creditPurchases: {
-          bundleBreakdown: creditBundleBreakdown.map((row: any) => ({
-            bundleName: row?._id || 'Unknown bundle',
-            purchases: Number(row?.purchases || 0),
-            credits: Number(row?.credits || 0)
+          bundleBreakdown: Array.from(creditBundleMap.entries()).map(([bundleName, value]) => ({
+            bundleName,
+            purchases: value.purchases,
+            credits: value.credits
           })),
           recent: creditPurchases
         }
@@ -377,7 +450,7 @@ router.get('/:accessKey/overview', requireAuth, requireOwnerControlAccess, async
   }
 });
 
-router.patch('/:accessKey/reports/:reportId', requireAuth, requireOwnerControlAccess, async (req: Request, res: Response) => {
+router.patch('/:accessKey/reports/:reportId', optionalAuth, requireOwnerControlAccess, async (req: Request, res: Response) => {
   try {
     const { reportId } = req.params;
     const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
@@ -399,8 +472,8 @@ router.patch('/:accessKey/reports/:reportId', requireAuth, requireOwnerControlAc
         $set: {
           status,
           adminNotes,
-          reviewedBy: reviewer?.id || '',
-          reviewedByEmail: reviewer?.email || '',
+          reviewedBy: reviewer?.id || 'owner-control-token',
+          reviewedByEmail: reviewer?.email || OWNER_EMAIL,
           updatedAt: now
         }
       }
@@ -427,7 +500,7 @@ router.patch('/:accessKey/reports/:reportId', requireAuth, requireOwnerControlAc
   }
 });
 
-router.post('/:accessKey/users/:userId/suspend', requireAuth, requireOwnerControlAccess, async (req: Request, res: Response) => {
+router.post('/:accessKey/users/:userId/suspend', optionalAuth, requireOwnerControlAccess, async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const suspended = req.body?.suspended !== false;
@@ -471,7 +544,7 @@ router.post('/:accessKey/users/:userId/suspend', requireAuth, requireOwnerContro
   }
 });
 
-router.post('/:accessKey/posts/:postId/hide', requireAuth, requireOwnerControlAccess, async (req: Request, res: Response) => {
+router.post('/:accessKey/posts/:postId/hide', optionalAuth, requireOwnerControlAccess, async (req: Request, res: Response) => {
   try {
     const { postId } = req.params;
     const hidden = req.body?.hidden !== false;
@@ -497,7 +570,7 @@ router.post('/:accessKey/posts/:postId/hide', requireAuth, requireOwnerControlAc
           $set: {
             moderationHidden: true,
             moderationHiddenAt: now,
-            moderationHiddenBy: reviewer?.id || '',
+            moderationHiddenBy: reviewer?.id || 'owner-control-token',
             moderationNote: note,
             moderationOriginalVisibility: post?.moderationOriginalVisibility || originalVisibility,
             visibility: 'private',
