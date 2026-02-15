@@ -233,6 +233,107 @@ const buildAuthorPrivacyConditions = (context: ViewerAccessContext): any[] => {
   return conditions;
 };
 
+interface LiveDashboardTotals {
+  totalPosts: number;
+  totalViews: number;
+  boostedPosts: number;
+  totalRadiance: number;
+}
+
+interface LiveDashboardTopPost {
+  id: string;
+  preview: string;
+  views: number;
+  timestamp: number;
+  isBoosted: boolean;
+  radiance: number;
+}
+
+const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const formatHourLabel = (hour: number): string => {
+  const normalized = Number.isFinite(hour) ? Math.max(0, Math.min(23, Math.floor(hour))) : 12;
+  const meridiem = normalized >= 12 ? 'PM' : 'AM';
+  const hour12 = normalized % 12 === 0 ? 12 : normalized % 12;
+  return `${hour12}:00 ${meridiem}`;
+};
+
+const deriveTimingHints = (topPosts: LiveDashboardTopPost[]): { bestTimeToPost: string; peakActivity: string } => {
+  if (!topPosts.length) {
+    return {
+      bestTimeToPost: 'Wednesday 6:00 PM',
+      peakActivity: 'Weekends'
+    };
+  }
+
+  const dayWeights = new Array<number>(7).fill(0);
+  const hourWeights = new Array<number>(24).fill(0);
+
+  for (const post of topPosts) {
+    const date = new Date(post.timestamp || Date.now());
+    const weight = Math.max(1, post.views || 1);
+    dayWeights[date.getDay()] += weight;
+    hourWeights[date.getHours()] += weight;
+  }
+
+  const bestDay = dayWeights.indexOf(Math.max(...dayWeights));
+  const bestHour = hourWeights.indexOf(Math.max(...hourWeights));
+
+  return {
+    bestTimeToPost: `${dayNames[bestDay]} ${formatHourLabel(bestHour)}`,
+    peakActivity: bestDay === 0 || bestDay === 6 ? 'Weekends' : `${dayNames[bestDay]}s`
+  };
+};
+
+const deriveReachVelocity = (avgViews: number): string => {
+  if (avgViews >= 1000) return 'Very High';
+  if (avgViews >= 300) return 'High';
+  if (avgViews >= 100) return 'Rising';
+  if (avgViews > 0) return 'Growing';
+  return 'Low';
+};
+
+const buildLiveNeuralInsights = (
+  totals: LiveDashboardTotals,
+  topPosts: LiveDashboardTopPost[],
+  adImpressions: number,
+  adClicks: number,
+  country?: string
+) => {
+  const totalViews = Math.max(0, totals.totalViews || 0);
+  const totalPosts = Math.max(0, totals.totalPosts || 0);
+  const boostedPosts = Math.max(0, totals.boostedPosts || 0);
+  const totalRadiance = Math.max(0, totals.totalRadiance || 0);
+
+  const boostRatio = totalPosts > 0 ? boostedPosts / totalPosts : 0;
+  const avgViewsPerPost = totalPosts > 0 ? totalViews / totalPosts : 0;
+  const engagementRateValue = totalViews > 0 ? (totalRadiance / totalViews) * 100 : 0;
+  const retentionScore = Math.max(20, Math.min(95, Math.round(40 + boostRatio * 30 + Math.min(25, avgViewsPerPost / 40))));
+  const engagementHealthScore = Math.max(1, Math.min(99, Math.round(30 + engagementRateValue * 20 + boostRatio * 25)));
+  const ctrValue = adImpressions > 0 ? (adClicks / adImpressions) * 100 : 0;
+  const conversionScore = Math.max(
+    0,
+    Math.min(100, Math.round(20 + ctrValue * 12 + engagementRateValue * 5 + boostRatio * 20))
+  );
+  const timing = deriveTimingHints(topPosts);
+  const topLocations = country && country.trim() ? [country.trim()] : ['Global'];
+
+  return {
+    engagementHealth: `${engagementHealthScore}%`,
+    reachVelocity: deriveReachVelocity(avgViewsPerPost),
+    audienceBehavior: {
+      retention: retentionScore >= 80 ? 'High' : retentionScore >= 55 ? 'Moderate' : 'Emerging',
+      engagementRate: `${engagementRateValue.toFixed(1)}%`,
+      topLocations
+    },
+    timingOptimization: timing,
+    conversionInsights: {
+      clickThroughRate: `${ctrValue.toFixed(1)}%`,
+      conversionScore
+    }
+  };
+};
+
 export const emitAuthorInsightsUpdate = async (
   app: any,
   authorId: string,
@@ -276,9 +377,51 @@ export const emitAuthorInsightsUpdate = async (
       .limit(5)
       .toArray();
 
-    const user = await db.collection(USERS_COLLECTION).findOne(
-      { id: authorId },
-      { projection: { auraCredits: 1, auraCreditsSpent: 1 } }
+    const [user, adAgg] = await Promise.all([
+      db.collection(USERS_COLLECTION).findOne(
+        { id: authorId },
+        { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1 } }
+      ),
+      db.collection('adAnalytics').aggregate([
+        {
+          $match: {
+            $or: [
+              { ownerId: authorId, ownerType: 'user' },
+              { ownerId: authorId, ownerType: { $exists: false } },
+              { userId: authorId }
+            ]
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalImpressions: { $sum: { $ifNull: ['$impressions', 0] } },
+            totalClicks: { $sum: { $ifNull: ['$clicks', 0] } }
+          }
+        }
+      ]).toArray().then(rows => rows[0] || null)
+    ]);
+
+    const totals: LiveDashboardTotals = {
+      totalPosts: agg?.totalPosts ?? 0,
+      totalViews: agg?.totalViews ?? 0,
+      boostedPosts: agg?.boostedPosts ?? 0,
+      totalRadiance: agg?.totalRadiance ?? 0
+    };
+    const mappedTopPosts: LiveDashboardTopPost[] = topPosts.map((p: any) => ({
+      id: p.id,
+      preview: (p.content || '').slice(0, 120),
+      views: p.viewCount ?? 0,
+      timestamp: p.timestamp,
+      isBoosted: !!p.isBoosted,
+      radiance: p.radiance ?? 0
+    }));
+    const neuralInsights = buildLiveNeuralInsights(
+      totals,
+      mappedTopPosts,
+      adAgg?.totalImpressions ?? 0,
+      adAgg?.totalClicks ?? 0,
+      user?.country
     );
 
     // If we have access to the app and it has an 'io' instance, emit the update
@@ -287,24 +430,13 @@ export const emitAuthorInsightsUpdate = async (
     const result = io.to(authorId).emit('analytics_update', {
       userId: authorId,
       stats: {
-        totals: {
-          totalPosts: agg?.totalPosts ?? 0,
-          totalViews: agg?.totalViews ?? 0,
-          boostedPosts: agg?.boostedPosts ?? 0,
-          totalRadiance: agg?.totalRadiance ?? 0
-        },
+        totals,
         credits: {
           balance: user?.auraCredits ?? 0,
           spent: user?.auraCreditsSpent ?? 0
         },
-        topPosts: topPosts.map((p: any) => ({
-          id: p.id,
-          preview: (p.content || '').slice(0, 120),
-          views: p.viewCount ?? 0,
-          timestamp: p.timestamp,
-          isBoosted: !!p.isBoosted,
-          radiance: p.radiance ?? 0
-        }))
+        topPosts: mappedTopPosts,
+        neuralInsights
       }
     });
 

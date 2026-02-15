@@ -93,6 +93,107 @@ const sanitizePublicUserProfile = (user: any): any => {
   return sanitized;
 };
 
+interface UserDashboardTotals {
+  totalPosts: number;
+  totalViews: number;
+  boostedPosts: number;
+  totalRadiance: number;
+}
+
+interface UserDashboardTopPost {
+  id: string;
+  preview: string;
+  views: number;
+  timestamp: number;
+  isBoosted: boolean;
+  radiance: number;
+}
+
+const dashboardDayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const formatDashboardHour = (hour: number): string => {
+  const normalized = Number.isFinite(hour) ? Math.max(0, Math.min(23, Math.floor(hour))) : 12;
+  const meridiem = normalized >= 12 ? 'PM' : 'AM';
+  const hour12 = normalized % 12 === 0 ? 12 : normalized % 12;
+  return `${hour12}:00 ${meridiem}`;
+};
+
+const deriveDashboardTiming = (topPosts: UserDashboardTopPost[]): { bestTimeToPost: string; peakActivity: string } => {
+  if (!topPosts.length) {
+    return {
+      bestTimeToPost: 'Wednesday 6:00 PM',
+      peakActivity: 'Weekends'
+    };
+  }
+
+  const dayWeights = new Array<number>(7).fill(0);
+  const hourWeights = new Array<number>(24).fill(0);
+
+  for (const post of topPosts) {
+    const date = new Date(post.timestamp || Date.now());
+    const weight = Math.max(1, post.views || 1);
+    dayWeights[date.getDay()] += weight;
+    hourWeights[date.getHours()] += weight;
+  }
+
+  const bestDay = dayWeights.indexOf(Math.max(...dayWeights));
+  const bestHour = hourWeights.indexOf(Math.max(...hourWeights));
+
+  return {
+    bestTimeToPost: `${dashboardDayNames[bestDay]} ${formatDashboardHour(bestHour)}`,
+    peakActivity: bestDay === 0 || bestDay === 6 ? 'Weekends' : `${dashboardDayNames[bestDay]}s`
+  };
+};
+
+const deriveDashboardReachVelocity = (avgViews: number): string => {
+  if (avgViews >= 1000) return 'Very High';
+  if (avgViews >= 300) return 'High';
+  if (avgViews >= 100) return 'Rising';
+  if (avgViews > 0) return 'Growing';
+  return 'Low';
+};
+
+const buildDashboardNeuralInsights = (
+  totals: UserDashboardTotals,
+  topPosts: UserDashboardTopPost[],
+  adImpressions: number,
+  adClicks: number,
+  country?: string
+) => {
+  const totalViews = Math.max(0, totals.totalViews || 0);
+  const totalPosts = Math.max(0, totals.totalPosts || 0);
+  const boostedPosts = Math.max(0, totals.boostedPosts || 0);
+  const totalRadiance = Math.max(0, totals.totalRadiance || 0);
+
+  const boostRatio = totalPosts > 0 ? boostedPosts / totalPosts : 0;
+  const avgViewsPerPost = totalPosts > 0 ? totalViews / totalPosts : 0;
+  const engagementRateValue = totalViews > 0 ? (totalRadiance / totalViews) * 100 : 0;
+  const retentionScore = Math.max(20, Math.min(95, Math.round(40 + boostRatio * 30 + Math.min(25, avgViewsPerPost / 40))));
+  const engagementHealthScore = Math.max(1, Math.min(99, Math.round(30 + engagementRateValue * 20 + boostRatio * 25)));
+  const ctrValue = adImpressions > 0 ? (adClicks / adImpressions) * 100 : 0;
+  const conversionScore = Math.max(
+    0,
+    Math.min(100, Math.round(20 + ctrValue * 12 + engagementRateValue * 5 + boostRatio * 20))
+  );
+  const timing = deriveDashboardTiming(topPosts);
+  const topLocations = country && country.trim() ? [country.trim()] : ['Global'];
+
+  return {
+    engagementHealth: `${engagementHealthScore}%`,
+    reachVelocity: deriveDashboardReachVelocity(avgViewsPerPost),
+    audienceBehavior: {
+      retention: retentionScore >= 80 ? 'High' : retentionScore >= 55 ? 'Moderate' : 'Emerging',
+      engagementRate: `${engagementRateValue.toFixed(1)}%`,
+      topLocations
+    },
+    timingOptimization: timing,
+    conversionInsights: {
+      clickThroughRate: `${ctrValue.toFixed(1)}%`,
+      conversionScore
+    }
+  };
+};
+
 export const usersController = {
   // GET /api/users/me/dashboard - Get creator dashboard data
   getMyDashboard: async (req: Request, res: Response) => {
@@ -132,20 +233,38 @@ export const usersController = {
         .limit(5)
         .toArray();
 
-      const user = await db.collection('users').findOne(
-        { id: authorId },
-        { projection: { auraCredits: 1, auraCreditsSpent: 1 } }
-      );
-
-      // Fetch active subscription to determine analytics level
-      const activeSub = await db.collection('adSubscriptions').findOne({
-        userId: authorId,
-        status: 'active',
-        $or: [
-          { endDate: { $exists: false } },
-          { endDate: { $gt: Date.now() } }
-        ]
-      });
+      const [user, activeSub, adAgg] = await Promise.all([
+        db.collection('users').findOne(
+          { id: authorId },
+          { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1 } }
+        ),
+        db.collection('adSubscriptions').findOne({
+          userId: authorId,
+          status: 'active',
+          $or: [
+            { endDate: { $exists: false } },
+            { endDate: { $gt: Date.now() } }
+          ]
+        }),
+        db.collection('adAnalytics').aggregate([
+          {
+            $match: {
+              $or: [
+                { ownerId: authorId, ownerType: 'user' },
+                { ownerId: authorId, ownerType: { $exists: false } },
+                { userId: authorId }
+              ]
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              totalImpressions: { $sum: { $ifNull: ['$impressions', 0] } },
+              totalClicks: { $sum: { $ifNull: ['$clicks', 0] } }
+            }
+          }
+        ]).toArray().then(rows => rows[0] || null)
+      ]);
 
       let analyticsLevel = 'none';
       if (activeSub) {
@@ -154,45 +273,39 @@ export const usersController = {
         else if (activeSub.packageId === 'pkg-starter') analyticsLevel = 'basic';
       }
 
+      const totals: UserDashboardTotals = {
+        totalPosts: agg?.totalPosts ?? 0,
+        totalViews: agg?.totalViews ?? 0,
+        boostedPosts: agg?.boostedPosts ?? 0,
+        totalRadiance: agg?.totalRadiance ?? 0
+      };
+
+      const mappedTopPosts: UserDashboardTopPost[] = topPosts.map((p: any) => ({
+        id: p.id,
+        preview: (p.content || '').slice(0, 120),
+        views: p.viewCount ?? 0,
+        timestamp: p.timestamp,
+        isBoosted: !!p.isBoosted,
+        radiance: p.radiance ?? 0
+      }));
+
+      const neuralInsights = buildDashboardNeuralInsights(
+        totals,
+        mappedTopPosts,
+        adAgg?.totalImpressions ?? 0,
+        adAgg?.totalClicks ?? 0,
+        user?.country
+      );
+
       const dashboardData: any = {
-        totals: {
-          totalPosts: agg?.totalPosts ?? 0,
-          totalViews: agg?.totalViews ?? 0,
-          boostedPosts: agg?.boostedPosts ?? 0,
-          totalRadiance: agg?.totalRadiance ?? 0
-        },
+        totals,
         credits: {
           balance: user?.auraCredits ?? 0,
           spent: user?.auraCreditsSpent ?? 0
         },
-        topPosts: topPosts.map((p: any) => ({
-          id: p.id,
-          preview: (p.content || '').slice(0, 120),
-          views: p.viewCount ?? 0,
-          timestamp: p.timestamp,
-          isBoosted: !!p.isBoosted,
-          radiance: p.radiance ?? 0
-        }))
+        topPosts: mappedTopPosts,
+        neuralInsights
       };
-
-      // Add plan-specific insights
-      if (analyticsLevel === 'deep') {
-        dashboardData.neuralInsights = {
-          audienceBehavior: {
-            retention: 'High',
-            engagementRate: '4.5%',
-            topLocations: ['US', 'UK', 'CA']
-          },
-          timingOptimization: {
-            bestTimeToPost: 'Wednesday 6:00 PM',
-            peakActivity: 'Weekends'
-          },
-          conversionInsights: {
-            clickThroughRate: '2.1%',
-            conversionScore: 85
-          }
-        };
-      }
 
       res.json({
         success: true,

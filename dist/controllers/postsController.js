@@ -181,8 +181,77 @@ const buildAuthorPrivacyConditions = (context) => {
     }
     return conditions;
 };
+const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const formatHourLabel = (hour) => {
+    const normalized = Number.isFinite(hour) ? Math.max(0, Math.min(23, Math.floor(hour))) : 12;
+    const meridiem = normalized >= 12 ? 'PM' : 'AM';
+    const hour12 = normalized % 12 === 0 ? 12 : normalized % 12;
+    return `${hour12}:00 ${meridiem}`;
+};
+const deriveTimingHints = (topPosts) => {
+    if (!topPosts.length) {
+        return {
+            bestTimeToPost: 'Wednesday 6:00 PM',
+            peakActivity: 'Weekends'
+        };
+    }
+    const dayWeights = new Array(7).fill(0);
+    const hourWeights = new Array(24).fill(0);
+    for (const post of topPosts) {
+        const date = new Date(post.timestamp || Date.now());
+        const weight = Math.max(1, post.views || 1);
+        dayWeights[date.getDay()] += weight;
+        hourWeights[date.getHours()] += weight;
+    }
+    const bestDay = dayWeights.indexOf(Math.max(...dayWeights));
+    const bestHour = hourWeights.indexOf(Math.max(...hourWeights));
+    return {
+        bestTimeToPost: `${dayNames[bestDay]} ${formatHourLabel(bestHour)}`,
+        peakActivity: bestDay === 0 || bestDay === 6 ? 'Weekends' : `${dayNames[bestDay]}s`
+    };
+};
+const deriveReachVelocity = (avgViews) => {
+    if (avgViews >= 1000)
+        return 'Very High';
+    if (avgViews >= 300)
+        return 'High';
+    if (avgViews >= 100)
+        return 'Rising';
+    if (avgViews > 0)
+        return 'Growing';
+    return 'Low';
+};
+const buildLiveNeuralInsights = (totals, topPosts, adImpressions, adClicks, country) => {
+    const totalViews = Math.max(0, totals.totalViews || 0);
+    const totalPosts = Math.max(0, totals.totalPosts || 0);
+    const boostedPosts = Math.max(0, totals.boostedPosts || 0);
+    const totalRadiance = Math.max(0, totals.totalRadiance || 0);
+    const boostRatio = totalPosts > 0 ? boostedPosts / totalPosts : 0;
+    const avgViewsPerPost = totalPosts > 0 ? totalViews / totalPosts : 0;
+    const engagementRateValue = totalViews > 0 ? (totalRadiance / totalViews) * 100 : 0;
+    const retentionScore = Math.max(20, Math.min(95, Math.round(40 + boostRatio * 30 + Math.min(25, avgViewsPerPost / 40))));
+    const engagementHealthScore = Math.max(1, Math.min(99, Math.round(30 + engagementRateValue * 20 + boostRatio * 25)));
+    const ctrValue = adImpressions > 0 ? (adClicks / adImpressions) * 100 : 0;
+    const conversionScore = Math.max(0, Math.min(100, Math.round(20 + ctrValue * 12 + engagementRateValue * 5 + boostRatio * 20)));
+    const timing = deriveTimingHints(topPosts);
+    const topLocations = country && country.trim() ? [country.trim()] : ['Global'];
+    return {
+        engagementHealth: `${engagementHealthScore}%`,
+        reachVelocity: deriveReachVelocity(avgViewsPerPost),
+        audienceBehavior: {
+            retention: retentionScore >= 80 ? 'High' : retentionScore >= 55 ? 'Moderate' : 'Emerging',
+            engagementRate: `${engagementRateValue.toFixed(1)}%`,
+            topLocations
+        },
+        timingOptimization: timing,
+        conversionInsights: {
+            clickThroughRate: `${ctrValue.toFixed(1)}%`,
+            conversionScore
+        }
+    };
+};
 const emitAuthorInsightsUpdate = (app_1, authorId_1, ...args_1) => __awaiter(void 0, [app_1, authorId_1, ...args_1], void 0, function* (app, authorId, authorType = 'user') {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     try {
         if (!authorId || authorType !== 'user')
             return;
@@ -217,33 +286,57 @@ const emitAuthorInsightsUpdate = (app_1, authorId_1, ...args_1) => __awaiter(voi
             .sort({ viewCount: -1 })
             .limit(5)
             .toArray();
-        const user = yield db.collection(USERS_COLLECTION).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1 } });
+        const [user, adAgg] = yield Promise.all([
+            db.collection(USERS_COLLECTION).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1 } }),
+            db.collection('adAnalytics').aggregate([
+                {
+                    $match: {
+                        $or: [
+                            { ownerId: authorId, ownerType: 'user' },
+                            { ownerId: authorId, ownerType: { $exists: false } },
+                            { userId: authorId }
+                        ]
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        totalImpressions: { $sum: { $ifNull: ['$impressions', 0] } },
+                        totalClicks: { $sum: { $ifNull: ['$clicks', 0] } }
+                    }
+                }
+            ]).toArray().then(rows => rows[0] || null)
+        ]);
+        const totals = {
+            totalPosts: (_a = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _a !== void 0 ? _a : 0,
+            totalViews: (_b = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _b !== void 0 ? _b : 0,
+            boostedPosts: (_c = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _c !== void 0 ? _c : 0,
+            totalRadiance: (_d = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _d !== void 0 ? _d : 0
+        };
+        const mappedTopPosts = topPosts.map((p) => {
+            var _a, _b;
+            return ({
+                id: p.id,
+                preview: (p.content || '').slice(0, 120),
+                views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
+                timestamp: p.timestamp,
+                isBoosted: !!p.isBoosted,
+                radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
+            });
+        });
+        const neuralInsights = buildLiveNeuralInsights(totals, mappedTopPosts, (_e = adAgg === null || adAgg === void 0 ? void 0 : adAgg.totalImpressions) !== null && _e !== void 0 ? _e : 0, (_f = adAgg === null || adAgg === void 0 ? void 0 : adAgg.totalClicks) !== null && _f !== void 0 ? _f : 0, user === null || user === void 0 ? void 0 : user.country);
         // If we have access to the app and it has an 'io' instance, emit the update
-        console.log(`📡 Emitting live analytics update to user: ${authorId} (Total views: ${(_a = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _a !== void 0 ? _a : 0})`);
+        console.log(`📡 Emitting live analytics update to user: ${authorId} (Total views: ${(_g = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _g !== void 0 ? _g : 0})`);
         const result = io.to(authorId).emit('analytics_update', {
             userId: authorId,
             stats: {
-                totals: {
-                    totalPosts: (_b = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _b !== void 0 ? _b : 0,
-                    totalViews: (_c = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _c !== void 0 ? _c : 0,
-                    boostedPosts: (_d = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _d !== void 0 ? _d : 0,
-                    totalRadiance: (_e = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _e !== void 0 ? _e : 0
-                },
+                totals,
                 credits: {
-                    balance: (_f = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _f !== void 0 ? _f : 0,
-                    spent: (_g = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _g !== void 0 ? _g : 0
+                    balance: (_h = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _h !== void 0 ? _h : 0,
+                    spent: (_j = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _j !== void 0 ? _j : 0
                 },
-                topPosts: topPosts.map((p) => {
-                    var _a, _b;
-                    return ({
-                        id: p.id,
-                        preview: (p.content || '').slice(0, 120),
-                        views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
-                        timestamp: p.timestamp,
-                        isBoosted: !!p.isBoosted,
-                        radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
-                    });
-                })
+                topPosts: mappedTopPosts,
+                neuralInsights
             }
         });
         if (!result) {
