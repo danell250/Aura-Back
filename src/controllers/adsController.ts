@@ -249,6 +249,33 @@ export const adsController = {
             } 
           } 
         }, 
+
+        { 
+          $addFields: { 
+            boostWeight: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ['$isBoosted', true] },
+                    {
+                      $or: [
+                        { $not: ['$boostedUntil'] },
+                        { $gt: ['$boostedUntil', now] }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  $add: [
+                    2000000,
+                    { $multiply: [{ $ifNull: ['$boostCredits', 50] }, 20000] }
+                  ]
+                },
+                0
+              ]
+            }
+          } 
+        }, 
       
         // score: tier first, then engagement, then recency 
         { 
@@ -256,6 +283,7 @@ export const adsController = {
             signalScore: { 
               $add: [ 
                 { $multiply: ['$tierWeight', 1000000] }, 
+                '$boostWeight',
                 { $multiply: ['$totalReactions', 1000] }, 
                 '$timestamp' 
               ] 
@@ -604,6 +632,112 @@ export const adsController = {
     } catch (error) {
       console.error('Error reacting to ad:', error);
       res.status(500).json({ success: false, error: 'Failed to react to ad' });
+    }
+  },
+
+  // POST /api/ads/:id/boost - Boost ad reach and deduct user credits
+  boostAd: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const authenticatedUserId = (req as any).user?.id as string | undefined;
+      const { credits } = req.body as { credits?: number | string };
+      const db = getDB();
+
+      if (!authenticatedUserId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+      }
+
+      const ad = await db.collection('ads').findOne({ id });
+      if (!ad) {
+        return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
+      const creditsToSpend = typeof parsedCredits === 'number' && parsedCredits > 0 ? Math.round(parsedCredits) : 50;
+
+      const user = await db.collection('users').findOne({ id: authenticatedUserId });
+      if (!user) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      const currentCredits = Number(user.auraCredits || 0);
+      if (currentCredits < creditsToSpend) {
+        return res.status(400).json({ success: false, error: 'Insufficient credits' });
+      }
+
+      const newCredits = currentCredits - creditsToSpend;
+      const creditUpdateResult = await db.collection('users').updateOne(
+        { id: authenticatedUserId },
+        {
+          $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() },
+          $inc: { auraCreditsSpent: creditsToSpend }
+        }
+      );
+
+      if (!creditUpdateResult.matchedCount || !creditUpdateResult.modifiedCount) {
+        return res.status(500).json({ success: false, error: 'Failed to update user credits' });
+      }
+
+      const now = Date.now();
+      const boostedUntil = now + (72 * 60 * 60 * 1000);
+
+      try {
+        await db.collection('ads').updateOne(
+          { id },
+          {
+            $set: {
+              isBoosted: true,
+              boostedAt: now,
+              boostedUntil,
+              updatedAt: new Date().toISOString()
+            },
+            $inc: {
+              boostCredits: creditsToSpend
+            }
+          }
+        );
+
+        await db.collection('adAnalytics').updateOne(
+          { adId: id },
+          {
+            $inc: { spend: creditsToSpend },
+            $set: { lastUpdated: now }
+          },
+          { upsert: true }
+        );
+
+        const boostedAd = await db.collection('ads').findOne({ id });
+        if (!boostedAd) {
+          await db.collection('users').updateOne(
+            { id: authenticatedUserId },
+            {
+              $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() },
+              $inc: { auraCreditsSpent: -creditsToSpend }
+            }
+          );
+          return res.status(500).json({ success: false, error: 'Failed to boost ad' });
+        }
+
+        try {
+          await emitAdAnalyticsUpdate(req.app as any, id, ad.ownerId, ad.ownerType || 'user');
+        } catch (emitError) {
+          console.error('Failed to emit ad analytics update after boost:', emitError);
+        }
+
+        return res.json({ success: true, data: boostedAd, message: 'Ad boosted successfully' });
+      } catch (boostError) {
+        await db.collection('users').updateOne(
+          { id: authenticatedUserId },
+          {
+            $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() },
+            $inc: { auraCreditsSpent: -creditsToSpend }
+          }
+        );
+        throw boostError;
+      }
+    } catch (error) {
+      console.error('Error boosting ad:', error);
+      res.status(500).json({ success: false, error: 'Failed to boost ad' });
     }
   },
 

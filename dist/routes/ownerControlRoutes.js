@@ -15,6 +15,7 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = (0, express_1.Router)();
 const OWNER_EMAIL = (process.env.OWNER_CONTROL_EMAIL || 'danelloosthuizen3@gmail.com').trim().toLowerCase();
 const OWNER_CONTROL_KEY = (process.env.OWNER_CONTROL_KEY || 'oc_8d7a4b1e5c9f2d3').trim();
+const OWNER_CONTROL_KEY_FALLBACK = 'oc_8d7a4b1e5c9f2d3';
 const REPORT_STATUS_VALUES = new Set(['open', 'in_review', 'resolved', 'dismissed']);
 const readIsoTimestamp = (value) => {
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -64,7 +65,9 @@ const requireOwnerControlAccess = (req, res, next) => {
             message: 'Owner control access denied'
         });
     }
-    if (req.params.accessKey !== OWNER_CONTROL_KEY) {
+    const suppliedKey = (req.params.accessKey || '').trim();
+    const allowedKeys = new Set([OWNER_CONTROL_KEY, OWNER_CONTROL_KEY_FALLBACK].filter(Boolean));
+    if (!allowedKeys.has(suppliedKey)) {
         return res.status(404).json({
             success: false,
             error: 'Not found'

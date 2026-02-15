@@ -172,6 +172,10 @@ export interface Ad {
   reactionUsers?: Record<string, string[]>;
   ownerActiveGlow?: string;
   budget?: number;
+  isBoosted?: boolean;
+  boostCredits?: number;
+  boostedAt?: number;
+  boostedUntil?: number;
 }
 
 export interface Post {

@@ -240,12 +240,39 @@ exports.adsController = {
                         }
                     }
                 },
+                {
+                    $addFields: {
+                        boostWeight: {
+                            $cond: [
+                                {
+                                    $and: [
+                                        { $eq: ['$isBoosted', true] },
+                                        {
+                                            $or: [
+                                                { $not: ['$boostedUntil'] },
+                                                { $gt: ['$boostedUntil', now] }
+                                            ]
+                                        }
+                                    ]
+                                },
+                                {
+                                    $add: [
+                                        2000000,
+                                        { $multiply: [{ $ifNull: ['$boostCredits', 50] }, 20000] }
+                                    ]
+                                },
+                                0
+                            ]
+                        }
+                    }
+                },
                 // score: tier first, then engagement, then recency 
                 {
                     $addFields: {
                         signalScore: {
                             $add: [
                                 { $multiply: ['$tierWeight', 1000000] },
+                                '$boostWeight',
                                 { $multiply: ['$totalReactions', 1000] },
                                 '$timestamp'
                             ]
@@ -539,6 +566,86 @@ exports.adsController = {
         catch (error) {
             console.error('Error reacting to ad:', error);
             res.status(500).json({ success: false, error: 'Failed to react to ad' });
+        }
+    }),
+    // POST /api/ads/:id/boost - Boost ad reach and deduct user credits
+    boostAd: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            const { id } = req.params;
+            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            const { credits } = req.body;
+            const db = (0, db_1.getDB)();
+            if (!authenticatedUserId) {
+                return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
+            }
+            const ad = yield db.collection('ads').findOne({ id });
+            if (!ad) {
+                return res.status(404).json({ success: false, error: 'Ad not found' });
+            }
+            const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
+            const creditsToSpend = typeof parsedCredits === 'number' && parsedCredits > 0 ? Math.round(parsedCredits) : 50;
+            const user = yield db.collection('users').findOne({ id: authenticatedUserId });
+            if (!user) {
+                return res.status(404).json({ success: false, error: 'User not found' });
+            }
+            const currentCredits = Number(user.auraCredits || 0);
+            if (currentCredits < creditsToSpend) {
+                return res.status(400).json({ success: false, error: 'Insufficient credits' });
+            }
+            const newCredits = currentCredits - creditsToSpend;
+            const creditUpdateResult = yield db.collection('users').updateOne({ id: authenticatedUserId }, {
+                $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() },
+                $inc: { auraCreditsSpent: creditsToSpend }
+            });
+            if (!creditUpdateResult.matchedCount || !creditUpdateResult.modifiedCount) {
+                return res.status(500).json({ success: false, error: 'Failed to update user credits' });
+            }
+            const now = Date.now();
+            const boostedUntil = now + (72 * 60 * 60 * 1000);
+            try {
+                yield db.collection('ads').updateOne({ id }, {
+                    $set: {
+                        isBoosted: true,
+                        boostedAt: now,
+                        boostedUntil,
+                        updatedAt: new Date().toISOString()
+                    },
+                    $inc: {
+                        boostCredits: creditsToSpend
+                    }
+                });
+                yield db.collection('adAnalytics').updateOne({ adId: id }, {
+                    $inc: { spend: creditsToSpend },
+                    $set: { lastUpdated: now }
+                }, { upsert: true });
+                const boostedAd = yield db.collection('ads').findOne({ id });
+                if (!boostedAd) {
+                    yield db.collection('users').updateOne({ id: authenticatedUserId }, {
+                        $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() },
+                        $inc: { auraCreditsSpent: -creditsToSpend }
+                    });
+                    return res.status(500).json({ success: false, error: 'Failed to boost ad' });
+                }
+                try {
+                    yield (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
+                }
+                catch (emitError) {
+                    console.error('Failed to emit ad analytics update after boost:', emitError);
+                }
+                return res.json({ success: true, data: boostedAd, message: 'Ad boosted successfully' });
+            }
+            catch (boostError) {
+                yield db.collection('users').updateOne({ id: authenticatedUserId }, {
+                    $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() },
+                    $inc: { auraCreditsSpent: -creditsToSpend }
+                });
+                throw boostError;
+            }
+        }
+        catch (error) {
+            console.error('Error boosting ad:', error);
+            res.status(500).json({ success: false, error: 'Failed to boost ad' });
         }
     }),
     // GET /api/ads/:id - Get ad by ID

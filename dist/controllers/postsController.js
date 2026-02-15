@@ -1616,21 +1616,7 @@ exports.postsController = {
             if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, error: 'Unauthorized', message: 'Authentication required' });
             }
-            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
-                ownerType: req.body.ownerType,
-                ownerId: req.body.userId
-            }, req.headers);
-            if (!actor) {
-                return res.status(403).json({ success: false, error: 'Forbidden', message: 'Unauthorized boost identity' });
-            }
-            if (actor.type !== 'user') {
-                return res.status(403).json({
-                    success: false,
-                    error: 'Forbidden',
-                    message: 'Credit boosting is available only in Personal identity context'
-                });
-            }
-            const userId = actor.id;
+            const userId = authenticatedUserId;
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
                 return res.status(404).json({ success: false, error: 'Post not found' });

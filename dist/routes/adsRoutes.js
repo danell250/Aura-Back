@@ -39,6 +39,7 @@ router.post('/:id/click', authMiddleware_1.optionalAuth, adsController_1.adsCont
 router.post('/:id/engagement', authMiddleware_1.optionalAuth, adsController_1.adsController.trackEngagement);
 router.post('/:id/conversion', authMiddleware_1.optionalAuth, adsController_1.adsController.trackConversion);
 router.post('/:id/react', authMiddleware_1.requireAuth, adsController_1.adsController.reactToAd);
+router.post('/:id/boost', authMiddleware_1.requireAuth, adsController_1.adsController.boostAd);
 // Analytics for specific ad
 router.get('/:id/analytics', authMiddleware_1.requireAuth, adsController_1.adsController.getAdAnalytics);
 // General CRUD

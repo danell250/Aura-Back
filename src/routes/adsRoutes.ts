@@ -45,6 +45,7 @@ router.post('/:id/click', optionalAuth, adsController.trackClick);
 router.post('/:id/engagement', optionalAuth, adsController.trackEngagement);
 router.post('/:id/conversion', optionalAuth, adsController.trackConversion);
 router.post('/:id/react', requireAuth, adsController.reactToAd);
+router.post('/:id/boost', requireAuth, adsController.boostAd);
 
 // Analytics for specific ad
 router.get('/:id/analytics', requireAuth, adsController.getAdAnalytics);
