@@ -282,9 +282,17 @@ if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
 }
 
 // Session middleware
-const sessionSecret = process.env.SESSION_SECRET;
-if (!sessionSecret && process.env.NODE_ENV === 'production') {
+const configuredSessionSecret = (process.env.SESSION_SECRET || '').trim();
+const jwtSecretFallback = (process.env.JWT_SECRET || '').trim();
+const isProductionRuntime = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER;
+const sessionSecret = configuredSessionSecret || jwtSecretFallback;
+
+if (!sessionSecret && isProductionRuntime) {
   throw new Error('SESSION_SECRET is required in production');
+}
+
+if (!configuredSessionSecret && jwtSecretFallback && isProductionRuntime) {
+  console.warn('⚠️ SESSION_SECRET is not set. Falling back to JWT_SECRET for session signing.');
 }
 
 app.use(session({
