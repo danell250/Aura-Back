@@ -28,6 +28,13 @@ const broadcastPostViewUpdate = (payload) => {
         client.res.write(msg);
     }
 };
+const buildCompanyAuthorMatchExpr = () => ({
+    $or: [
+        { $eq: ['$author.type', 'company'] },
+        { $eq: ['$ownerType', 'company'] },
+        { $gt: [{ $size: '$authorCompanyDetails' }, 0] }
+    ]
+});
 const readHeaderString = (value) => {
     if (typeof value === 'string')
         return value;
@@ -448,24 +455,14 @@ exports.postsController = {
                     $addFields: {
                         authorDetails: {
                             $cond: {
-                                if: {
-                                    $or: [
-                                        { $eq: ['$author.type', 'company'] },
-                                        { $eq: ['$ownerType', 'company'] }
-                                    ]
-                                },
+                                if: buildCompanyAuthorMatchExpr(),
                                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
                                 else: { $arrayElemAt: ['$authorUserDetails', 0] }
                             },
                         },
                         authorType: {
                             $cond: {
-                                if: {
-                                    $or: [
-                                        { $eq: ['$author.type', 'company'] },
-                                        { $eq: ['$ownerType', 'company'] }
-                                    ]
-                                },
+                                if: buildCompanyAuthorMatchExpr(),
                                 then: 'company',
                                 else: 'user'
                             },
@@ -508,7 +505,7 @@ exports.postsController = {
     getAllPosts: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a, _b;
         try {
-            const { page = 1, limit = 20, userId, energy, hashtags, sort } = req.query;
+            const { page = 1, limit = 20, userId, energy, hashtags, sort, ownerType } = req.query;
             const db = (0, db_1.getDB)();
             const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
             const viewerActor = yield resolveViewerActor(req);
@@ -528,6 +525,32 @@ exports.postsController = {
             if (hashtags) {
                 const tags = Array.isArray(hashtags) ? hashtags : [hashtags];
                 query.hashtags = { $in: tags };
+            }
+            const normalizedOwnerType = ownerType === 'company' || ownerType === 'user'
+                ? ownerType
+                : undefined;
+            if (normalizedOwnerType === 'company') {
+                query.$and = [
+                    ...(Array.isArray(query.$and) ? query.$and : []),
+                    {
+                        $or: [
+                            { 'author.type': 'company' },
+                            { ownerType: 'company' }
+                        ]
+                    }
+                ];
+            }
+            else if (normalizedOwnerType === 'user') {
+                query.$and = [
+                    ...(Array.isArray(query.$and) ? query.$and : []),
+                    {
+                        $or: [
+                            { 'author.type': 'user' },
+                            { ownerType: 'user' },
+                            { 'author.type': { $exists: false }, ownerType: { $ne: 'company' } }
+                        ]
+                    }
+                ];
             }
             // Filter out locked Time Capsules (unless viewing own profile)
             const now = Date.now();
@@ -592,24 +615,14 @@ exports.postsController = {
                     $addFields: {
                         authorDetails: {
                             $cond: {
-                                if: {
-                                    $or: [
-                                        { $eq: ['$author.type', 'company'] },
-                                        { $eq: ['$ownerType', 'company'] }
-                                    ]
-                                },
+                                if: buildCompanyAuthorMatchExpr(),
                                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
                                 else: { $arrayElemAt: ['$authorUserDetails', 0] }
                             },
                         },
                         authorType: {
                             $cond: {
-                                if: {
-                                    $or: [
-                                        { $eq: ['$author.type', 'company'] },
-                                        { $eq: ['$ownerType', 'company'] }
-                                    ]
-                                },
+                                if: buildCompanyAuthorMatchExpr(),
                                 then: 'company',
                                 else: 'user'
                             },
@@ -735,24 +748,14 @@ exports.postsController = {
                     $addFields: {
                         authorDetails: {
                             $cond: {
-                                if: {
-                                    $or: [
-                                        { $eq: ['$author.type', 'company'] },
-                                        { $eq: ['$ownerType', 'company'] }
-                                    ]
-                                },
+                                if: buildCompanyAuthorMatchExpr(),
                                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
                                 else: { $arrayElemAt: ['$authorUserDetails', 0] }
                             },
                         },
                         authorType: {
                             $cond: {
-                                if: {
-                                    $or: [
-                                        { $eq: ['$author.type', 'company'] },
-                                        { $eq: ['$ownerType', 'company'] }
-                                    ]
-                                },
+                                if: buildCompanyAuthorMatchExpr(),
                                 then: 'company',
                                 else: 'user'
                             },
@@ -868,24 +871,14 @@ exports.postsController = {
                     $addFields: {
                         authorDetails: {
                             $cond: {
-                                if: {
-                                    $or: [
-                                        { $eq: ['$author.type', 'company'] },
-                                        { $eq: ['$ownerType', 'company'] }
-                                    ]
-                                },
+                                if: buildCompanyAuthorMatchExpr(),
                                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
                                 else: { $arrayElemAt: ['$authorUserDetails', 0] }
                             },
                         },
                         authorType: {
                             $cond: {
-                                if: {
-                                    $or: [
-                                        { $eq: ['$author.type', 'company'] },
-                                        { $eq: ['$ownerType', 'company'] }
-                                    ]
-                                },
+                                if: buildCompanyAuthorMatchExpr(),
                                 then: 'company',
                                 else: 'user'
                             },
@@ -1232,7 +1225,7 @@ exports.postsController = {
             // Use provided ID if available, otherwise generate one
             const postId = id || (isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`);
             const currentYear = new Date().getFullYear();
-            const newPost = Object.assign(Object.assign({ id: postId, author: authorEmbed, authorId: authorEmbed.id, ownerId: authorEmbed.id, content: safeContent, mediaUrl: finalMediaUrl || undefined, mediaType: finalMediaType || undefined, mediaKey: mediaKey || undefined, mediaMimeType: mediaMimeType || undefined, mediaSize: mediaSize || undefined, mediaItems: finalMediaItems || undefined, sharedFrom: req.body.sharedFrom || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), visibility: normalizedVisibility, reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
+            const newPost = Object.assign(Object.assign({ id: postId, author: authorEmbed, authorId: authorEmbed.id, ownerId: authorEmbed.id, ownerType: authorEmbed.type || authorType, content: safeContent, mediaUrl: finalMediaUrl || undefined, mediaType: finalMediaType || undefined, mediaKey: mediaKey || undefined, mediaMimeType: mediaMimeType || undefined, mediaSize: mediaSize || undefined, mediaItems: finalMediaItems || undefined, sharedFrom: req.body.sharedFrom || undefined, energy: energy || '🪐 Neutral', radiance: 0, timestamp: Date.now(), visibility: normalizedVisibility, reactions: {}, reactionUsers: {}, userReactions: [], comments: [], isBoosted: false, viewCount: 0, hashtags, taggedUserIds: tagList }, (isTimeCapsule && {
                 isTimeCapsule: true,
                 unlockDate: unlockDate || null,
                 isUnlocked: unlockDate ? Date.now() >= unlockDate : true,

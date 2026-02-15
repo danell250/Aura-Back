@@ -27,6 +27,14 @@ const broadcastPostViewUpdate = (payload: { postId: string; viewCount: number })
   }
 };
 
+const buildCompanyAuthorMatchExpr = () => ({
+  $or: [
+    { $eq: ['$author.type', 'company'] },
+    { $eq: ['$ownerType', 'company'] },
+    { $gt: [{ $size: '$authorCompanyDetails' }, 0] }
+  ]
+});
+
 interface ViewerAccessContext {
   actorType: 'anonymous' | 'user' | 'company';
   actorId?: string;
@@ -552,24 +560,14 @@ export const postsController = {
           $addFields: {
             authorDetails: {
               $cond: {
-                if: {
-                  $or: [
-                    { $eq: ['$author.type', 'company'] },
-                    { $eq: ['$ownerType', 'company'] }
-                  ]
-                },
+                if: buildCompanyAuthorMatchExpr(),
                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
                 else: { $arrayElemAt: ['$authorUserDetails', 0] }
               },
             },
             authorType: {
               $cond: {
-                if: {
-                  $or: [
-                    { $eq: ['$author.type', 'company'] },
-                    { $eq: ['$ownerType', 'company'] }
-                  ]
-                },
+                if: buildCompanyAuthorMatchExpr(),
                 then: 'company',
                 else: 'user'
               },
@@ -620,7 +618,7 @@ export const postsController = {
   // GET /api/posts - Get all posts (with filters & pagination)
   getAllPosts: async (req: Request, res: Response) => {
     try {
-      const { page = 1, limit = 20, userId, energy, hashtags, sort } = req.query as Record<string, any>;
+      const { page = 1, limit = 20, userId, energy, hashtags, sort, ownerType } = req.query as Record<string, any>;
       const db = getDB();
       const authenticatedUserId = (req as any).user?.id as string | undefined;
       const viewerActor = await resolveViewerActor(req);
@@ -639,6 +637,32 @@ export const postsController = {
       if (hashtags) {
         const tags = Array.isArray(hashtags) ? hashtags : [hashtags];
         query.hashtags = { $in: tags };
+      }
+
+      const normalizedOwnerType = ownerType === 'company' || ownerType === 'user'
+        ? ownerType
+        : undefined;
+      if (normalizedOwnerType === 'company') {
+        query.$and = [
+          ...(Array.isArray(query.$and) ? query.$and : []),
+          {
+            $or: [
+              { 'author.type': 'company' },
+              { ownerType: 'company' }
+            ]
+          }
+        ];
+      } else if (normalizedOwnerType === 'user') {
+        query.$and = [
+          ...(Array.isArray(query.$and) ? query.$and : []),
+          {
+            $or: [
+              { 'author.type': 'user' },
+              { ownerType: 'user' },
+              { 'author.type': { $exists: false }, ownerType: { $ne: 'company' } }
+            ]
+          }
+        ];
       }
 
       // Filter out locked Time Capsules (unless viewing own profile)
@@ -709,24 +733,14 @@ export const postsController = {
           $addFields: {
             authorDetails: {
               $cond: {
-                if: {
-                  $or: [
-                    { $eq: ['$author.type', 'company'] },
-                    { $eq: ['$ownerType', 'company'] }
-                  ]
-                },
+                if: buildCompanyAuthorMatchExpr(),
                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
                 else: { $arrayElemAt: ['$authorUserDetails', 0] }
               },
             },
             authorType: {
               $cond: {
-                if: {
-                  $or: [
-                    { $eq: ['$author.type', 'company'] },
-                    { $eq: ['$ownerType', 'company'] }
-                  ]
-                },
+                if: buildCompanyAuthorMatchExpr(),
                 then: 'company',
                 else: 'user'
               },
@@ -871,24 +885,14 @@ export const postsController = {
           $addFields: {
             authorDetails: {
               $cond: {
-                if: {
-                  $or: [
-                    { $eq: ['$author.type', 'company'] },
-                    { $eq: ['$ownerType', 'company'] }
-                  ]
-                },
+                if: buildCompanyAuthorMatchExpr(),
                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
                 else: { $arrayElemAt: ['$authorUserDetails', 0] }
               },
             },
             authorType: {
               $cond: {
-                if: {
-                  $or: [
-                    { $eq: ['$author.type', 'company'] },
-                    { $eq: ['$ownerType', 'company'] }
-                  ]
-                },
+                if: buildCompanyAuthorMatchExpr(),
                 then: 'company',
                 else: 'user'
               },
@@ -1019,24 +1023,14 @@ export const postsController = {
           $addFields: {
             authorDetails: {
               $cond: {
-                if: {
-                  $or: [
-                    { $eq: ['$author.type', 'company'] },
-                    { $eq: ['$ownerType', 'company'] }
-                  ]
-                },
+                if: buildCompanyAuthorMatchExpr(),
                 then: { $arrayElemAt: ['$authorCompanyDetails', 0] },
                 else: { $arrayElemAt: ['$authorUserDetails', 0] }
               },
             },
             authorType: {
               $cond: {
-                if: {
-                  $or: [
-                    { $eq: ['$author.type', 'company'] },
-                    { $eq: ['$ownerType', 'company'] }
-                  ]
-                },
+                if: buildCompanyAuthorMatchExpr(),
                 then: 'company',
                 else: 'user'
               },
@@ -1469,6 +1463,7 @@ export const postsController = {
         author: authorEmbed,
         authorId: authorEmbed.id,
         ownerId: authorEmbed.id,
+        ownerType: authorEmbed.type || authorType,
         content: safeContent,
         mediaUrl: finalMediaUrl || undefined,
         mediaType: finalMediaType || undefined,
