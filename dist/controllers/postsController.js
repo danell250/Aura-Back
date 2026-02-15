@@ -513,7 +513,17 @@ exports.postsController = {
         const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
         postSseClients.push({ id, res });
         res.write(`event: hello\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+        // Keep the stream active through intermediaries (Render/HTTP3/QUIC) to reduce idle disconnects.
+        const heartbeat = setInterval(() => {
+            try {
+                res.write(`: keep-alive ${Date.now()}\n\n`);
+            }
+            catch (_a) {
+                clearInterval(heartbeat);
+            }
+        }, 15000);
         req.on('close', () => {
+            clearInterval(heartbeat);
             const index = postSseClients.findIndex(client => client.id === id);
             if (index !== -1) {
                 postSseClients.splice(index, 1);

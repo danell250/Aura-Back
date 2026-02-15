@@ -4,6 +4,34 @@ import { requireAdmin, requireAuth } from '../middleware/authMiddleware';
 
 const router = Router();
 const REPORT_STATUS_VALUES = new Set(['open', 'in_review', 'resolved', 'dismissed']);
+const OWNER_CONTROL_TOKEN_ENV_KEYS = ['OWNER_CONTROL_TOKEN', 'OWNER_CONTROL_ACCESS_TOKEN'] as const;
+
+const readOwnerControlToken = (req: Request): string => {
+  const headerValue = req.headers['x-owner-control-token'];
+  if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
+    return headerValue.trim();
+  }
+  if (Array.isArray(headerValue) && typeof headerValue[0] === 'string' && headerValue[0].trim().length > 0) {
+    return headerValue[0].trim();
+  }
+  const pathToken = (req.params as Record<string, unknown>)?.accessToken;
+  if (typeof pathToken === 'string' && pathToken.trim().length > 0) {
+    return pathToken.trim();
+  }
+  const firstPathSegment = req.path.split('/').filter(Boolean)[0];
+  if (typeof firstPathSegment === 'string' && firstPathSegment.startsWith('oc_')) {
+    return firstPathSegment.trim();
+  }
+  return '';
+};
+
+const isOwnerControlTokenValid = (token: string): boolean => {
+  if (!token) return false;
+  return OWNER_CONTROL_TOKEN_ENV_KEYS.some((envKey) => {
+    const configured = process.env[envKey];
+    return typeof configured === 'string' && configured.trim().length > 0 && configured.trim() === token;
+  });
+};
 
 const readIsoTimestamp = (value: unknown): string => {
   if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
@@ -39,9 +67,15 @@ const normalizeReportType = (report: any): 'post' | 'user' => {
 const isSuspendedMessage = (reason?: string) =>
   reason ? `Account suspended: ${reason}` : 'Account suspended. Contact support for assistance.';
 
-router.use(requireAuth, requireAdmin);
+router.use((req: Request, res: Response, next) => {
+  const suppliedToken = readOwnerControlToken(req);
+  if (isOwnerControlTokenValid(suppliedToken)) {
+    return next();
+  }
+  return requireAuth(req, res, () => requireAdmin(req, res, next));
+});
 
-router.get('/overview', async (_req: Request, res: Response) => {
+const getOverview = async (_req: Request, res: Response) => {
   try {
     const db = getDB();
     const now = Date.now();
@@ -330,9 +364,12 @@ router.get('/overview', async (_req: Request, res: Response) => {
       error: 'Failed to load control panel overview'
     });
   }
-});
+};
 
-router.patch('/reports/:reportId', async (req: Request, res: Response) => {
+router.get('/overview', getOverview);
+router.get('/:accessToken/overview', getOverview);
+
+const patchReportStatus = async (req: Request, res: Response) => {
   try {
     const { reportId } = req.params;
     const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
@@ -380,9 +417,12 @@ router.patch('/reports/:reportId', async (req: Request, res: Response) => {
       error: 'Failed to update report'
     });
   }
-});
+};
 
-router.post('/users/:userId/suspend', async (req: Request, res: Response) => {
+router.patch('/reports/:reportId', patchReportStatus);
+router.patch('/:accessToken/reports/:reportId', patchReportStatus);
+
+const setUserSuspension = async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const suspended = req.body?.suspended !== false;
@@ -424,9 +464,12 @@ router.post('/users/:userId/suspend', async (req: Request, res: Response) => {
       error: 'Failed to update suspension state'
     });
   }
-});
+};
 
-router.post('/posts/:postId/hide', async (req: Request, res: Response) => {
+router.post('/users/:userId/suspend', setUserSuspension);
+router.post('/:accessToken/users/:userId/suspend', setUserSuspension);
+
+const setPostHiddenState = async (req: Request, res: Response) => {
   try {
     const { postId } = req.params;
     const hidden = req.body?.hidden !== false;
@@ -498,6 +541,9 @@ router.post('/posts/:postId/hide', async (req: Request, res: Response) => {
       error: 'Failed to update post moderation state'
     });
   }
-});
+};
+
+router.post('/posts/:postId/hide', setPostHiddenState);
+router.post('/:accessToken/posts/:postId/hide', setPostHiddenState);
 
 export default router;

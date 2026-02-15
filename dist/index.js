@@ -226,6 +226,8 @@ const corsOptions = {
         "X-Requested-With",
         "Accept",
         "Origin",
+        "x-owner-control-token",
+        "X-Owner-Control-Token",
         "x-identity-type",
         "x-identity-id",
         "X-Identity-Type",
