@@ -1,22 +1,8 @@
-import { NextFunction, Request, Response, Router } from 'express';
-import crypto from 'crypto';
-import jwt from 'jsonwebtoken';
+import { Request, Response, Router } from 'express';
 import { getDB } from '../db';
-import { optionalAuth } from '../middleware/authMiddleware';
+import { requireAdmin, requireAuth } from '../middleware/authMiddleware';
 
 const router = Router();
-
-const OWNER_EMAIL = (process.env.OWNER_CONTROL_EMAIL || 'danelloosthuizen3@gmail.com').trim().toLowerCase();
-const OWNER_CONTROL_KEY = (process.env.OWNER_CONTROL_KEY || 'oc_8d7a4b1e5c9f2d3').trim();
-const OWNER_CONTROL_KEY_FALLBACK = 'oc_8d7a4b1e5c9f2d3';
-const OWNER_CONTROL_USERNAME = (process.env.OWNER_CONTROL_USERNAME || 'danelloosthuizen3').trim();
-const OWNER_CONTROL_PASSWORD = (process.env.OWNER_CONTROL_PASSWORD || 'AuraOwner!2026').trim();
-const OWNER_CONTROL_JWT_SECRET = (
-  process.env.OWNER_CONTROL_JWT_SECRET ||
-  process.env.JWT_SECRET ||
-  'aura-owner-control-secret'
-).trim();
-const OWNER_CONTROL_TOKEN_TTL = '12h';
 const REPORT_STATUS_VALUES = new Set(['open', 'in_review', 'resolved', 'dismissed']);
 
 const readIsoTimestamp = (value: unknown): string => {
@@ -53,113 +39,9 @@ const normalizeReportType = (report: any): 'post' | 'user' => {
 const isSuspendedMessage = (reason?: string) =>
   reason ? `Account suspended: ${reason}` : 'Account suspended. Contact support for assistance.';
 
-const timingSafeEquals = (a: string, b: string): boolean => {
-  const aBuffer = Buffer.from(a);
-  const bBuffer = Buffer.from(b);
-  if (aBuffer.length !== bBuffer.length) return false;
-  return crypto.timingSafeEqual(aBuffer, bBuffer);
-};
+router.use(requireAuth, requireAdmin);
 
-const parseOwnerControlToken = (req: Request): string | null => {
-  const tokenHeader = req.headers['x-owner-control-token'];
-  if (typeof tokenHeader === 'string' && tokenHeader.trim().length > 0) return tokenHeader.trim();
-  if (Array.isArray(tokenHeader) && tokenHeader.length > 0 && tokenHeader[0].trim().length > 0) {
-    return tokenHeader[0].trim();
-  }
-  return null;
-};
-
-const verifyOwnerControlToken = (token: string): boolean => {
-  try {
-    const decoded = jwt.verify(token, OWNER_CONTROL_JWT_SECRET, {
-      algorithms: ['HS256'],
-      issuer: 'aura-owner-control',
-      audience: 'aura-owner-control'
-    }) as any;
-
-    return decoded?.scope === 'owner-control' && decoded?.username === OWNER_CONTROL_USERNAME;
-  } catch {
-    return false;
-  }
-};
-
-router.post('/auth/login', async (req: Request, res: Response) => {
-  try {
-    const username = (req.body?.username || '').toString().trim();
-    const password = (req.body?.password || '').toString();
-
-    const usernameOk = username.length > 0 && timingSafeEquals(username, OWNER_CONTROL_USERNAME);
-    const passwordOk = password.length > 0 && timingSafeEquals(password, OWNER_CONTROL_PASSWORD);
-
-    if (!usernameOk || !passwordOk) {
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid credentials',
-        message: 'Owner control login failed'
-      });
-    }
-
-    const token = jwt.sign(
-      {
-        scope: 'owner-control',
-        username: OWNER_CONTROL_USERNAME
-      },
-      OWNER_CONTROL_JWT_SECRET,
-      {
-        algorithm: 'HS256',
-        expiresIn: OWNER_CONTROL_TOKEN_TTL,
-        issuer: 'aura-owner-control',
-        audience: 'aura-owner-control'
-      }
-    );
-
-    return res.json({
-      success: true,
-      data: {
-        token,
-        username: OWNER_CONTROL_USERNAME,
-        expiresIn: OWNER_CONTROL_TOKEN_TTL
-      }
-    });
-  } catch (error) {
-    console.error('Error in owner control login:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to login'
-    });
-  }
-});
-
-const requireOwnerControlAccess = (req: Request, res: Response, next: NextFunction) => {
-  const suppliedKey = (req.params.accessKey || '').trim();
-  const allowedKeys = new Set([OWNER_CONTROL_KEY, OWNER_CONTROL_KEY_FALLBACK].filter(Boolean));
-
-  if (!allowedKeys.has(suppliedKey)) {
-    return res.status(404).json({
-      success: false,
-      error: 'Not found'
-    });
-  }
-
-  const actor = (req as any).user;
-  const actorEmail = typeof actor?.email === 'string' ? actor.email.trim().toLowerCase() : '';
-  if (actor?.id && actorEmail === OWNER_EMAIL) {
-    return next();
-  }
-
-  const ownerControlToken = parseOwnerControlToken(req);
-  if (ownerControlToken && verifyOwnerControlToken(ownerControlToken)) {
-    return next();
-  }
-
-  return res.status(401).json({
-    success: false,
-    error: 'Authentication required',
-    message: 'Owner control login required'
-  });
-};
-
-router.get('/:accessKey/overview', optionalAuth, requireOwnerControlAccess, async (_req: Request, res: Response) => {
+router.get('/overview', async (_req: Request, res: Response) => {
   try {
     const db = getDB();
     const now = Date.now();
@@ -450,7 +332,7 @@ router.get('/:accessKey/overview', optionalAuth, requireOwnerControlAccess, asyn
   }
 });
 
-router.patch('/:accessKey/reports/:reportId', optionalAuth, requireOwnerControlAccess, async (req: Request, res: Response) => {
+router.patch('/reports/:reportId', async (req: Request, res: Response) => {
   try {
     const { reportId } = req.params;
     const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
@@ -472,8 +354,8 @@ router.patch('/:accessKey/reports/:reportId', optionalAuth, requireOwnerControlA
         $set: {
           status,
           adminNotes,
-          reviewedBy: reviewer?.id || 'owner-control-token',
-          reviewedByEmail: reviewer?.email || OWNER_EMAIL,
+          reviewedBy: reviewer?.id || 'admin',
+          reviewedByEmail: reviewer?.email || '',
           updatedAt: now
         }
       }
@@ -500,7 +382,7 @@ router.patch('/:accessKey/reports/:reportId', optionalAuth, requireOwnerControlA
   }
 });
 
-router.post('/:accessKey/users/:userId/suspend', optionalAuth, requireOwnerControlAccess, async (req: Request, res: Response) => {
+router.post('/users/:userId/suspend', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const suspended = req.body?.suspended !== false;
@@ -544,7 +426,7 @@ router.post('/:accessKey/users/:userId/suspend', optionalAuth, requireOwnerContr
   }
 });
 
-router.post('/:accessKey/posts/:postId/hide', optionalAuth, requireOwnerControlAccess, async (req: Request, res: Response) => {
+router.post('/posts/:postId/hide', async (req: Request, res: Response) => {
   try {
     const { postId } = req.params;
     const hidden = req.body?.hidden !== false;

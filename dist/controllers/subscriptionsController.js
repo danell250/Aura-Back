@@ -88,30 +88,24 @@ exports.subscriptionsController = {
             var _a;
             try {
                 const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-                const { userId, planId, planName, paypalSubscriptionId, amount } = req.body;
                 if (!authenticatedUserId) {
                     return res.status(401).json({ error: 'Authentication required' });
                 }
-                if (typeof userId === 'string' && userId && userId !== authenticatedUserId) {
-                    return res.status(403).json({ error: 'Forbidden', message: 'Invalid user context for subscription creation' });
-                }
-                if (!planId || !planName || !paypalSubscriptionId || !amount) {
-                    return res.status(400).json({ error: 'Missing required fields' });
-                }
-                const db = (0, db_1.getDB)();
-                const subscription = {
-                    id: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                // Hard-disabled for production safety: this legacy flow trusted client-supplied
+                // pricing and payment identifiers. Active paid plans must use /api/ad-subscriptions.
+                (0, securityLogger_1.logSecurityEvent)({
+                    req,
+                    type: 'payment_failure',
                     userId: authenticatedUserId,
-                    planId,
-                    planName,
-                    status: 'active',
-                    paypalSubscriptionId,
-                    nextBillingDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days from now
-                    amount,
-                    createdDate: new Date().toISOString()
-                };
-                yield db.collection('subscriptions').insertOne(subscription);
-                res.status(201).json(subscription);
+                    metadata: {
+                        source: 'subscriptions_legacy',
+                        reason: 'legacy_flow_disabled'
+                    }
+                });
+                return res.status(410).json({
+                    error: 'Legacy endpoint disabled',
+                    message: 'Use /api/ad-subscriptions for verified subscription purchases.'
+                });
             }
             catch (error) {
                 console.error('Error creating subscription:', error);

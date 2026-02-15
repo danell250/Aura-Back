@@ -229,9 +229,7 @@ const corsOptions = {
         "x-identity-type",
         "x-identity-id",
         "X-Identity-Type",
-        "X-Identity-Id",
-        "x-owner-control-token",
-        "X-Owner-Control-Token"
+        "X-Identity-Id"
     ],
     exposedHeaders: ["Set-Cookie"],
     optionsSuccessStatus: 204
@@ -311,8 +309,12 @@ else {
     console.warn('⚠️ GitHub OAuth environment variables not found. GitHub login will not be available.');
 }
 // Session middleware
+const sessionSecret = process.env.SESSION_SECRET;
+if (!sessionSecret && process.env.NODE_ENV === 'production') {
+    throw new Error('SESSION_SECRET is required in production');
+}
 app.use((0, express_session_1.default)({
-    secret: process.env.SESSION_SECRET || 'fallback_secret_for_development',
+    secret: sessionSecret || 'fallback_secret_for_development',
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -344,11 +346,13 @@ app.use((req, res, next) => {
 });
 // Pre-flight handling is managed by CORS middleware above
 app.use((0, cookie_parser_1.default)());
-// Debug middleware to log all requests
-app.use((req, res, next) => {
-    console.log(`🔍 Request: ${req.method} ${req.path} - ${new Date().toISOString()}`);
-    next();
-});
+// Debug middleware to log all requests in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+        console.log(`🔍 Request: ${req.method} ${req.path} - ${new Date().toISOString()}`);
+        next();
+    });
+}
 // Serve uploaded files statically
 app.use('/uploads', express_1.default.static(uploadsDir));
 // Routes

@@ -358,7 +358,7 @@ export const adSubscriptionsController = {
 
           const subscription = subscriptionResponse.data;
           const subscriptionStatus = typeof subscription?.status === 'string' ? subscription.status : '';
-          const allowedStatuses = new Set(['ACTIVE', 'APPROVAL_PENDING']);
+          const allowedStatuses = new Set(['ACTIVE']);
           if (!allowedStatuses.has(subscriptionStatus)) {
             return res.status(400).json({
               success: false,
@@ -503,8 +503,10 @@ export const adSubscriptionsController = {
         updatedAt: now
       };
 
+      let subscriptionInserted = false;
       try {
         await db.collection(AD_SUBSCRIPTIONS_COLLECTION).insertOne(newSubscription);
+        subscriptionInserted = true;
       } catch (insertError: any) {
         if (insertError && insertError.code === 11000) {
           return res.status(409).json({
@@ -545,6 +547,17 @@ export const adSubscriptionsController = {
           createdAt: now
         });
       } catch (txInsertError: any) {
+        if (subscriptionInserted) {
+          try {
+            await db.collection(AD_SUBSCRIPTIONS_COLLECTION).deleteOne({
+              id: newSubscription.id,
+              paymentReferenceKey
+            });
+          } catch (rollbackError) {
+            console.error('[AdSubscriptions] Failed to roll back orphaned subscription:', rollbackError);
+          }
+        }
+
         if (txInsertError && txInsertError.code === 11000) {
           return res.status(409).json({
             success: false,
@@ -653,23 +666,59 @@ export const adSubscriptionsController = {
         });
       }
 
-      // Increment ads used
-      const result = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
-        { id, ownerId: owner.ownerId, ownerType: owner.ownerType },
+      const now = Date.now();
+
+      // Atomically consume one ad slot so concurrent requests cannot exceed plan limits.
+      const updatedResult: any = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOneAndUpdate(
+        {
+          id,
+          ownerId: owner.ownerId,
+          ownerType: owner.ownerType,
+          status: 'active',
+          adsUsed: { $lt: subscription.adLimit },
+          $or: [
+            { endDate: { $exists: false } },
+            { endDate: { $gt: now } }
+          ]
+        },
         {
           $inc: { adsUsed: 1 },
-          $set: { updatedAt: Date.now() }
-        }
+          $set: { updatedAt: now }
+        },
+        { returnDocument: 'after' }
       );
 
-      if (result.matchedCount === 0) {
-        return res.status(404).json({
+      const updatedSubscription = updatedResult && typeof updatedResult === 'object' && 'value' in updatedResult
+        ? updatedResult.value
+        : updatedResult;
+
+      if (!updatedSubscription) {
+        const latest = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
+        if (!latest) {
+          return res.status(404).json({
+            success: false,
+            error: 'Subscription not found'
+          });
+        }
+        if (latest.status !== 'active') {
+          return res.status(400).json({
+            success: false,
+            error: 'Subscription is not active',
+            message: 'This subscription is not currently active.'
+          });
+        }
+        if (latest.endDate && Date.now() > latest.endDate) {
+          return res.status(400).json({
+            success: false,
+            error: 'Subscription has expired'
+          });
+        }
+        return res.status(400).json({
           success: false,
-          error: 'Subscription not found'
+          error: 'Ad limit reached for this subscription',
+          message: 'You have reached the maximum number of ads allowed for this subscription.'
         });
       }
-
-      const updatedSubscription = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
 
       res.json({
         success: true,

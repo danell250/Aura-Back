@@ -6,6 +6,123 @@ import { AD_PLANS } from '../constants/adPlans';
 import { ensureCurrentPeriod } from './adSubscriptionsController';
 import crypto from 'crypto';
 
+const AD_UPDATE_ALLOWLIST = new Set<string>([
+  'headline',
+  'description',
+  'mediaUrl',
+  'mediaType',
+  'ctaText',
+  'ctaLink',
+  'placement',
+  'expiryDate'
+]);
+
+const AD_ALLOWED_PLACEMENTS = new Set<string>(['feed', 'left', 'right', 'sidebar', 'story', 'search']);
+
+const sanitizeAdUpdates = (incoming: unknown): Record<string, unknown> => {
+  if (!incoming || typeof incoming !== 'object') return {};
+  const candidate = incoming as Record<string, unknown>;
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(candidate)) {
+    if (!AD_UPDATE_ALLOWLIST.has(key)) continue;
+    sanitized[key] = value;
+  }
+
+  if (typeof sanitized.headline === 'string') {
+    sanitized.headline = sanitized.headline.trim().slice(0, 180);
+  } else {
+    delete sanitized.headline;
+  }
+
+  if (typeof sanitized.description === 'string') {
+    sanitized.description = sanitized.description.trim().slice(0, 3000);
+  } else {
+    delete sanitized.description;
+  }
+
+  if (typeof sanitized.mediaUrl === 'string') {
+    sanitized.mediaUrl = sanitized.mediaUrl.trim();
+  } else {
+    delete sanitized.mediaUrl;
+  }
+
+  if (typeof sanitized.mediaType === 'string') {
+    const mediaType = sanitized.mediaType.trim().toLowerCase();
+    if (mediaType === 'image' || mediaType === 'video') {
+      sanitized.mediaType = mediaType;
+    } else {
+      delete sanitized.mediaType;
+    }
+  } else {
+    delete sanitized.mediaType;
+  }
+
+  if (typeof sanitized.ctaText === 'string') {
+    sanitized.ctaText = sanitized.ctaText.trim().slice(0, 80);
+  } else {
+    delete sanitized.ctaText;
+  }
+
+  if (typeof sanitized.ctaLink === 'string') {
+    sanitized.ctaLink = sanitized.ctaLink.trim().slice(0, 500);
+  } else {
+    delete sanitized.ctaLink;
+  }
+
+  if (typeof sanitized.placement === 'string') {
+    const placement = sanitized.placement.trim().toLowerCase();
+    if (AD_ALLOWED_PLACEMENTS.has(placement)) {
+      sanitized.placement = placement;
+    } else {
+      delete sanitized.placement;
+    }
+  } else {
+    delete sanitized.placement;
+  }
+
+  if (sanitized.expiryDate !== undefined) {
+    const parsedExpiry = Number(sanitized.expiryDate);
+    if (Number.isFinite(parsedExpiry) && parsedExpiry > 0) {
+      sanitized.expiryDate = parsedExpiry;
+    } else {
+      delete sanitized.expiryDate;
+    }
+  }
+
+  return sanitized;
+};
+
+const sanitizeAdCreatePayload = (incoming: unknown): Record<string, unknown> => {
+  const sanitized = sanitizeAdUpdates(incoming);
+
+  if (!sanitized.headline || typeof sanitized.headline !== 'string') {
+    return {};
+  }
+
+  if (!sanitized.description || typeof sanitized.description !== 'string') {
+    return {};
+  }
+
+  if (typeof sanitized.mediaUrl !== 'string') {
+    delete sanitized.mediaUrl;
+  }
+  if (typeof sanitized.mediaType !== 'string') {
+    delete sanitized.mediaType;
+  }
+  if (typeof sanitized.ctaText !== 'string') {
+    sanitized.ctaText = 'Learn More';
+  }
+  if (typeof sanitized.ctaLink !== 'string') {
+    sanitized.ctaLink = '';
+  }
+  if (typeof sanitized.placement !== 'string') {
+    sanitized.placement = 'feed';
+  }
+
+  return sanitized;
+};
+
 function dateKeyUTC(ts = Date.now()) {
   return new Date(ts).toISOString().slice(0, 10); // YYYY-MM-DD
 }
@@ -332,27 +449,31 @@ export const adsController = {
     try {
       const db = getDB();
       const currentUser = (req as any).user;
-      const adData = req.body;
+      const adData = sanitizeAdCreatePayload(req.body);
       
       if (!currentUser || !currentUser.id) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
       }
 
       const userId = currentUser.id;
-      const ownerId = adData.ownerId || userId;
-      const ownerType = adData.ownerType || 'user';
+      const requestedOwnerId = typeof (req.body as any)?.ownerId === 'string'
+        ? (req.body as any).ownerId
+        : userId;
+      const requestedOwnerType = typeof (req.body as any)?.ownerType === 'string'
+        ? (req.body as any).ownerType
+        : 'user';
 
       // Ensure required fields
-      if (!adData.headline) {
+      if (!adData.headline || !adData.description) {
         return res.status(400).json({ 
           success: false, 
           error: 'Missing required fields',
-          message: 'Ad headline is required to create an ad.'
+          message: 'Ad headline and description are required to create an ad.'
         });
       }
 
       // Resolve effective actor identity
-      const actor = await resolveIdentityActor(userId, { ownerType, ownerId });
+      const actor = await resolveIdentityActor(userId, { ownerType: requestedOwnerType, ownerId: requestedOwnerId });
 
       if (!actor) {
         return res.status(403).json({
@@ -496,16 +617,43 @@ export const adsController = {
       reservedSubscriptionId = subscription.id;
       subscription = reservedDoc;
 
+      const ownerCollection = effectiveOwnerType === 'company' ? 'companies' : 'users';
+      const ownerRecord = await db.collection(ownerCollection).findOne({ id: effectiveOwnerId });
+      const ownerName = typeof ownerRecord?.name === 'string' && ownerRecord.name.trim()
+        ? ownerRecord.name.trim()
+        : (currentUser.name || 'Aura Social');
+      const ownerAvatar = typeof ownerRecord?.avatar === 'string' && ownerRecord.avatar.trim()
+        ? ownerRecord.avatar.trim()
+        : (currentUser.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(ownerName)}`);
+      const ownerAvatarType = ownerRecord?.avatarType === 'video' ? 'video' : 'image';
+      const ownerEmail = typeof ownerRecord?.email === 'string' ? ownerRecord.email : undefined;
+      const ownerActiveGlow = typeof ownerRecord?.activeGlow === 'string'
+        ? ownerRecord.activeGlow
+        : (currentUser.activeGlow || 'none');
+
       const newAd = {
-        ...adData,
+        headline: adData.headline as string,
+        description: adData.description as string,
+        mediaUrl: typeof adData.mediaUrl === 'string' ? adData.mediaUrl : '',
+        mediaType: adData.mediaType === 'video' ? 'video' : 'image',
+        ctaText: adData.ctaText as string,
+        ctaLink: adData.ctaLink as string,
+        placement: adData.placement as string,
+        expiryDate: adData.expiryDate as number | undefined,
         ownerId: effectiveOwnerId,
         ownerType: effectiveOwnerType,
-        ownerActiveGlow: currentUser.activeGlow, // Enforce from trusted user object
-        id: adData.id || `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        ownerName,
+        ownerAvatar,
+        ownerAvatarType,
+        ownerEmail,
+        ownerActiveGlow, // Enforce from trusted identity profile object
+        isSponsored: true,
+        status: 'active',
+        id: `ad-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         timestamp: Date.now(),
         reactions: {},
         reactionUsers: {},
-        hashtags: getHashtagsFromText(adData.description || '')
+        hashtags: getHashtagsFromText((adData.description as string) || '')
       };
 
       try {
@@ -649,28 +797,35 @@ export const adsController = {
       const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
       const creditsToSpend = typeof parsedCredits === 'number' && parsedCredits > 0 ? Math.round(parsedCredits) : 50;
 
-      const user = await db.collection('users').findOne({ id: authenticatedUserId });
-      if (!user) {
-        return res.status(404).json({ success: false, error: 'User not found' });
-      }
-
-      const currentCredits = Number(user.auraCredits || 0);
-      if (currentCredits < creditsToSpend) {
-        return res.status(400).json({ success: false, error: 'Insufficient credits' });
-      }
-
-      const newCredits = currentCredits - creditsToSpend;
-      const creditUpdateResult = await db.collection('users').updateOne(
-        { id: authenticatedUserId },
+      const creditUpdateResult: any = await db.collection('users').findOneAndUpdate(
+        { id: authenticatedUserId, auraCredits: { $gte: creditsToSpend } },
         {
-          $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() },
-          $inc: { auraCreditsSpent: creditsToSpend }
+          $inc: { auraCredits: -creditsToSpend, auraCreditsSpent: creditsToSpend },
+          $set: { updatedAt: new Date().toISOString() }
+        },
+        {
+          returnDocument: 'before',
+          projection: { auraCredits: 1 }
         }
       );
 
-      if (!creditUpdateResult.matchedCount || !creditUpdateResult.modifiedCount) {
-        return res.status(500).json({ success: false, error: 'Failed to update user credits' });
+      const userBeforeDebit = creditUpdateResult && typeof creditUpdateResult === 'object' && 'value' in creditUpdateResult
+        ? creditUpdateResult.value
+        : creditUpdateResult;
+
+      if (!userBeforeDebit) {
+        const existingUser = await db.collection('users').findOne(
+          { id: authenticatedUserId },
+          { projection: { auraCredits: 1 } }
+        );
+        if (!existingUser) {
+          return res.status(404).json({ success: false, error: 'User not found' });
+        }
+        return res.status(400).json({ success: false, error: 'Insufficient credits' });
       }
+
+      const currentCredits = Number(userBeforeDebit.auraCredits || 0);
+      const newCredits = currentCredits - creditsToSpend;
 
       const now = Date.now();
       const boostedUntil = now + (72 * 60 * 60 * 1000);
@@ -705,8 +860,8 @@ export const adsController = {
           await db.collection('users').updateOne(
             { id: authenticatedUserId },
             {
-              $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() },
-              $inc: { auraCreditsSpent: -creditsToSpend }
+              $inc: { auraCredits: creditsToSpend, auraCreditsSpent: -creditsToSpend },
+              $set: { updatedAt: new Date().toISOString() }
             }
           );
           return res.status(500).json({ success: false, error: 'Failed to boost ad' });
@@ -723,8 +878,8 @@ export const adsController = {
         await db.collection('users').updateOne(
           { id: authenticatedUserId },
           {
-            $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() },
-            $inc: { auraCreditsSpent: -creditsToSpend }
+            $inc: { auraCredits: creditsToSpend, auraCreditsSpent: -creditsToSpend },
+            $set: { updatedAt: new Date().toISOString() }
           }
         );
         throw boostError;
@@ -757,14 +912,16 @@ export const adsController = {
   updateAd: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const updates = req.body;
+      const updates = sanitizeAdUpdates(req.body);
       const db = getDB();
-      
-      // Don't allow updating id or ownerId
-      delete updates.id;
-      delete updates.ownerId;
-      // Don't allow updating status via updateAd (must use updateAdStatus)
-      delete updates.status;
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'No valid fields to update',
+          message: 'No mutable ad fields were provided.'
+        });
+      }
 
       if (typeof updates.description === 'string') {
         updates.hashtags = getHashtagsFromText(updates.description || '');
@@ -795,7 +952,7 @@ export const adsController = {
 
       const result = await db.collection('ads').findOneAndUpdate(
         { id },
-        { $set: updates },
+        { $set: { ...updates, updatedAt: new Date().toISOString() } },
         { returnDocument: 'after' }
       );
       

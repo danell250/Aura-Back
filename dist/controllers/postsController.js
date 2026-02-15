@@ -19,6 +19,53 @@ const identityUtils_1 = require("../utils/identityUtils");
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
+const POST_UPDATE_ALLOWLIST = new Set([
+    'content',
+    'energy',
+    'visibility',
+    'timeCapsuleTitle'
+]);
+const sanitizePostUpdates = (incoming) => {
+    if (!incoming || typeof incoming !== 'object')
+        return {};
+    const candidate = incoming;
+    const sanitized = {};
+    for (const [key, value] of Object.entries(candidate)) {
+        if (!POST_UPDATE_ALLOWLIST.has(key))
+            continue;
+        sanitized[key] = value;
+    }
+    if (typeof sanitized.content === 'string') {
+        const content = sanitized.content.trim();
+        if (content.length === 0 || content.length > 12000) {
+            delete sanitized.content;
+        }
+        else {
+            sanitized.content = content;
+        }
+    }
+    else {
+        delete sanitized.content;
+    }
+    if (typeof sanitized.energy === 'string') {
+        const energy = sanitized.energy.trim();
+        sanitized.energy = energy ? energy.slice(0, 120) : '🪐 NEUTRAL';
+    }
+    else {
+        delete sanitized.energy;
+    }
+    if (typeof sanitized.visibility !== 'string') {
+        delete sanitized.visibility;
+    }
+    if (typeof sanitized.timeCapsuleTitle === 'string') {
+        const title = sanitized.timeCapsuleTitle.trim();
+        sanitized.timeCapsuleTitle = title.slice(0, 220);
+    }
+    else {
+        delete sanitized.timeCapsuleTitle;
+    }
+    return sanitized;
+};
 const postSseClients = [];
 const broadcastPostViewUpdate = (payload) => {
     if (!postSseClients.length)
@@ -1452,7 +1499,7 @@ exports.postsController = {
         var _a, _b, _c;
         try {
             const { id } = req.params;
-            const updates = req.body || {};
+            const updates = sanitizePostUpdates(req.body);
             const db = (0, db_1.getDB)();
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
@@ -1470,10 +1517,13 @@ exports.postsController = {
             if (!actor || actor.id !== post.author.id) {
                 return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can update this post' });
             }
-            // Prevent changing immutable fields
-            delete updates.id;
-            delete updates.author;
-            delete updates.timestamp;
+            if (Object.keys(updates).length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'No valid fields to update',
+                    message: 'No mutable post fields were provided.'
+                });
+            }
             if (typeof updates.content === 'string') {
                 updates.hashtags = (0, hashtagUtils_1.getHashtagsFromText)(updates.content);
             }
@@ -1636,38 +1686,35 @@ exports.postsController = {
             }
             const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
             const creditsToSpend = typeof parsedCredits === 'number' && parsedCredits > 0 ? parsedCredits : 100;
-            // Fetch user and ensure enough credits
-            const user = yield db.collection(USERS_COLLECTION).findOne({ id: userId });
-            if (!user) {
-                return res.status(404).json({ success: false, error: 'User not found' });
-            }
-            const currentCredits = Number(user.auraCredits || 0);
-            if (currentCredits < creditsToSpend) {
+            const creditUpdateResult = yield db.collection(USERS_COLLECTION).findOneAndUpdate({ id: userId, auraCredits: { $gte: creditsToSpend } }, {
+                $inc: { auraCredits: -creditsToSpend, auraCreditsSpent: creditsToSpend },
+                $set: { updatedAt: new Date().toISOString() }
+            }, {
+                returnDocument: 'before',
+                projection: { auraCredits: 1 }
+            });
+            const userBeforeDebit = creditUpdateResult && typeof creditUpdateResult === 'object' && 'value' in creditUpdateResult
+                ? creditUpdateResult.value
+                : creditUpdateResult;
+            if (!userBeforeDebit) {
+                const existingUser = yield db.collection(USERS_COLLECTION).findOne({ id: userId }, { projection: { auraCredits: 1 } });
+                if (!existingUser) {
+                    return res.status(404).json({ success: false, error: 'User not found' });
+                }
                 return res.status(400).json({ success: false, error: 'Insufficient credits' });
             }
+            const currentCredits = Number(userBeforeDebit.auraCredits || 0);
             const newCredits = currentCredits - creditsToSpend;
-            const creditUpdateResult = yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, {
-                $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() },
-                $inc: { auraCreditsSpent: creditsToSpend }
-            });
-            if (!creditUpdateResult.matchedCount || !creditUpdateResult.modifiedCount) {
-                console.error('Failed to update user credits during boost', {
-                    userId,
-                    creditsToSpend,
-                    currentCredits,
-                    newCredits,
-                    matchedCount: creditUpdateResult.matchedCount,
-                    modifiedCount: creditUpdateResult.modifiedCount
-                });
-                return res.status(500).json({ success: false, error: 'Failed to update user credits' });
-            }
             // Apply boost to post (radiance proportional to credits)
             const incRadiance = creditsToSpend * 2; // keep same multiplier as UI
             try {
                 yield db.collection(POSTS_COLLECTION).updateOne({ id }, { $set: { isBoosted: true, updatedAt: new Date().toISOString() }, $inc: { radiance: incRadiance } });
                 const boostedDoc = yield db.collection(POSTS_COLLECTION).findOne({ id });
                 if (!boostedDoc) {
-                    yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, { $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() } });
+                    yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, {
+                        $inc: { auraCredits: creditsToSpend, auraCreditsSpent: -creditsToSpend },
+                        $set: { updatedAt: new Date().toISOString() }
+                    });
                     return res.status(500).json({ success: false, error: 'Failed to boost post' });
                 }
                 try {
@@ -1691,7 +1738,10 @@ exports.postsController = {
                 return res.json({ success: true, data: boostedDoc, message: 'Post boosted successfully' });
             }
             catch (e) {
-                yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, { $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() } });
+                yield db.collection(USERS_COLLECTION).updateOne({ id: userId }, {
+                    $inc: { auraCredits: creditsToSpend, auraCreditsSpent: -creditsToSpend },
+                    $set: { updatedAt: new Date().toISOString() }
+                });
                 throw e;
             }
         }

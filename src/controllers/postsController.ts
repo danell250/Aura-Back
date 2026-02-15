@@ -12,6 +12,55 @@ const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 
+const POST_UPDATE_ALLOWLIST = new Set<string>([
+  'content',
+  'energy',
+  'visibility',
+  'timeCapsuleTitle'
+]);
+
+const sanitizePostUpdates = (incoming: unknown): Record<string, unknown> => {
+  if (!incoming || typeof incoming !== 'object') return {};
+  const candidate = incoming as Record<string, unknown>;
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(candidate)) {
+    if (!POST_UPDATE_ALLOWLIST.has(key)) continue;
+    sanitized[key] = value;
+  }
+
+  if (typeof sanitized.content === 'string') {
+    const content = sanitized.content.trim();
+    if (content.length === 0 || content.length > 12000) {
+      delete sanitized.content;
+    } else {
+      sanitized.content = content;
+    }
+  } else {
+    delete sanitized.content;
+  }
+
+  if (typeof sanitized.energy === 'string') {
+    const energy = sanitized.energy.trim();
+    sanitized.energy = energy ? energy.slice(0, 120) : '🪐 NEUTRAL';
+  } else {
+    delete sanitized.energy;
+  }
+
+  if (typeof sanitized.visibility !== 'string') {
+    delete sanitized.visibility;
+  }
+
+  if (typeof sanitized.timeCapsuleTitle === 'string') {
+    const title = sanitized.timeCapsuleTitle.trim();
+    sanitized.timeCapsuleTitle = title.slice(0, 220);
+  } else {
+    delete sanitized.timeCapsuleTitle;
+  }
+
+  return sanitized;
+};
+
 interface PostSseClient {
   id: string;
   res: Response;
@@ -1783,7 +1832,7 @@ export const postsController = {
   updatePost: async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const updates = req.body || {};
+      const updates = sanitizePostUpdates(req.body);
       const db = getDB();
 
       const post = await db.collection(POSTS_COLLECTION).findOne({ id });
@@ -1806,8 +1855,13 @@ export const postsController = {
         return res.status(403).json({ success: false, error: 'Forbidden', message: 'Only the author can update this post' });
       }
 
-      // Prevent changing immutable fields
-      delete updates.id; delete updates.author; delete updates.timestamp;
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'No valid fields to update',
+          message: 'No mutable post fields were provided.'
+        });
+      }
 
       if (typeof updates.content === 'string') {
         updates.hashtags = getHashtagsFromText(updates.content);
@@ -2026,35 +2080,34 @@ export const postsController = {
       const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
       const creditsToSpend = typeof parsedCredits === 'number' && parsedCredits > 0 ? parsedCredits : 100;
 
-      // Fetch user and ensure enough credits
-      const user = await db.collection(USERS_COLLECTION).findOne({ id: userId });
-      if (!user) {
-        return res.status(404).json({ success: false, error: 'User not found' });
-      }
-      const currentCredits = Number(user.auraCredits || 0);
-      if (currentCredits < creditsToSpend) {
+      const creditUpdateResult: any = await db.collection(USERS_COLLECTION).findOneAndUpdate(
+        { id: userId, auraCredits: { $gte: creditsToSpend } },
+        {
+          $inc: { auraCredits: -creditsToSpend, auraCreditsSpent: creditsToSpend },
+          $set: { updatedAt: new Date().toISOString() }
+        },
+        {
+          returnDocument: 'before',
+          projection: { auraCredits: 1 }
+        }
+      );
+
+      const userBeforeDebit = creditUpdateResult && typeof creditUpdateResult === 'object' && 'value' in creditUpdateResult
+        ? creditUpdateResult.value
+        : creditUpdateResult;
+      if (!userBeforeDebit) {
+        const existingUser = await db.collection(USERS_COLLECTION).findOne(
+          { id: userId },
+          { projection: { auraCredits: 1 } }
+        );
+        if (!existingUser) {
+          return res.status(404).json({ success: false, error: 'User not found' });
+        }
         return res.status(400).json({ success: false, error: 'Insufficient credits' });
       }
 
+      const currentCredits = Number(userBeforeDebit.auraCredits || 0);
       const newCredits = currentCredits - creditsToSpend;
-      const creditUpdateResult = await db.collection(USERS_COLLECTION).updateOne(
-        { id: userId },
-        {
-          $set: { auraCredits: newCredits, updatedAt: new Date().toISOString() },
-          $inc: { auraCreditsSpent: creditsToSpend }
-        }
-      );
-      if (!creditUpdateResult.matchedCount || !creditUpdateResult.modifiedCount) {
-        console.error('Failed to update user credits during boost', {
-          userId,
-          creditsToSpend,
-          currentCredits,
-          newCredits,
-          matchedCount: creditUpdateResult.matchedCount,
-          modifiedCount: creditUpdateResult.modifiedCount
-        });
-        return res.status(500).json({ success: false, error: 'Failed to update user credits' });
-      }
 
       // Apply boost to post (radiance proportional to credits)
       const incRadiance = creditsToSpend * 2; // keep same multiplier as UI
@@ -2068,7 +2121,10 @@ export const postsController = {
         if (!boostedDoc) {
           await db.collection(USERS_COLLECTION).updateOne(
             { id: userId },
-            { $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() } }
+            {
+              $inc: { auraCredits: creditsToSpend, auraCreditsSpent: -creditsToSpend },
+              $set: { updatedAt: new Date().toISOString() }
+            }
           );
           return res.status(500).json({ success: false, error: 'Failed to boost post' });
         }
@@ -2105,7 +2161,10 @@ export const postsController = {
       } catch (e) {
         await db.collection(USERS_COLLECTION).updateOne(
           { id: userId },
-          { $set: { auraCredits: currentCredits, updatedAt: new Date().toISOString() } }
+          {
+            $inc: { auraCredits: creditsToSpend, auraCreditsSpent: -creditsToSpend },
+            $set: { updatedAt: new Date().toISOString() }
+          }
         );
         throw e;
       }

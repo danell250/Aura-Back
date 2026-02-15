@@ -8,25 +8,11 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const crypto_1 = __importDefault(require("crypto"));
-const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = require("../db");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = (0, express_1.Router)();
-const OWNER_EMAIL = (process.env.OWNER_CONTROL_EMAIL || 'danelloosthuizen3@gmail.com').trim().toLowerCase();
-const OWNER_CONTROL_KEY = (process.env.OWNER_CONTROL_KEY || 'oc_8d7a4b1e5c9f2d3').trim();
-const OWNER_CONTROL_KEY_FALLBACK = 'oc_8d7a4b1e5c9f2d3';
-const OWNER_CONTROL_USERNAME = (process.env.OWNER_CONTROL_USERNAME || 'danelloosthuizen3').trim();
-const OWNER_CONTROL_PASSWORD = (process.env.OWNER_CONTROL_PASSWORD || 'AuraOwner!2026').trim();
-const OWNER_CONTROL_JWT_SECRET = (process.env.OWNER_CONTROL_JWT_SECRET ||
-    process.env.JWT_SECRET ||
-    'aura-owner-control-secret').trim();
-const OWNER_CONTROL_TOKEN_TTL = '12h';
 const REPORT_STATUS_VALUES = new Set(['open', 'in_review', 'resolved', 'dismissed']);
 const readIsoTimestamp = (value) => {
     if (typeof value === 'number' && Number.isFinite(value))
@@ -64,100 +50,8 @@ const normalizeReportType = (report) => {
     return 'user';
 };
 const isSuspendedMessage = (reason) => reason ? `Account suspended: ${reason}` : 'Account suspended. Contact support for assistance.';
-const timingSafeEquals = (a, b) => {
-    const aBuffer = Buffer.from(a);
-    const bBuffer = Buffer.from(b);
-    if (aBuffer.length !== bBuffer.length)
-        return false;
-    return crypto_1.default.timingSafeEqual(aBuffer, bBuffer);
-};
-const parseOwnerControlToken = (req) => {
-    const tokenHeader = req.headers['x-owner-control-token'];
-    if (typeof tokenHeader === 'string' && tokenHeader.trim().length > 0)
-        return tokenHeader.trim();
-    if (Array.isArray(tokenHeader) && tokenHeader.length > 0 && tokenHeader[0].trim().length > 0) {
-        return tokenHeader[0].trim();
-    }
-    return null;
-};
-const verifyOwnerControlToken = (token) => {
-    try {
-        const decoded = jsonwebtoken_1.default.verify(token, OWNER_CONTROL_JWT_SECRET, {
-            algorithms: ['HS256'],
-            issuer: 'aura-owner-control',
-            audience: 'aura-owner-control'
-        });
-        return (decoded === null || decoded === void 0 ? void 0 : decoded.scope) === 'owner-control' && (decoded === null || decoded === void 0 ? void 0 : decoded.username) === OWNER_CONTROL_USERNAME;
-    }
-    catch (_a) {
-        return false;
-    }
-};
-router.post('/auth/login', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a, _b;
-    try {
-        const username = (((_a = req.body) === null || _a === void 0 ? void 0 : _a.username) || '').toString().trim();
-        const password = (((_b = req.body) === null || _b === void 0 ? void 0 : _b.password) || '').toString();
-        const usernameOk = username.length > 0 && timingSafeEquals(username, OWNER_CONTROL_USERNAME);
-        const passwordOk = password.length > 0 && timingSafeEquals(password, OWNER_CONTROL_PASSWORD);
-        if (!usernameOk || !passwordOk) {
-            return res.status(401).json({
-                success: false,
-                error: 'Invalid credentials',
-                message: 'Owner control login failed'
-            });
-        }
-        const token = jsonwebtoken_1.default.sign({
-            scope: 'owner-control',
-            username: OWNER_CONTROL_USERNAME
-        }, OWNER_CONTROL_JWT_SECRET, {
-            algorithm: 'HS256',
-            expiresIn: OWNER_CONTROL_TOKEN_TTL,
-            issuer: 'aura-owner-control',
-            audience: 'aura-owner-control'
-        });
-        return res.json({
-            success: true,
-            data: {
-                token,
-                username: OWNER_CONTROL_USERNAME,
-                expiresIn: OWNER_CONTROL_TOKEN_TTL
-            }
-        });
-    }
-    catch (error) {
-        console.error('Error in owner control login:', error);
-        return res.status(500).json({
-            success: false,
-            error: 'Failed to login'
-        });
-    }
-}));
-const requireOwnerControlAccess = (req, res, next) => {
-    const suppliedKey = (req.params.accessKey || '').trim();
-    const allowedKeys = new Set([OWNER_CONTROL_KEY, OWNER_CONTROL_KEY_FALLBACK].filter(Boolean));
-    if (!allowedKeys.has(suppliedKey)) {
-        return res.status(404).json({
-            success: false,
-            error: 'Not found'
-        });
-    }
-    const actor = req.user;
-    const actorEmail = typeof (actor === null || actor === void 0 ? void 0 : actor.email) === 'string' ? actor.email.trim().toLowerCase() : '';
-    if ((actor === null || actor === void 0 ? void 0 : actor.id) && actorEmail === OWNER_EMAIL) {
-        return next();
-    }
-    const ownerControlToken = parseOwnerControlToken(req);
-    if (ownerControlToken && verifyOwnerControlToken(ownerControlToken)) {
-        return next();
-    }
-    return res.status(401).json({
-        success: false,
-        error: 'Authentication required',
-        message: 'Owner control login required'
-    });
-};
-router.get('/:accessKey/overview', authMiddleware_1.optionalAuth, requireOwnerControlAccess, (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.use(authMiddleware_1.requireAuth, authMiddleware_1.requireAdmin);
+router.get('/overview', (_req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const db = (0, db_1.getDB)();
         const now = Date.now();
@@ -409,7 +303,7 @@ router.get('/:accessKey/overview', authMiddleware_1.optionalAuth, requireOwnerCo
         });
     }
 }));
-router.patch('/:accessKey/reports/:reportId', authMiddleware_1.optionalAuth, requireOwnerControlAccess, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.patch('/reports/:reportId', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     try {
         const { reportId } = req.params;
@@ -428,8 +322,8 @@ router.patch('/:accessKey/reports/:reportId', authMiddleware_1.optionalAuth, req
             $set: {
                 status,
                 adminNotes,
-                reviewedBy: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.id) || 'owner-control-token',
-                reviewedByEmail: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.email) || OWNER_EMAIL,
+                reviewedBy: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.id) || 'admin',
+                reviewedByEmail: (reviewer === null || reviewer === void 0 ? void 0 : reviewer.email) || '',
                 updatedAt: now
             }
         });
@@ -453,7 +347,7 @@ router.patch('/:accessKey/reports/:reportId', authMiddleware_1.optionalAuth, req
         });
     }
 }));
-router.post('/:accessKey/users/:userId/suspend', authMiddleware_1.optionalAuth, requireOwnerControlAccess, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post('/users/:userId/suspend', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     try {
         const { userId } = req.params;
@@ -492,7 +386,7 @@ router.post('/:accessKey/users/:userId/suspend', authMiddleware_1.optionalAuth, 
         });
     }
 }));
-router.post('/:accessKey/posts/:postId/hide', authMiddleware_1.optionalAuth, requireOwnerControlAccess, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post('/posts/:postId/hide', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     try {
         const { postId } = req.params;

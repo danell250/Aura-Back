@@ -229,29 +229,43 @@ function setupConnectionMonitoring() {
         return;
     }
     monitoringClient = client;
+    const isTestEnv = process.env.NODE_ENV === 'test';
     // Monitor connection events
     monitoringClient.on('serverHeartbeatFailed', (event) => {
-        console.warn('⚠️  MongoDB heartbeat failed:', event);
+        if (!isTestEnv) {
+            console.warn('⚠️  MongoDB heartbeat failed:', event);
+        }
     });
     monitoringClient.on('serverClosed', (event) => {
-        console.warn('⚠️  MongoDB server connection closed:', event);
+        if (!isTestEnv) {
+            console.warn('⚠️  MongoDB server connection closed:', event);
+        }
         exports.isConnected = isConnected = false;
         startPeriodicReconnection();
     });
     monitoringClient.on('topologyClosed', () => {
-        console.warn('⚠️  MongoDB topology closed');
+        if (!isTestEnv) {
+            console.warn('⚠️  MongoDB topology closed');
+        }
         exports.isConnected = isConnected = false;
         startPeriodicReconnection();
     });
     monitoringClient.on('serverOpening', () => {
-        console.log('✅ MongoDB server connection opening');
+        if (!isTestEnv) {
+            console.log('✅ MongoDB server connection opening');
+        }
     });
     monitoringClient.on('topologyOpening', () => {
-        console.log('✅ MongoDB topology opening');
+        if (!isTestEnv) {
+            console.log('✅ MongoDB topology opening');
+        }
     });
 }
 // Start periodic reconnection attempts
 function startPeriodicReconnection() {
+    if (process.env.NODE_ENV === 'test') {
+        return;
+    }
     if (reconnectInterval) {
         clearInterval(reconnectInterval);
     }

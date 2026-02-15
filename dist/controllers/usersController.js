@@ -1630,8 +1630,9 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { credits, reason } = req.body;
+            const creditsToSpend = typeof credits === 'string' ? Number(credits) : credits;
             // Validate required fields
-            if (!credits || credits <= 0) {
+            if (typeof creditsToSpend !== 'number' || !Number.isFinite(creditsToSpend) || creditsToSpend <= 0) {
                 return res.status(400).json({
                     success: false,
                     error: 'Invalid credits amount',
@@ -1639,36 +1640,38 @@ exports.usersController = {
                 });
             }
             const db = (0, db_1.getDB)();
-            // Find user
-            const user = yield db.collection('users').findOne({ id });
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'User not found',
-                    message: `User with ID ${id} does not exist`
-                });
-            }
-            // Check if user has enough credits
-            const currentCredits = user.auraCredits || 0;
-            if (currentCredits < credits) {
+            const debitResult = yield db.collection('users').findOneAndUpdate({ id, auraCredits: { $gte: creditsToSpend } }, {
+                $inc: { auraCredits: -creditsToSpend, auraCreditsSpent: creditsToSpend },
+                $set: { updatedAt: new Date().toISOString() }
+            }, {
+                returnDocument: 'before',
+                projection: { auraCredits: 1 }
+            });
+            const userBeforeDebit = debitResult && typeof debitResult === 'object' && 'value' in debitResult
+                ? debitResult.value
+                : debitResult;
+            if (!userBeforeDebit) {
+                const existingUser = yield db.collection('users').findOne({ id }, { projection: { auraCredits: 1 } });
+                if (!existingUser) {
+                    return res.status(404).json({
+                        success: false,
+                        error: 'User not found',
+                        message: `User with ID ${id} does not exist`
+                    });
+                }
+                const currentCredits = Number(existingUser.auraCredits || 0);
                 return res.status(400).json({
                     success: false,
                     error: 'Insufficient credits',
-                    message: `User has ${currentCredits} credits but needs ${credits}`
+                    message: `User has ${currentCredits} credits but needs ${creditsToSpend}`
                 });
             }
-            // Deduct credits
-            const newCredits = currentCredits - credits;
-            yield db.collection('users').updateOne({ id }, {
-                $set: {
-                    auraCredits: newCredits,
-                    updatedAt: new Date().toISOString()
-                }
-            });
+            const currentCredits = Number(userBeforeDebit.auraCredits || 0);
+            const newCredits = currentCredits - creditsToSpend;
             // Log the transaction (in production, save to database)
             console.log('Credit spending processed:', {
                 userId: id,
-                creditsSpent: credits,
+                creditsSpent: creditsToSpend,
                 reason,
                 previousCredits: currentCredits,
                 newCredits,
@@ -1680,12 +1683,12 @@ exports.usersController = {
                 success: true,
                 data: {
                     userId: id,
-                    creditsSpent: credits,
+                    creditsSpent: creditsToSpend,
                     reason,
                     previousCredits: currentCredits,
                     newCredits
                 },
-                message: `Successfully deducted ${credits} credits from user account`
+                message: `Successfully deducted ${creditsToSpend} credits from user account`
             });
         }
         catch (error) {

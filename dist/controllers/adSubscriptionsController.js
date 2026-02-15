@@ -324,7 +324,7 @@ exports.adSubscriptionsController = {
                     });
                     const subscription = subscriptionResponse.data;
                     const subscriptionStatus = typeof (subscription === null || subscription === void 0 ? void 0 : subscription.status) === 'string' ? subscription.status : '';
-                    const allowedStatuses = new Set(['ACTIVE', 'APPROVAL_PENDING']);
+                    const allowedStatuses = new Set(['ACTIVE']);
                     if (!allowedStatuses.has(subscriptionStatus)) {
                         return res.status(400).json({
                             success: false,
@@ -461,8 +461,10 @@ exports.adSubscriptionsController = {
                 createdAt: now,
                 updatedAt: now
             };
+            let subscriptionInserted = false;
             try {
                 yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).insertOne(newSubscription);
+                subscriptionInserted = true;
             }
             catch (insertError) {
                 if (insertError && insertError.code === 11000) {
@@ -503,6 +505,17 @@ exports.adSubscriptionsController = {
                 });
             }
             catch (txInsertError) {
+                if (subscriptionInserted) {
+                    try {
+                        yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).deleteOne({
+                            id: newSubscription.id,
+                            paymentReferenceKey
+                        });
+                    }
+                    catch (rollbackError) {
+                        console.error('[AdSubscriptions] Failed to roll back orphaned subscription:', rollbackError);
+                    }
+                }
                 if (txInsertError && txInsertError.code === 11000) {
                     return res.status(409).json({
                         success: false,
@@ -598,18 +611,52 @@ exports.adSubscriptionsController = {
                     error: 'Subscription has expired'
                 });
             }
-            // Increment ads used
-            const result = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne({ id, ownerId: owner.ownerId, ownerType: owner.ownerType }, {
+            const now = Date.now();
+            // Atomically consume one ad slot so concurrent requests cannot exceed plan limits.
+            const updatedResult = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOneAndUpdate({
+                id,
+                ownerId: owner.ownerId,
+                ownerType: owner.ownerType,
+                status: 'active',
+                adsUsed: { $lt: subscription.adLimit },
+                $or: [
+                    { endDate: { $exists: false } },
+                    { endDate: { $gt: now } }
+                ]
+            }, {
                 $inc: { adsUsed: 1 },
-                $set: { updatedAt: Date.now() }
-            });
-            if (result.matchedCount === 0) {
-                return res.status(404).json({
+                $set: { updatedAt: now }
+            }, { returnDocument: 'after' });
+            const updatedSubscription = updatedResult && typeof updatedResult === 'object' && 'value' in updatedResult
+                ? updatedResult.value
+                : updatedResult;
+            if (!updatedSubscription) {
+                const latest = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
+                if (!latest) {
+                    return res.status(404).json({
+                        success: false,
+                        error: 'Subscription not found'
+                    });
+                }
+                if (latest.status !== 'active') {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Subscription is not active',
+                        message: 'This subscription is not currently active.'
+                    });
+                }
+                if (latest.endDate && Date.now() > latest.endDate) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Subscription has expired'
+                    });
+                }
+                return res.status(400).json({
                     success: false,
-                    error: 'Subscription not found'
+                    error: 'Ad limit reached for this subscription',
+                    message: 'You have reached the maximum number of ads allowed for this subscription.'
                 });
             }
-            const updatedSubscription = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOne({ id });
             res.json({
                 success: true,
                 data: updatedSubscription,

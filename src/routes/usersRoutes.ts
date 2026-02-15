@@ -2,8 +2,21 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { usersController } from '../controllers/usersController';
 import { requireAuth, requireAdmin } from '../middleware/authMiddleware';
 import { upload } from '../middleware/uploadMiddleware';
+import rateLimit from 'express-rate-limit';
 
 const router = Router();
+
+const billingWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too many billing requests',
+    message: 'Please wait a few minutes before trying another billing action.'
+  }
+});
 
 const readIdentityHeader = (value: unknown): string | undefined => {
   if (typeof value === 'string') return value;
@@ -87,13 +100,13 @@ router.post('/test-route', (req: Request, res: Response) => {
 
 // POST /api/users/:id/purchase-credits - Purchase credits
 console.log('Registering purchase-credits route for pattern /:id/purchase-credits');
-router.post('/:id/purchase-credits', requireAuth, requirePersonalIdentity, requireSelfParam, (req: Request, res: Response) => {
+router.post('/:id/purchase-credits', billingWriteLimiter, requireAuth, requirePersonalIdentity, requireSelfParam, (req: Request, res: Response) => {
   console.log('Purchase credits route hit!', req.params, req.body);
   usersController.purchaseCredits(req, res);
 });
 
 // POST /api/users/:id/spend-credits - Spend credits
-router.post('/:id/spend-credits', requireAuth, requirePersonalIdentity, requireSelfParam, usersController.spendCredits);
+router.post('/:id/spend-credits', billingWriteLimiter, requireAuth, requirePersonalIdentity, requireSelfParam, usersController.spendCredits);
 
 // Privacy and Data Management Routes
 // GET /api/users/:id/privacy-data - Export user's privacy data (GDPR compliance)

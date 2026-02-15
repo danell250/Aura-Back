@@ -1,10 +1,25 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const usersController_1 = require("../controllers/usersController");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const uploadMiddleware_1 = require("../middleware/uploadMiddleware");
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const router = (0, express_1.Router)();
+const billingWriteLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        success: false,
+        error: 'Too many billing requests',
+        message: 'Please wait a few minutes before trying another billing action.'
+    }
+});
 const readIdentityHeader = (value) => {
     if (typeof value === 'string')
         return value;
@@ -71,12 +86,12 @@ router.post('/test-route', (req, res) => {
 });
 // POST /api/users/:id/purchase-credits - Purchase credits
 console.log('Registering purchase-credits route for pattern /:id/purchase-credits');
-router.post('/:id/purchase-credits', authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, (req, res) => {
+router.post('/:id/purchase-credits', billingWriteLimiter, authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, (req, res) => {
     console.log('Purchase credits route hit!', req.params, req.body);
     usersController_1.usersController.purchaseCredits(req, res);
 });
 // POST /api/users/:id/spend-credits - Spend credits
-router.post('/:id/spend-credits', authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, usersController_1.usersController.spendCredits);
+router.post('/:id/spend-credits', billingWriteLimiter, authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, usersController_1.usersController.spendCredits);
 // Privacy and Data Management Routes
 // GET /api/users/:id/privacy-data - Export user's privacy data (GDPR compliance)
 router.get('/:id/privacy-data', authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, usersController_1.usersController.getPrivacyData);
