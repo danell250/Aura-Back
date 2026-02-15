@@ -456,6 +456,129 @@ export const emitAuthorInsightsUpdate = async (
   }
 };
 
+interface TrendingCandidatePost {
+  id: string;
+  timestamp?: number;
+  author?: {
+    id?: string;
+  };
+  reactions?: Record<string, number>;
+  commentCount?: number;
+  comments?: unknown[];
+  viewCount?: number;
+  radiance?: number;
+  isBoosted?: boolean;
+}
+
+const stableHash = (input: string): number => {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash + input.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+};
+
+const toFiniteNumber = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return value;
+};
+
+const computeTrendingBaseScore = (post: TrendingCandidatePost, now: number): number => {
+  const reactions = Object.values(post.reactions || {}).reduce((sum, value) => {
+    return sum + (Number.isFinite(value) ? value : 0);
+  }, 0);
+  const commentCount = Math.max(
+    0,
+    toFiniteNumber(post.commentCount) || (Array.isArray(post.comments) ? post.comments.length : 0)
+  );
+  const viewCount = Math.max(0, toFiniteNumber(post.viewCount));
+  const radiance = Math.max(0, toFiniteNumber(post.radiance));
+  const boostBonus = post.isBoosted ? 5 : 0;
+  const createdAt = toFiniteNumber(post.timestamp) || now;
+  const ageHours = Math.max(0, (now - createdAt) / (1000 * 60 * 60));
+  const recencyFactor = 1 / (1 + ageHours / 20);
+  const freshnessBonus = ageHours <= 2 ? 2.5 : ageHours <= 8 ? 1.25 : ageHours <= 24 ? 0.4 : 0;
+
+  const engagementRaw =
+    reactions +
+    commentCount * 2.2 +
+    Math.sqrt(viewCount) * 0.6 +
+    Math.min(40, radiance * 0.35) +
+    boostBonus;
+
+  return engagementRaw * recencyFactor + freshnessBonus;
+};
+
+const rerankTrendingPostsFair = (
+  candidates: TrendingCandidatePost[],
+  requiredCount: number
+): TrendingCandidatePost[] => {
+  if (requiredCount <= 0 || candidates.length <= 1) {
+    return candidates.slice(0, Math.max(requiredCount, 0));
+  }
+
+  const now = Date.now();
+  const remaining = [...candidates];
+  const selected: TrendingCandidatePost[] = [];
+  const selectedByAuthor = new Map<string, number>();
+  const poolByAuthor = new Map<string, number>();
+
+  remaining.forEach((post) => {
+    const authorId = post.author?.id || `unknown:${post.id}`;
+    poolByAuthor.set(authorId, (poolByAuthor.get(authorId) || 0) + 1);
+  });
+
+  // Prevent one author from saturating the top slots while still allowing repeated wins.
+  const perAuthorCap = Math.max(2, Math.min(4, Math.ceil(requiredCount / 12)));
+
+  while (remaining.length > 0 && selected.length < requiredCount) {
+    let bestIndex = -1;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (let i = 0; i < remaining.length; i++) {
+      const candidate = remaining[i];
+      const authorId = candidate.author?.id || `unknown:${candidate.id}`;
+      const alreadySelected = selectedByAuthor.get(authorId) || 0;
+      const remainingSlots = requiredCount - selected.length;
+
+      if (alreadySelected >= perAuthorCap && remaining.length > remainingSlots) {
+        continue;
+      }
+
+      const authorPoolCount = poolByAuthor.get(authorId) || 1;
+      const diversityPenalty = 1 / (1 + alreadySelected * 0.95);
+      const explorationBoost = authorPoolCount <= 1 ? 1.14 : authorPoolCount === 2 ? 1.08 : 1;
+      const tieBreaker = (stableHash(candidate.id) % 1000) / 1_000_000;
+      const score =
+        computeTrendingBaseScore(candidate, now) * diversityPenalty * explorationBoost + tieBreaker;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = i;
+      }
+    }
+
+    if (bestIndex === -1) {
+      bestIndex = 0;
+      bestScore = Number.NEGATIVE_INFINITY;
+      for (let i = 0; i < remaining.length; i++) {
+        const score = computeTrendingBaseScore(remaining[i], now);
+        if (score > bestScore) {
+          bestScore = score;
+          bestIndex = i;
+        }
+      }
+    }
+
+    const [picked] = remaining.splice(bestIndex, 1);
+    selected.push(picked);
+    const pickedAuthorId = picked.author?.id || `unknown:${picked.id}`;
+    selectedByAuthor.set(pickedAuthorId, (selectedByAuthor.get(pickedAuthorId) || 0) + 1);
+  }
+
+  return selected;
+};
+
 export const postsController = {
   health: async (_req: Request, res: Response) => {
     res.json({
@@ -759,7 +882,13 @@ export const postsController = {
       // However, authorDetails.isPrivate depends on the lookup
       // So we keep it here but the visibilityMatchStage above will filter out many posts already
 
-      if (sort === 'trending') {
+      const isTrendingSort = sort === 'trending';
+      const startIndex = (pageNum - 1) * limitNum;
+      const trendingCandidateLimit = isTrendingSort
+        ? Math.min(400, Math.max((startIndex + limitNum) * 6, limitNum * 6, 80))
+        : limitNum;
+
+      if (isTrendingSort) {
         pipeline.push(
           {
             $addFields: {
@@ -773,7 +902,7 @@ export const postsController = {
                 }
               },
               boostScore: {
-                $cond: { if: { $eq: ['$isBoosted', true] }, then: 10000, else: 0 }
+                $cond: { if: { $eq: ['$isBoosted', true] }, then: 5, else: 0 }
               }
             }
           },
@@ -788,12 +917,63 @@ export const postsController = {
           },
           {
             $addFields: {
-              commentCountVal: { $ifNull: [{ $arrayElemAt: ['$commentCountArr.count', 0] }, 0] }
+              commentCountVal: { $ifNull: [{ $arrayElemAt: ['$commentCountArr.count', 0] }, 0] },
+              viewCountVal: { $ifNull: ['$viewCount', 0] },
+              ageHours: {
+                $divide: [
+                  {
+                    $max: [
+                      0,
+                      {
+                        $subtract: [now, { $ifNull: ['$timestamp', now] }]
+                      }
+                    ]
+                  },
+                  1000 * 60 * 60
+                ]
+              }
             }
           },
           {
             $addFields: {
-              engagementScore: { $add: ['$boostScore', '$totalReactions', '$commentCountVal'] }
+              recencyFactor: { $divide: [1, { $add: [1, { $divide: ['$ageHours', 20] }] }] },
+              engagementRaw: {
+                $add: [
+                  '$boostScore',
+                  '$totalReactions',
+                  { $multiply: ['$commentCountVal', 2.2] },
+                  { $multiply: [{ $sqrt: { $max: [0, '$viewCountVal'] } }, 0.6] },
+                  { $min: [40, { $multiply: [{ $ifNull: ['$radiance', 0] }, 0.35] }] }
+                ]
+              }
+            }
+          },
+          {
+            $addFields: {
+              engagementScore: {
+                $add: [
+                  { $multiply: ['$engagementRaw', '$recencyFactor'] },
+                  {
+                    $cond: [
+                      { $lte: ['$ageHours', 2] },
+                      2.5,
+                      {
+                        $cond: [
+                          { $lte: ['$ageHours', 8] },
+                          1.25,
+                          {
+                            $cond: [
+                              { $lte: ['$ageHours', 24] },
+                              0.4,
+                              0
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
             }
           },
           { $sort: { engagementScore: -1, timestamp: -1 } }
@@ -813,8 +993,9 @@ export const postsController = {
       }
 
       pipeline.push(
-        { $skip: (pageNum - 1) * limitNum },
-        { $limit: limitNum },
+        ...(isTrendingSort
+          ? [{ $skip: 0 }, { $limit: trendingCandidateLimit }]
+          : [{ $skip: startIndex }, { $limit: limitNum }]),
         {
           $lookup: {
             from: 'comments',
@@ -842,6 +1023,11 @@ export const postsController = {
             commentCountArr: 0, // Cleanup temp fields
             commentCountVal: 0,
             totalReactions: 0,
+            boostScore: 0,
+            ageHours: 0,
+            viewCountVal: 0,
+            recencyFactor: 0,
+            engagementRaw: 0,
             engagementScore: 0
             // authorDetails: 0 // Keep authorDetails to ensure profile info is fresh
           }
@@ -948,9 +1134,16 @@ export const postsController = {
         };
       });
 
+      let responseData = transformedData;
+      if (isTrendingSort) {
+        const endIndex = startIndex + limitNum;
+        const fairRanked = rerankTrendingPostsFair(transformedData as TrendingCandidatePost[], endIndex);
+        responseData = fairRanked.slice(startIndex, endIndex) as any[];
+      }
+
       res.json({
         success: true,
-        data: transformedData,
+        data: responseData,
         pagination: {
           page: pageNum,
           limit: limitNum,
