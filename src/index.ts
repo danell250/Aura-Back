@@ -193,7 +193,9 @@ const corsOptions: cors.CorsOptions = {
     "x-identity-type",
     "x-identity-id",
     "X-Identity-Type",
-    "X-Identity-Id"
+    "X-Identity-Id",
+    "x-owner-control-token",
+    "X-Owner-Control-Token"
   ],
   exposedHeaders: ["Set-Cookie"],
   optionsSuccessStatus: 204
