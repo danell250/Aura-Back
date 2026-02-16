@@ -15,22 +15,51 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = (0, express_1.Router)();
 const REPORT_STATUS_VALUES = new Set(['open', 'in_review', 'resolved', 'dismissed']);
 const OWNER_CONTROL_TOKEN_ENV_KEYS = ['OWNER_CONTROL_TOKEN', 'OWNER_CONTROL_ACCESS_TOKEN'];
+const normalizeTokenCandidate = (value) => {
+    const trimmed = value.trim();
+    if (!trimmed)
+        return '';
+    try {
+        return decodeURIComponent(trimmed).trim();
+    }
+    catch (_a) {
+        return trimmed;
+    }
+};
 const readOwnerControlToken = (req) => {
-    var _a;
+    var _a, _b, _c;
     const headerValue = req.headers['x-owner-control-token'];
     if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
-        return headerValue.trim();
+        return normalizeTokenCandidate(headerValue);
     }
     if (Array.isArray(headerValue) && typeof headerValue[0] === 'string' && headerValue[0].trim().length > 0) {
-        return headerValue[0].trim();
+        return normalizeTokenCandidate(headerValue[0]);
+    }
+    const authHeader = req.headers.authorization;
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        const bearerToken = authHeader.slice('Bearer '.length);
+        const normalizedBearer = normalizeTokenCandidate(bearerToken);
+        if (normalizedBearer) {
+            return normalizedBearer;
+        }
     }
     const pathToken = (_a = req.params) === null || _a === void 0 ? void 0 : _a.accessToken;
     if (typeof pathToken === 'string' && pathToken.trim().length > 0) {
-        return pathToken.trim();
+        return normalizeTokenCandidate(pathToken);
     }
-    const firstPathSegment = req.path.split('/').filter(Boolean)[0];
-    if (typeof firstPathSegment === 'string' && firstPathSegment.startsWith('oc_')) {
-        return firstPathSegment.trim();
+    const queryToken = (_b = req.query) === null || _b === void 0 ? void 0 : _b.accessToken;
+    if (typeof queryToken === 'string' && queryToken.trim().length > 0) {
+        return normalizeTokenCandidate(queryToken);
+    }
+    const queryAliasToken = (_c = req.query) === null || _c === void 0 ? void 0 : _c.token;
+    if (typeof queryAliasToken === 'string' && queryAliasToken.trim().length > 0) {
+        return normalizeTokenCandidate(queryAliasToken);
+    }
+    const firstPathSegmentRaw = req.path.split('/').filter(Boolean)[0];
+    const firstPathSegment = typeof firstPathSegmentRaw === 'string' ? normalizeTokenCandidate(firstPathSegmentRaw) : '';
+    if (firstPathSegment &&
+        (firstPathSegment.startsWith('oc_') || firstPathSegment.toLowerCase().startsWith('orbit-admin-'))) {
+        return firstPathSegment;
     }
     return '';
 };

@@ -6,21 +6,52 @@ const router = Router();
 const REPORT_STATUS_VALUES = new Set(['open', 'in_review', 'resolved', 'dismissed']);
 const OWNER_CONTROL_TOKEN_ENV_KEYS = ['OWNER_CONTROL_TOKEN', 'OWNER_CONTROL_ACCESS_TOKEN'] as const;
 
+const normalizeTokenCandidate = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  try {
+    return decodeURIComponent(trimmed).trim();
+  } catch {
+    return trimmed;
+  }
+};
+
 const readOwnerControlToken = (req: Request): string => {
   const headerValue = req.headers['x-owner-control-token'];
   if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
-    return headerValue.trim();
+    return normalizeTokenCandidate(headerValue);
   }
   if (Array.isArray(headerValue) && typeof headerValue[0] === 'string' && headerValue[0].trim().length > 0) {
-    return headerValue[0].trim();
+    return normalizeTokenCandidate(headerValue[0]);
+  }
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    const bearerToken = authHeader.slice('Bearer '.length);
+    const normalizedBearer = normalizeTokenCandidate(bearerToken);
+    if (normalizedBearer) {
+      return normalizedBearer;
+    }
   }
   const pathToken = (req.params as Record<string, unknown>)?.accessToken;
   if (typeof pathToken === 'string' && pathToken.trim().length > 0) {
-    return pathToken.trim();
+    return normalizeTokenCandidate(pathToken);
   }
-  const firstPathSegment = req.path.split('/').filter(Boolean)[0];
-  if (typeof firstPathSegment === 'string' && firstPathSegment.startsWith('oc_')) {
-    return firstPathSegment.trim();
+  const queryToken = req.query?.accessToken;
+  if (typeof queryToken === 'string' && queryToken.trim().length > 0) {
+    return normalizeTokenCandidate(queryToken);
+  }
+  const queryAliasToken = req.query?.token;
+  if (typeof queryAliasToken === 'string' && queryAliasToken.trim().length > 0) {
+    return normalizeTokenCandidate(queryAliasToken);
+  }
+  const firstPathSegmentRaw = req.path.split('/').filter(Boolean)[0];
+  const firstPathSegment =
+    typeof firstPathSegmentRaw === 'string' ? normalizeTokenCandidate(firstPathSegmentRaw) : '';
+  if (
+    firstPathSegment &&
+    (firstPathSegment.startsWith('oc_') || firstPathSegment.toLowerCase().startsWith('orbit-admin-'))
+  ) {
+    return firstPathSegment;
   }
   return '';
 };
