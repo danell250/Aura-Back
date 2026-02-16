@@ -81,12 +81,14 @@ const validateHandleFormat = (handle) => {
     }
     return { ok: true };
 };
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const CREDIT_BUNDLE_CONFIG = {
     'Nano Pulse': { credits: 100, price: 9.99 },
     'Neural Spark': { credits: 500, price: 39.99 },
     'Neural Surge': { credits: 2000, price: 149.99 },
     'Universal Core': { credits: 5000, price: 349.99 }
 };
+const SIGNUP_BONUS_CREDITS = 100;
 const USER_SELF_UPDATE_ALLOWLIST = new Set([
     'firstName',
     'lastName',
@@ -519,8 +521,11 @@ exports.usersController = {
     // POST /api/users - Create new user
     createUser: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const userData = req.body;
-            if (!userData.firstName || !userData.lastName || !userData.email) {
+            const userData = req.body || {};
+            const firstName = typeof userData.firstName === 'string' ? userData.firstName.trim() : '';
+            const lastName = typeof userData.lastName === 'string' ? userData.lastName.trim() : '';
+            const normalizedEmail = typeof userData.email === 'string' ? userData.email.trim().toLowerCase() : '';
+            if (!firstName || !lastName || !normalizedEmail) {
                 return res.status(400).json({
                     success: false,
                     error: 'Missing required fields',
@@ -529,10 +534,7 @@ exports.usersController = {
             }
             const db = (0, db_1.getDB)();
             const existingUser = yield db.collection('users').findOne({
-                $or: [
-                    { email: userData.email },
-                    { handle: userData.handle }
-                ]
+                email: { $regex: new RegExp(`^${escapeRegex(normalizedEmail)}$`, 'i') }
             });
             if (existingUser) {
                 return res.status(409).json({
@@ -541,25 +543,27 @@ exports.usersController = {
                     message: 'A user with this email or handle already exists'
                 });
             }
-            const uniqueHandle = yield generateUniqueHandle(userData.firstName, userData.lastName);
-            const userId = userData.id || `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            const uniqueHandle = yield generateUniqueHandle(firstName, lastName);
+            const userId = `user-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
             const newUser = {
                 id: userId,
-                firstName: userData.firstName,
-                lastName: userData.lastName,
-                name: userData.name || `${userData.firstName} ${userData.lastName}`,
+                firstName,
+                lastName,
+                name: `${firstName} ${lastName}`,
                 handle: uniqueHandle,
-                avatar: userData.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
-                avatarType: userData.avatarType || 'image',
-                email: userData.email,
-                bio: userData.bio || '',
-                phone: userData.phone || '',
-                country: userData.country || '',
-                acquaintances: userData.acquaintances || [],
-                blockedUsers: userData.blockedUsers || [],
-                trustScore: userData.trustScore || 10,
-                auraCredits: userData.auraCredits || 100,
-                activeGlow: userData.activeGlow || 'none',
+                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
+                avatarType: 'image',
+                email: normalizedEmail,
+                bio: typeof userData.bio === 'string' ? userData.bio : '',
+                phone: typeof userData.phone === 'string' ? userData.phone : '',
+                country: typeof userData.country === 'string' ? userData.country : '',
+                acquaintances: [],
+                blockedUsers: [],
+                trustScore: 10,
+                auraCredits: SIGNUP_BONUS_CREDITS,
+                auraCreditsSpent: 0,
+                activeGlow: 'none',
+                signupBonusGrantedAt: new Date().toISOString(),
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
             };
@@ -1633,13 +1637,16 @@ exports.usersController = {
         try {
             const { id } = req.params;
             const { credits, reason } = req.body;
-            const creditsToSpend = typeof credits === 'string' ? Number(credits) : credits;
+            const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
+            const creditsToSpend = typeof parsedCredits === 'number' && Number.isFinite(parsedCredits)
+                ? parsedCredits
+                : NaN;
             // Validate required fields
-            if (typeof creditsToSpend !== 'number' || !Number.isFinite(creditsToSpend) || creditsToSpend <= 0) {
+            if (!Number.isInteger(creditsToSpend) || creditsToSpend <= 0) {
                 return res.status(400).json({
                     success: false,
                     error: 'Invalid credits amount',
-                    message: 'credits must be a positive number'
+                    message: 'credits must be a positive whole number'
                 });
             }
             const db = (0, db_1.getDB)();

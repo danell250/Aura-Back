@@ -27,6 +27,7 @@ const notificationsController_1 = require("../controllers/notificationsControlle
 const securityLogger_1 = require("../utils/securityLogger");
 const userUtils_1 = require("../utils/userUtils");
 const router = (0, express_1.Router)();
+const SIGNUP_BONUS_CREDITS = 100;
 const normalizeFrontendUrl = (value) => value.trim().replace(/\/$/, '');
 const parseFrontendUrlList = (value) => {
     if (!value)
@@ -73,6 +74,16 @@ const normalizeUserHandle = (rawHandle) => {
         return '';
     return `@${cleaned}`;
 };
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const findUserByEmail = (email) => __awaiter(void 0, void 0, void 0, function* () {
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!normalizedEmail)
+        return null;
+    const db = (0, db_1.getDB)();
+    return db.collection('users').findOne({
+        email: { $regex: new RegExp(`^${escapeRegex(normalizedEmail)}$`, 'i') }
+    });
+});
 const validateHandleFormat = (handle) => {
     const normalized = normalizeUserHandle(handle);
     if (!normalized) {
@@ -211,13 +222,11 @@ router.get('/google/callback', (req, res, next) => {
     try {
         const frontendUrl = resolveTrustedFrontendUrl(req);
         if (req.user) {
-            const db = (0, db_1.getDB)();
             const userData = req.user;
+            const db = (0, db_1.getDB)();
             console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
             // Identify-First: Check by EMAIL
-            const existingUser = yield db.collection('users').findOne({
-                email: userData.email
-            });
+            const existingUser = yield findUserByEmail(userData.email);
             let userToReturn;
             if (existingUser) {
                 console.log('✓ Found existing user by email:', existingUser.email);
@@ -242,7 +251,7 @@ router.get('/google/callback', (req, res, next) => {
                 console.log('➕ New user from Google OAuth');
                 // NEW USER: Generate unique handle
                 const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
-                const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
+                const newUser = Object.assign(Object.assign({}, userData), { email: String(userData.email || '').trim().toLowerCase(), handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: SIGNUP_BONUS_CREDITS, auraCreditsSpent: 0, signupBonusGrantedAt: new Date().toISOString(), trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
                 yield db.collection('users').insertOne(newUser);
                 console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
                 userToReturn = newUser;
@@ -284,13 +293,11 @@ router.get('/github/callback', (req, res, next) => {
     try {
         const frontendUrl = resolveTrustedFrontendUrl(req);
         if (req.user) {
-            const db = (0, db_1.getDB)();
             const userData = req.user;
+            const db = (0, db_1.getDB)();
             console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
             // Identify-First: Check by EMAIL
-            const existingUser = yield db.collection('users').findOne({
-                email: userData.email
-            });
+            const existingUser = yield findUserByEmail(userData.email);
             let userToReturn;
             if (existingUser) {
                 console.log('✓ Found existing user by email:', existingUser.email);
@@ -312,7 +319,7 @@ router.get('/github/callback', (req, res, next) => {
                 console.log('➕ New user from GitHub OAuth');
                 // NEW USER: Generate unique handle
                 const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
-                const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
+                const newUser = Object.assign(Object.assign({}, userData), { email: String(userData.email || '').trim().toLowerCase(), handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: SIGNUP_BONUS_CREDITS, auraCreditsSpent: 0, signupBonusGrantedAt: new Date().toISOString(), trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
                 yield db.collection('users').insertOne(newUser);
                 console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
                 userToReturn = newUser;
@@ -409,7 +416,7 @@ router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0,
         const db = (0, db_1.getDB)();
         // 4. Find or Create User
         // Identify-First: Check by EMAIL
-        const existingUser = yield db.collection('users').findOne({ email: profile.email });
+        const existingUser = yield findUserByEmail(profile.email);
         let userToReturn;
         if (existingUser) {
             console.log('✓ Found existing user by email:', existingUser.email);
@@ -446,14 +453,16 @@ router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0,
                 firstName: profile.given_name || 'User',
                 lastName: profile.family_name || '',
                 name: profile.name || 'User',
-                email: profile.email || '',
+                email: String(profile.email || '').trim().toLowerCase(),
                 avatar: profile.picture || `https://ui-avatars.com/api/?name=${profile.name}&background=random`,
                 avatarType: 'url',
                 handle: uniqueHandle,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
                 lastLogin: new Date().toISOString(),
-                auraCredits: 100,
+                auraCredits: SIGNUP_BONUS_CREDITS,
+                auraCreditsSpent: 0,
+                signupBonusGrantedAt: new Date().toISOString(),
                 trustScore: 10,
                 activeGlow: 'none',
                 acquaintances: [],
@@ -533,7 +542,7 @@ router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, 
             return res.redirect(`${frontendUrl}/login?error=discord_no_email`);
         if (discord.verified === false)
             return res.redirect(`${frontendUrl}/login?error=discord_email_not_verified`);
-        const existingUser = yield db.collection('users').findOne({ email });
+        const existingUser = yield findUserByEmail(email);
         // Build Discord avatar URL (optional)
         const discordAvatar = discord.avatar
             ? `https://cdn.discordapp.com/avatars/${discord.id}/${discord.avatar}.png?size=256`
@@ -574,7 +583,9 @@ router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, 
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
                 lastLogin: new Date().toISOString(),
-                auraCredits: 100,
+                auraCredits: SIGNUP_BONUS_CREDITS,
+                auraCreditsSpent: 0,
+                signupBonusGrantedAt: new Date().toISOString(),
                 trustScore: 10,
                 activeGlow: 'none',
                 acquaintances: [],
@@ -608,7 +619,7 @@ router.post("/magic-link", (req, res) => __awaiter(void 0, void 0, void 0, funct
         const db = (0, db_1.getDB)();
         const normalizedEmail = String(email).toLowerCase().trim();
         console.log('🔍 Searching for user:', normalizedEmail);
-        let user = yield db.collection("users").findOne({ email: normalizedEmail });
+        let user = yield findUserByEmail(normalizedEmail);
         // Create user if not exists (Sign Up via Magic Link)
         if (!user) {
             console.log('➕ User not found. Creating new user for email:', normalizedEmail);
@@ -626,7 +637,9 @@ router.post("/magic-link", (req, res) => __awaiter(void 0, void 0, void 0, funct
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
                 lastLogin: new Date().toISOString(),
-                auraCredits: 100,
+                auraCredits: SIGNUP_BONUS_CREDITS,
+                auraCreditsSpent: 0,
+                signupBonusGrantedAt: new Date().toISOString(),
                 trustScore: 10,
                 activeGlow: 'none',
                 acquaintances: [],
@@ -676,7 +689,7 @@ router.post("/magic-link/verify", (req, res) => __awaiter(void 0, void 0, void 0
         }
         const db = (0, db_1.getDB)();
         const normalizedEmail = String(email).toLowerCase().trim();
-        const user = yield db.collection("users").findOne({ email: normalizedEmail });
+        const user = yield findUserByEmail(normalizedEmail);
         if (!(user === null || user === void 0 ? void 0 : user.magicLinkTokenHash) || !(user === null || user === void 0 ? void 0 : user.magicLinkExpiresAt)) {
             return res.status(401).json({ success: false, message: "Invalid or expired link" });
         }
@@ -861,9 +874,7 @@ router.get('/github/callback', (req, res, next) => {
             const userData = req.user;
             console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
             // Identify-First: Check by EMAIL
-            const existingUser = yield db.collection('users').findOne({
-                email: userData.email
-            });
+            const existingUser = yield findUserByEmail(userData.email);
             let userToReturn;
             if (existingUser) {
                 console.log('✓ Found existing user by email:', existingUser.email);
@@ -888,7 +899,7 @@ router.get('/github/callback', (req, res, next) => {
                 console.log('➕ New user from GitHub OAuth');
                 // NEW USER: Generate unique handle
                 const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
-                const newUser = Object.assign(Object.assign({}, userData), { handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: 100, trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
+                const newUser = Object.assign(Object.assign({}, userData), { email: String(userData.email || '').trim().toLowerCase(), handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: SIGNUP_BONUS_CREDITS, auraCreditsSpent: 0, signupBonusGrantedAt: new Date().toISOString(), trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
                 yield db.collection('users').insertOne(newUser);
                 console.log('✓ Created new user after GitHub OAuth:', newUser.id, '| Handle:', uniqueHandle);
                 userToReturn = newUser;
@@ -1169,7 +1180,9 @@ router.post('/complete-oauth-profile', (req, res) => __awaiter(void 0, void 0, v
             handle: normalizedHandle,
             bio: (bio === null || bio === void 0 ? void 0 : bio.trim()) || '',
             trustScore: 10,
-            auraCredits: 100,
+            auraCredits: SIGNUP_BONUS_CREDITS,
+            auraCreditsSpent: 0,
+            signupBonusGrantedAt: new Date().toISOString(),
             activeGlow: 'none',
             acquaintances: [],
             blockedUsers: [],
@@ -1213,9 +1226,7 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
         }
         const db = (0, db_1.getDB)();
         const normalizedEmail = email.toLowerCase().trim();
-        const existingUser = yield db.collection('users').findOne({
-            email: normalizedEmail
-        });
+        const existingUser = yield findUserByEmail(normalizedEmail);
         if (existingUser) {
             return res.status(409).json({
                 success: false,
@@ -1262,7 +1273,9 @@ router.post('/register', (req, res) => __awaiter(void 0, void 0, void 0, functio
             acquaintances: [],
             blockedUsers: [],
             trustScore: 10,
-            auraCredits: 100,
+            auraCredits: SIGNUP_BONUS_CREDITS,
+            auraCreditsSpent: 0,
+            signupBonusGrantedAt: new Date().toISOString(),
             activeGlow: 'none',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),

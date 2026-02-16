@@ -795,7 +795,9 @@ export const adsController = {
       }
 
       const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
-      const creditsToSpend = typeof parsedCredits === 'number' && parsedCredits > 0 ? Math.round(parsedCredits) : 50;
+      const creditsToSpend = typeof parsedCredits === 'number' && Number.isFinite(parsedCredits) && parsedCredits > 0
+        ? Math.max(1, Math.round(parsedCredits))
+        : 50;
 
       const creditUpdateResult: any = await db.collection('users').findOneAndUpdate(
         { id: authenticatedUserId, auraCredits: { $gte: creditsToSpend } },

@@ -74,12 +74,16 @@ const validateHandleFormat = (handle: string): { ok: boolean; message?: string }
   return { ok: true };
 };
 
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const CREDIT_BUNDLE_CONFIG: Record<string, { credits: number; price: number }> = {
   'Nano Pulse': { credits: 100, price: 9.99 },
   'Neural Spark': { credits: 500, price: 39.99 },
   'Neural Surge': { credits: 2000, price: 149.99 },
   'Universal Core': { credits: 5000, price: 349.99 }
 };
+
+const SIGNUP_BONUS_CREDITS = 100;
 
 const USER_SELF_UPDATE_ALLOWLIST = new Set<string>([
   'firstName',
@@ -631,9 +635,12 @@ export const usersController = {
   // POST /api/users - Create new user
   createUser: async (req: Request, res: Response) => {
     try {
-      const userData = req.body;
+      const userData = req.body || {};
+      const firstName = typeof userData.firstName === 'string' ? userData.firstName.trim() : '';
+      const lastName = typeof userData.lastName === 'string' ? userData.lastName.trim() : '';
+      const normalizedEmail = typeof userData.email === 'string' ? userData.email.trim().toLowerCase() : '';
 
-      if (!userData.firstName || !userData.lastName || !userData.email) {
+      if (!firstName || !lastName || !normalizedEmail) {
         return res.status(400).json({
           success: false,
           error: 'Missing required fields',
@@ -644,10 +651,7 @@ export const usersController = {
       const db = getDB();
 
       const existingUser = await db.collection('users').findOne({
-        $or: [
-          { email: userData.email },
-          { handle: userData.handle }
-        ]
+        email: { $regex: new RegExp(`^${escapeRegex(normalizedEmail)}$`, 'i') }
       });
 
       if (existingUser) {
@@ -658,26 +662,28 @@ export const usersController = {
         });
       }
 
-      const uniqueHandle = await generateUniqueHandle(userData.firstName, userData.lastName);
+      const uniqueHandle = await generateUniqueHandle(firstName, lastName);
 
-      const userId = userData.id || `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const userId = `user-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
       const newUser = {
         id: userId,
-        firstName: userData.firstName,
-        lastName: userData.lastName,
-        name: userData.name || `${userData.firstName} ${userData.lastName}`,
+        firstName,
+        lastName,
+        name: `${firstName} ${lastName}`,
         handle: uniqueHandle,
-        avatar: userData.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
-        avatarType: userData.avatarType || 'image',
-        email: userData.email,
-        bio: userData.bio || '',
-        phone: userData.phone || '',
-        country: userData.country || '',
-        acquaintances: userData.acquaintances || [],
-        blockedUsers: userData.blockedUsers || [],
-        trustScore: userData.trustScore || 10,
-        auraCredits: userData.auraCredits || 100,
-        activeGlow: userData.activeGlow || 'none',
+        avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
+        avatarType: 'image',
+        email: normalizedEmail,
+        bio: typeof userData.bio === 'string' ? userData.bio : '',
+        phone: typeof userData.phone === 'string' ? userData.phone : '',
+        country: typeof userData.country === 'string' ? userData.country : '',
+        acquaintances: [],
+        blockedUsers: [],
+        trustScore: 10,
+        auraCredits: SIGNUP_BONUS_CREDITS,
+        auraCreditsSpent: 0,
+        activeGlow: 'none',
+        signupBonusGrantedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -1962,14 +1968,17 @@ export const usersController = {
     try {
       const { id } = req.params;
       const { credits, reason } = req.body;
-      const creditsToSpend = typeof credits === 'string' ? Number(credits) : credits;
+      const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
+      const creditsToSpend = typeof parsedCredits === 'number' && Number.isFinite(parsedCredits)
+        ? parsedCredits
+        : NaN;
 
       // Validate required fields
-      if (typeof creditsToSpend !== 'number' || !Number.isFinite(creditsToSpend) || creditsToSpend <= 0) {
+      if (!Number.isInteger(creditsToSpend) || creditsToSpend <= 0) {
         return res.status(400).json({
           success: false,
           error: 'Invalid credits amount',
-          message: 'credits must be a positive number'
+          message: 'credits must be a positive whole number'
         });
       }
 

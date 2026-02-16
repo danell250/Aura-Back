@@ -21,6 +21,7 @@ import { transformUser } from '../utils/userUtils';
 import { User } from '../types';
 
 const router = Router();
+const SIGNUP_BONUS_CREDITS = 100;
 
 const normalizeFrontendUrl = (value: string): string => value.trim().replace(/\/$/, '');
 const parseFrontendUrlList = (value: string | undefined): string[] => {
@@ -71,6 +72,17 @@ const normalizeUserHandle = (rawHandle: string): string => {
   const cleaned = withoutAt.replace(/[^a-z0-9_-]/g, '');
   if (!cleaned) return '';
   return `@${cleaned}`;
+};
+
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const findUserByEmail = async (email: string) => {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail) return null;
+  const db = getDB();
+  return db.collection('users').findOne({
+    email: { $regex: new RegExp(`^${escapeRegex(normalizedEmail)}$`, 'i') }
+  });
 };
 
 const validateHandleFormat = (handle: string): { ok: boolean; message?: string } => {
@@ -233,15 +245,13 @@ async (req: Request, res: Response) => {
     const frontendUrl = resolveTrustedFrontendUrl(req);
 
     if (req.user) {
-      const db = getDB();
       const userData = req.user as any;
+      const db = getDB();
 
       console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
 
       // Identify-First: Check by EMAIL
-      const existingUser = await db.collection('users').findOne({
-        email: userData.email
-      });
+      const existingUser = await findUserByEmail(userData.email);
 
       let userToReturn: User;
 
@@ -277,11 +287,14 @@ async (req: Request, res: Response) => {
 
         const newUser = {
           ...userData,
+          email: String(userData.email || '').trim().toLowerCase(),
           handle: uniqueHandle,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           lastLogin: new Date().toISOString(),
-          auraCredits: 100,
+          auraCredits: SIGNUP_BONUS_CREDITS,
+          auraCreditsSpent: 0,
+          signupBonusGrantedAt: new Date().toISOString(),
           trustScore: 10,
           activeGlow: 'none',
           acquaintances: [],
@@ -346,15 +359,13 @@ async (req: Request, res: Response) => {
   try {
     const frontendUrl = resolveTrustedFrontendUrl(req);
     if (req.user) {
-      const db = getDB();
       const userData = req.user as any;
+      const db = getDB();
 
       console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
 
       // Identify-First: Check by EMAIL
-      const existingUser = await db.collection('users').findOne({
-        email: userData.email
-      });
+      const existingUser = await findUserByEmail(userData.email);
 
       let userToReturn: User;
 
@@ -388,11 +399,14 @@ async (req: Request, res: Response) => {
 
         const newUser = {
           ...userData,
+          email: String(userData.email || '').trim().toLowerCase(),
           handle: uniqueHandle,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           lastLogin: new Date().toISOString(),
-          auraCredits: 100,
+          auraCredits: SIGNUP_BONUS_CREDITS,
+          auraCreditsSpent: 0,
+          signupBonusGrantedAt: new Date().toISOString(),
           trustScore: 10,
           activeGlow: 'none',
           acquaintances: [],
@@ -522,7 +536,7 @@ try {
   const db = getDB();
   // 4. Find or Create User
   // Identify-First: Check by EMAIL
-  const existingUser = await db.collection('users').findOne({ email: profile.email });
+  const existingUser = await findUserByEmail(profile.email);
 
   let userToReturn: User;
 
@@ -569,14 +583,16 @@ try {
       firstName: profile.given_name || 'User',
       lastName: profile.family_name || '',
       name: profile.name || 'User',
-      email: profile.email || '',
+      email: String(profile.email || '').trim().toLowerCase(),
       avatar: profile.picture || `https://ui-avatars.com/api/?name=${profile.name}&background=random`,
       avatarType: 'url',
       handle: uniqueHandle,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       lastLogin: new Date().toISOString(),
-      auraCredits: 100,
+      auraCredits: SIGNUP_BONUS_CREDITS,
+      auraCreditsSpent: 0,
+      signupBonusGrantedAt: new Date().toISOString(),
       trustScore: 10,
       activeGlow: 'none',
       acquaintances: [],
@@ -687,7 +703,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
     if (!email) return res.redirect(`${frontendUrl}/login?error=discord_no_email`);
     if (discord.verified === false) return res.redirect(`${frontendUrl}/login?error=discord_email_not_verified`);
 
-    const existingUser = await db.collection('users').findOne({ email });
+    const existingUser = await findUserByEmail(email);
 
     // Build Discord avatar URL (optional)
     const discordAvatar =
@@ -732,7 +748,9 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         lastLogin: new Date().toISOString(),
-        auraCredits: 100,
+        auraCredits: SIGNUP_BONUS_CREDITS,
+        auraCreditsSpent: 0,
+        signupBonusGrantedAt: new Date().toISOString(),
         trustScore: 10,
         activeGlow: 'none',
         acquaintances: [],
@@ -775,7 +793,7 @@ router.post("/magic-link", async (req: Request, res: Response) => {
     const db = getDB();
     const normalizedEmail = String(email).toLowerCase().trim();
     console.log('🔍 Searching for user:', normalizedEmail);
-    let user = await db.collection("users").findOne({ email: normalizedEmail });
+    let user = await findUserByEmail(normalizedEmail);
     
     // Create user if not exists (Sign Up via Magic Link)
     if (!user) {
@@ -795,7 +813,9 @@ router.post("/magic-link", async (req: Request, res: Response) => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         lastLogin: new Date().toISOString(),
-        auraCredits: 100,
+        auraCredits: SIGNUP_BONUS_CREDITS,
+        auraCreditsSpent: 0,
+        signupBonusGrantedAt: new Date().toISOString(),
         trustScore: 10,
         activeGlow: 'none',
         acquaintances: [],
@@ -856,7 +876,7 @@ router.post("/magic-link/verify", async (req: Request, res: Response) => {
 
     const db = getDB();
     const normalizedEmail = String(email).toLowerCase().trim();
-    const user = await db.collection("users").findOne({ email: normalizedEmail }) as any;
+    const user = await findUserByEmail(normalizedEmail) as any;
 
     if (!user?.magicLinkTokenHash || !user?.magicLinkExpiresAt) {
       return res.status(401).json({ success: false, message: "Invalid or expired link" });
@@ -1099,9 +1119,7 @@ router.get('/github/callback',
         console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
 
         // Identify-First: Check by EMAIL
-        const existingUser = await db.collection('users').findOne({
-          email: userData.email
-        });
+        const existingUser = await findUserByEmail(userData.email);
 
         let userToReturn: User;
 
@@ -1137,11 +1155,14 @@ router.get('/github/callback',
 
           const newUser = {
             ...userData,
+            email: String(userData.email || '').trim().toLowerCase(),
             handle: uniqueHandle,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             lastLogin: new Date().toISOString(),
-            auraCredits: 100,
+            auraCredits: SIGNUP_BONUS_CREDITS,
+            auraCreditsSpent: 0,
+            signupBonusGrantedAt: new Date().toISOString(),
             trustScore: 10,
             activeGlow: 'none',
             acquaintances: [],
@@ -1476,7 +1497,9 @@ router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
       handle: normalizedHandle,
       bio: bio?.trim() || '',
       trustScore: 10,
-      auraCredits: 100,
+      auraCredits: SIGNUP_BONUS_CREDITS,
+      auraCreditsSpent: 0,
+      signupBonusGrantedAt: new Date().toISOString(),
       activeGlow: 'none',
       acquaintances: [],
       blockedUsers: [],
@@ -1531,9 +1554,7 @@ router.post('/register', async (req: Request, res: Response) => {
     const db = getDB();
     const normalizedEmail = email.toLowerCase().trim();
 
-    const existingUser = await db.collection('users').findOne({
-      email: normalizedEmail
-    });
+    const existingUser = await findUserByEmail(normalizedEmail);
 
     if (existingUser) {
       return res.status(409).json({
@@ -1588,7 +1609,9 @@ router.post('/register', async (req: Request, res: Response) => {
       acquaintances: [],
       blockedUsers: [],
       trustScore: 10,
-      auraCredits: 100,
+      auraCredits: SIGNUP_BONUS_CREDITS,
+      auraCreditsSpent: 0,
+      signupBonusGrantedAt: new Date().toISOString(),
       activeGlow: 'none',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

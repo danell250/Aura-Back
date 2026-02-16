@@ -2088,7 +2088,9 @@ export const postsController = {
       }
 
       const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
-      const creditsToSpend = typeof parsedCredits === 'number' && parsedCredits > 0 ? parsedCredits : 100;
+      const creditsToSpend = typeof parsedCredits === 'number' && Number.isFinite(parsedCredits) && parsedCredits > 0
+        ? Math.max(1, Math.round(parsedCredits))
+        : 100;
 
       const creditUpdateResult: any = await db.collection(USERS_COLLECTION).findOneAndUpdate(
         { id: userId, auraCredits: { $gte: creditsToSpend } },

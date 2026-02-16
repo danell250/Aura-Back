@@ -1695,7 +1695,9 @@ exports.postsController = {
                 return res.status(404).json({ success: false, error: 'Post not found' });
             }
             const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
-            const creditsToSpend = typeof parsedCredits === 'number' && parsedCredits > 0 ? parsedCredits : 100;
+            const creditsToSpend = typeof parsedCredits === 'number' && Number.isFinite(parsedCredits) && parsedCredits > 0
+                ? Math.max(1, Math.round(parsedCredits))
+                : 100;
             const creditUpdateResult = yield db.collection(USERS_COLLECTION).findOneAndUpdate({ id: userId, auraCredits: { $gte: creditsToSpend } }, {
                 $inc: { auraCredits: -creditsToSpend, auraCreditsSpent: creditsToSpend },
                 $set: { updatedAt: new Date().toISOString() }
