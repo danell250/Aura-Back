@@ -3,6 +3,7 @@ import { getDB } from '../db';
 import { requireAuth } from '../middleware/authMiddleware';
 import { sendCompanyInviteEmail } from '../services/emailService';
 import { createNotificationInDB } from '../controllers/notificationsController';
+import { getAuthorInsightsSnapshot } from '../controllers/postsController';
 import crypto from 'crypto';
 import { Company } from '../types';
 import { transformUser } from '../utils/userUtils';
@@ -134,6 +135,13 @@ const syncCompanySubscriberState = async (db: any, companyId: string) => {
   return { subscribers, blockedSubscriberIds, subscriberCount: subscribers.length };
 };
 
+const mapAnalyticsPlanLevel = (packageId?: string): 'none' | 'basic' | 'creator' | 'deep' => {
+  if (packageId === 'pkg-enterprise') return 'deep';
+  if (packageId === 'pkg-pro') return 'creator';
+  if (packageId === 'pkg-starter') return 'basic';
+  return 'none';
+};
+
 // GET /api/companies/me - Get companies the current user belongs to
 router.get('/me', requireAuth, async (req, res) => {
   try {
@@ -173,6 +181,66 @@ router.get('/me', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Get my companies error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch your corporate identities' });
+  }
+});
+
+// GET /api/companies/:companyId/dashboard - Get company profile analytics dashboard data
+router.get('/:companyId/dashboard', requireAuth, async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const currentUser = (req as any).user;
+    const db = getDB();
+
+    const access = await resolveCompanyAccess(db, companyId, currentUser.id, 'moderator');
+    if (!access.allowed) {
+      return res.status(access.status || 403).json({ success: false, error: access.error || 'Unauthorized' });
+    }
+
+    const [snapshot, activeSub] = await Promise.all([
+      getAuthorInsightsSnapshot(companyId, 'company'),
+      db.collection('adSubscriptions').findOne({
+        status: 'active',
+        $or: [
+          { ownerId: companyId, ownerType: 'company' },
+          { userId: companyId, ownerType: 'company' }
+        ],
+        $and: [
+          {
+            $or: [
+              { endDate: { $exists: false } },
+              { endDate: { $gt: Date.now() } }
+            ]
+          }
+        ]
+      })
+    ]);
+
+    const fallbackData = {
+      totals: {
+        totalPosts: 0,
+        totalViews: 0,
+        boostedPosts: 0,
+        totalRadiance: 0
+      },
+      credits: {
+        balance: 0,
+        spent: 0
+      },
+      topPosts: [],
+      neuralInsights: {}
+    };
+
+    return res.json({
+      success: true,
+      data: snapshot || fallbackData,
+      planLevel: mapAnalyticsPlanLevel(activeSub?.packageId)
+    });
+  } catch (error) {
+    console.error('Get company dashboard error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch company dashboard data'
+    });
   }
 });
 

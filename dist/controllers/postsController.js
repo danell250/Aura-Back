@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.postsController = exports.emitAuthorInsightsUpdate = void 0;
+exports.postsController = exports.emitAuthorInsightsUpdate = exports.getAuthorInsightsSnapshot = void 0;
 const db_1 = require("../db");
 const hashtagUtils_1 = require("../utils/hashtagUtils");
 const notificationsController_1 = require("./notificationsController");
@@ -18,6 +18,7 @@ const userUtils_1 = require("../utils/userUtils");
 const identityUtils_1 = require("../utils/identityUtils");
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
+const COMPANIES_COLLECTION = 'companies';
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 const POST_UPDATE_ALLOWLIST = new Set([
     'content',
@@ -304,26 +305,52 @@ const buildLiveNeuralInsights = (totals, topPosts, adImpressions, adClicks, coun
         }
     };
 };
-const emitAuthorInsightsUpdate = (app_1, authorId_1, ...args_1) => __awaiter(void 0, [app_1, authorId_1, ...args_1], void 0, function* (app, authorId, authorType = 'user') {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
-    try {
-        if (!authorId || authorType !== 'user')
-            return;
-        const io = (app === null || app === void 0 ? void 0 : app.get) && app.get('io');
-        if (!io || typeof io.to !== 'function') {
-            console.warn('⚠️ Cannot emit analytics update: Socket.IO (io) not found on app');
-            return;
-        }
-        const db = (0, db_1.getDB)();
-        const personalAuthorMatch = {
+const buildAuthorPostMatch = (authorId, authorType) => {
+    if (authorType === 'company') {
+        return {
             'author.id': authorId,
             $or: [
-                { 'author.type': 'user' },
-                { 'author.type': { $exists: false } },
-            ],
+                { 'author.type': 'company' },
+                { ownerType: 'company' },
+                { $and: [{ 'author.type': { $exists: false } }, { ownerType: 'company' }] }
+            ]
         };
-        const [agg] = yield db.collection(POSTS_COLLECTION).aggregate([
-            { $match: personalAuthorMatch },
+    }
+    return {
+        'author.id': authorId,
+        $or: [
+            { 'author.type': 'user' },
+            { 'author.type': { $exists: false } },
+        ],
+    };
+};
+const buildAuthorAdAnalyticsMatch = (authorId, authorType) => {
+    if (authorType === 'company') {
+        return {
+            $or: [
+                { ownerId: authorId, ownerType: 'company' },
+                { userId: authorId, ownerType: 'company' }
+            ]
+        };
+    }
+    return {
+        $or: [
+            { ownerId: authorId, ownerType: 'user' },
+            { ownerId: authorId, ownerType: { $exists: false } },
+            { userId: authorId }
+        ]
+    };
+};
+const getAuthorInsightsSnapshot = (authorId_1, ...args_1) => __awaiter(void 0, [authorId_1, ...args_1], void 0, function* (authorId, authorType = 'user') {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
+    if (!authorId)
+        return null;
+    const db = (0, db_1.getDB)();
+    const authorPostMatch = buildAuthorPostMatch(authorId, authorType);
+    const authorCollection = authorType === 'company' ? COMPANIES_COLLECTION : USERS_COLLECTION;
+    const [aggRows, topPosts, owner, adAgg] = yield Promise.all([
+        db.collection(POSTS_COLLECTION).aggregate([
+            { $match: authorPostMatch },
             {
                 $group: {
                     _id: null,
@@ -333,68 +360,76 @@ const emitAuthorInsightsUpdate = (app_1, authorId_1, ...args_1) => __awaiter(voi
                     totalRadiance: { $sum: { $ifNull: ['$radiance', 0] } }
                 }
             }
-        ]).toArray();
-        const topPosts = yield db.collection(POSTS_COLLECTION)
-            .find(personalAuthorMatch)
+        ]).toArray(),
+        db.collection(POSTS_COLLECTION)
+            .find(authorPostMatch)
             .project({ id: 1, content: 1, viewCount: 1, timestamp: 1, isBoosted: 1, radiance: 1 })
             .sort({ viewCount: -1 })
             .limit(5)
-            .toArray();
-        const [user, adAgg] = yield Promise.all([
-            db.collection(USERS_COLLECTION).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1 } }),
-            db.collection('adAnalytics').aggregate([
-                {
-                    $match: {
-                        $or: [
-                            { ownerId: authorId, ownerType: 'user' },
-                            { ownerId: authorId, ownerType: { $exists: false } },
-                            { userId: authorId }
-                        ]
-                    }
-                },
-                {
-                    $group: {
-                        _id: null,
-                        totalImpressions: { $sum: { $ifNull: ['$impressions', 0] } },
-                        totalClicks: { $sum: { $ifNull: ['$clicks', 0] } }
-                    }
+            .toArray(),
+        db.collection(authorCollection).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1, location: 1 } }),
+        db.collection('adAnalytics').aggregate([
+            { $match: buildAuthorAdAnalyticsMatch(authorId, authorType) },
+            {
+                $group: {
+                    _id: null,
+                    totalImpressions: { $sum: { $ifNull: ['$impressions', 0] } },
+                    totalClicks: { $sum: { $ifNull: ['$clicks', 0] } }
                 }
-            ]).toArray().then(rows => rows[0] || null)
-        ]);
-        const totals = {
-            totalPosts: (_a = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _a !== void 0 ? _a : 0,
-            totalViews: (_b = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _b !== void 0 ? _b : 0,
-            boostedPosts: (_c = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _c !== void 0 ? _c : 0,
-            totalRadiance: (_d = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _d !== void 0 ? _d : 0
-        };
-        const mappedTopPosts = topPosts.map((p) => {
-            var _a, _b;
-            return ({
-                id: p.id,
-                preview: (p.content || '').slice(0, 120),
-                views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
-                timestamp: p.timestamp,
-                isBoosted: !!p.isBoosted,
-                radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
-            });
-        });
-        const neuralInsights = buildLiveNeuralInsights(totals, mappedTopPosts, (_e = adAgg === null || adAgg === void 0 ? void 0 : adAgg.totalImpressions) !== null && _e !== void 0 ? _e : 0, (_f = adAgg === null || adAgg === void 0 ? void 0 : adAgg.totalClicks) !== null && _f !== void 0 ? _f : 0, user === null || user === void 0 ? void 0 : user.country);
-        // If we have access to the app and it has an 'io' instance, emit the update
-        console.log(`📡 Emitting live analytics update to user: ${authorId} (Total views: ${(_g = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _g !== void 0 ? _g : 0})`);
-        const result = io.to(authorId).emit('analytics_update', {
-            userId: authorId,
-            stats: {
-                totals,
-                credits: {
-                    balance: (_h = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _h !== void 0 ? _h : 0,
-                    spent: (_j = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _j !== void 0 ? _j : 0
-                },
-                topPosts: mappedTopPosts,
-                neuralInsights
             }
+        ]).toArray().then(rows => rows[0] || null)
+    ]);
+    const agg = aggRows[0];
+    const totals = {
+        totalPosts: (_a = agg === null || agg === void 0 ? void 0 : agg.totalPosts) !== null && _a !== void 0 ? _a : 0,
+        totalViews: (_b = agg === null || agg === void 0 ? void 0 : agg.totalViews) !== null && _b !== void 0 ? _b : 0,
+        boostedPosts: (_c = agg === null || agg === void 0 ? void 0 : agg.boostedPosts) !== null && _c !== void 0 ? _c : 0,
+        totalRadiance: (_d = agg === null || agg === void 0 ? void 0 : agg.totalRadiance) !== null && _d !== void 0 ? _d : 0
+    };
+    const mappedTopPosts = topPosts.map((p) => {
+        var _a, _b;
+        return ({
+            id: p.id,
+            preview: (p.content || '').slice(0, 120),
+            views: (_a = p.viewCount) !== null && _a !== void 0 ? _a : 0,
+            timestamp: p.timestamp,
+            isBoosted: !!p.isBoosted,
+            radiance: (_b = p.radiance) !== null && _b !== void 0 ? _b : 0
         });
+    });
+    const neuralInsights = buildLiveNeuralInsights(totals, mappedTopPosts, (_e = adAgg === null || adAgg === void 0 ? void 0 : adAgg.totalImpressions) !== null && _e !== void 0 ? _e : 0, (_f = adAgg === null || adAgg === void 0 ? void 0 : adAgg.totalClicks) !== null && _f !== void 0 ? _f : 0, (owner === null || owner === void 0 ? void 0 : owner.country) || (owner === null || owner === void 0 ? void 0 : owner.location));
+    return {
+        totals,
+        credits: {
+            balance: (_g = owner === null || owner === void 0 ? void 0 : owner.auraCredits) !== null && _g !== void 0 ? _g : 0,
+            spent: (_h = owner === null || owner === void 0 ? void 0 : owner.auraCreditsSpent) !== null && _h !== void 0 ? _h : 0
+        },
+        topPosts: mappedTopPosts,
+        neuralInsights
+    };
+});
+exports.getAuthorInsightsSnapshot = getAuthorInsightsSnapshot;
+const emitAuthorInsightsUpdate = (app_1, authorId_1, ...args_1) => __awaiter(void 0, [app_1, authorId_1, ...args_1], void 0, function* (app, authorId, authorType = 'user') {
+    var _a;
+    try {
+        if (!authorId)
+            return;
+        const io = (app === null || app === void 0 ? void 0 : app.get) && app.get('io');
+        if (!io || typeof io.to !== 'function') {
+            console.warn('⚠️ Cannot emit analytics update: Socket.IO (io) not found on app');
+            return;
+        }
+        const snapshot = yield (0, exports.getAuthorInsightsSnapshot)(authorId, authorType);
+        if (!snapshot)
+            return;
+        const room = authorType === 'company' ? `company_${authorId}` : authorId;
+        const payload = authorType === 'company'
+            ? { companyId: authorId, stats: snapshot }
+            : { userId: authorId, stats: snapshot };
+        console.log(`📡 Emitting live analytics update to ${authorType}: ${authorId} (Total views: ${(_a = snapshot.totals.totalViews) !== null && _a !== void 0 ? _a : 0})`);
+        const result = io.to(room).emit('analytics_update', payload);
         if (!result) {
-            console.warn(`⚠️ Socket emission to room ${authorId} returned false`);
+            console.warn(`⚠️ Socket emission to room ${room} returned false`);
         }
     }
     catch (err) {

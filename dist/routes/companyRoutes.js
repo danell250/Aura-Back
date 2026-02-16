@@ -17,6 +17,7 @@ const db_1 = require("../db");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const emailService_1 = require("../services/emailService");
 const notificationsController_1 = require("../controllers/notificationsController");
+const postsController_1 = require("../controllers/postsController");
 const crypto_1 = __importDefault(require("crypto"));
 const userUtils_1 = require("../utils/userUtils");
 // Helper to generate unique handle for company
@@ -112,6 +113,15 @@ const syncCompanySubscriberState = (db, companyId) => __awaiter(void 0, void 0, 
     });
     return { subscribers, blockedSubscriberIds, subscriberCount: subscribers.length };
 });
+const mapAnalyticsPlanLevel = (packageId) => {
+    if (packageId === 'pkg-enterprise')
+        return 'deep';
+    if (packageId === 'pkg-pro')
+        return 'creator';
+    if (packageId === 'pkg-starter')
+        return 'basic';
+    return 'none';
+};
 // GET /api/companies/me - Get companies the current user belongs to
 router.get('/me', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -145,6 +155,62 @@ router.get('/me', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, 
     catch (error) {
         console.error('Get my companies error:', error);
         res.status(500).json({ success: false, error: 'Failed to fetch your corporate identities' });
+    }
+}));
+// GET /api/companies/:companyId/dashboard - Get company profile analytics dashboard data
+router.get('/:companyId/dashboard', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { companyId } = req.params;
+        const currentUser = req.user;
+        const db = (0, db_1.getDB)();
+        const access = yield resolveCompanyAccess(db, companyId, currentUser.id, 'moderator');
+        if (!access.allowed) {
+            return res.status(access.status || 403).json({ success: false, error: access.error || 'Unauthorized' });
+        }
+        const [snapshot, activeSub] = yield Promise.all([
+            (0, postsController_1.getAuthorInsightsSnapshot)(companyId, 'company'),
+            db.collection('adSubscriptions').findOne({
+                status: 'active',
+                $or: [
+                    { ownerId: companyId, ownerType: 'company' },
+                    { userId: companyId, ownerType: 'company' }
+                ],
+                $and: [
+                    {
+                        $or: [
+                            { endDate: { $exists: false } },
+                            { endDate: { $gt: Date.now() } }
+                        ]
+                    }
+                ]
+            })
+        ]);
+        const fallbackData = {
+            totals: {
+                totalPosts: 0,
+                totalViews: 0,
+                boostedPosts: 0,
+                totalRadiance: 0
+            },
+            credits: {
+                balance: 0,
+                spent: 0
+            },
+            topPosts: [],
+            neuralInsights: {}
+        };
+        return res.json({
+            success: true,
+            data: snapshot || fallbackData,
+            planLevel: mapAnalyticsPlanLevel(activeSub === null || activeSub === void 0 ? void 0 : activeSub.packageId)
+        });
+    }
+    catch (error) {
+        console.error('Get company dashboard error:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to fetch company dashboard data'
+        });
     }
 }));
 // POST /api/companies - Create a new company
