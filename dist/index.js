@@ -74,7 +74,7 @@ const privacyRoutes_1 = __importDefault(require("./routes/privacyRoutes"));
 const shareRoutes_1 = __importDefault(require("./routes/shareRoutes"));
 const mediaRoutes_1 = __importDefault(require("./routes/mediaRoutes"));
 const companyRoutes_1 = __importDefault(require("./routes/companyRoutes"));
-const reportsRoutes_1 = __importDefault(require("./routes/reportsRoutes"));
+const reportsRoutes_1 = __importStar(require("./routes/reportsRoutes"));
 const ownerControlRoutes_1 = __importDefault(require("./routes/ownerControlRoutes"));
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const path_1 = __importDefault(require("path"));
@@ -993,7 +993,7 @@ function startServer() {
                     credentials: true,
                     methods: ["GET", "POST"]
                 },
-                transports: ['websocket'],
+                transports: ['websocket', 'polling'],
                 path: '/socket.io/',
                 pingInterval: 25000,
                 pingTimeout: 20000,
@@ -1362,6 +1362,8 @@ function startServer() {
                 }
                 else {
                     console.log('✅ Database connection established');
+                    (0, reportsRoutes_1.startReportScheduleWorker)();
+                    console.log('📬 Scheduled report worker started');
                     const shouldSeedDemoData = process.env.NODE_ENV !== 'production' &&
                         process.env.DISABLE_DEMO_SEEDING !== 'true';
                     if (shouldSeedDemoData) {

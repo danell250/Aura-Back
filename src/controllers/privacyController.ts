@@ -468,9 +468,32 @@ export const privacyController = {
       
       const user = await db.collection('users').findOne({ id: userId });
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          error: 'User not found'
+        const company = await db.collection('companies').findOne(
+          { id: userId, legacyArchived: { $ne: true } },
+          { projection: { id: 1, name: 1, lastLogin: 1, updatedAt: 1 } }
+        );
+
+        if (!company) {
+          return res.json({
+            success: true,
+            data: {
+              userId,
+              isOnline: false,
+              showStatus: false
+            },
+            message: 'Online status unavailable for this identity'
+          });
+        }
+
+        return res.json({
+          success: true,
+          data: {
+            userId: company.id,
+            isOnline: false,
+            showStatus: false,
+            lastSeen: company.lastLogin || company.updatedAt
+          },
+          message: 'Company online status is hidden'
         });
       }
 

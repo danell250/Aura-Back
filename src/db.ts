@@ -141,6 +141,16 @@ export async function connectDB(): Promise<Db | null> {
         console.warn("⚠️  Warning: Could not initialize post indexes:", postIndexError);
       }
 
+      // Initialize scheduled report indexes
+      try {
+        await db.collection('reportSchedules').createIndex({ id: 1 }, { unique: true });
+        await db.collection('reportSchedules').createIndex({ ownerId: 1, ownerType: 1, status: 1 });
+        await db.collection('reportSchedules').createIndex({ status: 1, nextRunAt: 1, processing: 1 });
+        console.log("✅ Report schedule indexes initialized");
+      } catch (reportIndexError) {
+        console.warn("⚠️  Warning: Could not initialize report schedule indexes:", reportIndexError);
+      }
+
       // Initialize payment/idempotency indexes
       try {
         await db.collection('transactions').createIndex(

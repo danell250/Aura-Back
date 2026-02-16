@@ -644,6 +644,9 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
     const inviteId = insertResult.insertedId.toString();
 
     const companyName = company.name || 'A Company';
+    const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${token}`;
+    let emailDelivered = false;
+    let emailDeliveryIssue: string | undefined;
 
     if (invitedUser) {
       await createNotificationInDB(
@@ -656,14 +659,41 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
         { inviteId, companyId, role, token }
       );
       console.log(`🔔 Notification sent to existing user ${invitedUser.id} for company invite`);
-    } else {
-      // If the user doesn't exist, send them an email invite link
-      const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${token}`;
-      await sendCompanyInviteEmail(invite.email, companyName, inviteUrl);
-      console.log(`✉️ Email invite sent to new user ${invite.email}`);
+    }
+    try {
+      const delivery = await sendCompanyInviteEmail(invite.email, companyName, inviteUrl);
+      emailDelivered = delivery.delivered;
+      emailDeliveryIssue = delivery.reason;
+      if (emailDelivered) {
+        console.log(`✉️ Company invite email sent to ${invite.email}`);
+      } else {
+        console.warn(`⚠️ Company invite email not delivered for ${invite.email}: ${delivery.reason || 'delivery disabled'}`);
+      }
+    } catch (emailError: any) {
+      emailDeliveryIssue = emailError?.message || 'Email delivery failed';
+      console.error(`❌ Failed to send company invite email to ${invite.email}:`, emailError);
     }
 
-    res.json({ success: true, message: 'Invite sent successfully' });
+    if (!emailDelivered) {
+      return res.status(202).json({
+        success: true,
+        message: 'Invite created, but email delivery is not active. Verify SendGrid settings.',
+        data: {
+          inviteId,
+          emailDelivered: false,
+          emailDeliveryIssue
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Invite sent successfully',
+      data: {
+        inviteId,
+        emailDelivered: true
+      }
+    });
   } catch (error) {
     console.error('Create invite error:', error);
     res.status(500).json({ success: false, error: 'Failed to create invite' });
@@ -788,6 +818,9 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
     );
 
     const companyName = company.name || 'A Company';
+    const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${invite.token}`;
+    let emailDelivered = false;
+    let emailDeliveryIssue: string | undefined;
 
     if (invite.targetUserId) {
       await createNotificationInDB(
@@ -799,12 +832,37 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
         undefined,
         { inviteId: invite._id.toString(), companyId, role: invite.role, token: invite.token }
       );
-    } else {
-      const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${invite.token}`;
-      await sendCompanyInviteEmail(invite.email, companyName, inviteUrl);
+    }
+    try {
+      const delivery = await sendCompanyInviteEmail(invite.email, companyName, inviteUrl);
+      emailDelivered = delivery.delivered;
+      emailDeliveryIssue = delivery.reason;
+      if (!emailDelivered) {
+        console.warn(`⚠️ Resent invite email not delivered for ${invite.email}: ${delivery.reason || 'delivery disabled'}`);
+      }
+    } catch (emailError: any) {
+      emailDeliveryIssue = emailError?.message || 'Email delivery failed';
+      console.error(`❌ Failed to resend company invite email to ${invite.email}:`, emailError);
     }
 
-    res.json({ success: true, message: 'Invite resent successfully' });
+    if (!emailDelivered) {
+      return res.status(202).json({
+        success: true,
+        message: 'Invite was resent in-app, but email delivery is not active. Verify SendGrid settings.',
+        data: {
+          emailDelivered: false,
+          emailDeliveryIssue
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Invite resent successfully',
+      data: {
+        emailDelivered: true
+      }
+    });
   } catch (error) {
     console.error('Resend invite error:', error);
     res.status(500).json({ success: false, error: 'Failed to resend invite' });

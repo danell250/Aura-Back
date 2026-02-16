@@ -2,6 +2,15 @@ import sgMail from '@sendgrid/mail';
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY || '');
 
+export interface EmailDeliveryResult {
+  delivered: boolean;
+  provider: 'sendgrid' | 'disabled';
+  reason?: string;
+}
+
+export const isEmailDeliveryConfigured = () =>
+  typeof process.env.SENDGRID_API_KEY === 'string' && process.env.SENDGRID_API_KEY.trim().length > 0;
+
 export async function sendMagicLinkEmail(to: string, magicLink: string) {
   // Configured as per request: using SENDGRID_FROM_NAME and SENDGRID_FROM_EMAIL
   const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
@@ -43,17 +52,21 @@ export async function sendMagicLinkEmail(to: string, magicLink: string) {
   }
 }
 
-export async function sendCompanyInviteEmail(to: string, companyName: string, inviteUrl: string) {
+export async function sendCompanyInviteEmail(to: string, companyName: string, inviteUrl: string): Promise<EmailDeliveryResult> {
   const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
   
-  if (!process.env.SENDGRID_API_KEY) {
+  if (!isEmailDeliveryConfigured()) {
     console.warn('⚠️ SendGrid credentials not found. Company invite will be logged to console only.');
     console.log('--- COMPANY INVITE ---');
     console.log(`To: ${to}`);
     console.log(`Company: ${companyName}`);
     console.log(`URL: ${inviteUrl}`);
     console.log('----------------------');
-    return;
+    return {
+      delivered: false,
+      provider: 'disabled',
+      reason: 'SENDGRID_API_KEY is not configured'
+    };
   }
 
   try {
@@ -80,6 +93,10 @@ export async function sendCompanyInviteEmail(to: string, companyName: string, in
       `,
     });
     console.log('✓ Company invite email sent via SendGrid to:', to);
+    return {
+      delivered: true,
+      provider: 'sendgrid'
+    };
   } catch (error: any) {
     console.error('Error sending company invite email:', error);
     throw error;
@@ -117,8 +134,8 @@ const safeNumber = (value: unknown, digits = 2) => {
   return numberValue.toFixed(digits);
 };
 
-export async function sendReportPreviewEmail(to: string, payload: ReportPreviewPayload) {
-  const from = `${process.env.SENDGRID_REPORTS_FROM_NAME || 'Aura Reports'} <${process.env.SENDGRID_REPORTS_FROM_EMAIL || 'reports@aura.net.za'}>`;
+export async function sendReportPreviewEmail(to: string, payload: ReportPreviewPayload): Promise<EmailDeliveryResult> {
+  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
 
   const metricReach = Number(payload.metrics?.reach || 0).toLocaleString();
   const metricCtr = safeNumber(payload.metrics?.ctr, 2);
@@ -137,14 +154,18 @@ export async function sendReportPreviewEmail(to: string, payload: ReportPreviewP
     : '';
   const shouldAttachPdf = deliveryMode === 'pdf_attachment' && attachmentContent.length > 0;
 
-  if (!process.env.SENDGRID_API_KEY) {
+  if (!isEmailDeliveryConfigured()) {
     console.warn('⚠️ SendGrid credentials not found. Report preview email will be logged to console only.');
     console.log('--- REPORT PREVIEW EMAIL ---');
     console.log(`To: ${to}`);
     console.log(`Period: ${periodLabel}`);
     console.log(`Scope: ${scopeLabel}`);
     console.log('----------------------------');
-    return;
+    return {
+      delivered: false,
+      provider: 'disabled',
+      reason: 'SENDGRID_API_KEY is not configured'
+    };
   }
 
   try {
@@ -200,6 +221,10 @@ export async function sendReportPreviewEmail(to: string, payload: ReportPreviewP
 
     await sgMail.send(message);
     console.log('✓ Report preview email sent via SendGrid to:', to);
+    return {
+      delivered: true,
+      provider: 'sendgrid'
+    };
   } catch (error: any) {
     console.error('Error sending report preview email:', error);
     if (error.response) {

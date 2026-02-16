@@ -141,6 +141,16 @@ function connectDB() {
                 catch (postIndexError) {
                     console.warn("⚠️  Warning: Could not initialize post indexes:", postIndexError);
                 }
+                // Initialize scheduled report indexes
+                try {
+                    yield db.collection('reportSchedules').createIndex({ id: 1 }, { unique: true });
+                    yield db.collection('reportSchedules').createIndex({ ownerId: 1, ownerType: 1, status: 1 });
+                    yield db.collection('reportSchedules').createIndex({ status: 1, nextRunAt: 1, processing: 1 });
+                    console.log("✅ Report schedule indexes initialized");
+                }
+                catch (reportIndexError) {
+                    console.warn("⚠️  Warning: Could not initialize report schedule indexes:", reportIndexError);
+                }
                 // Initialize payment/idempotency indexes
                 try {
                     yield db.collection('transactions').createIndex({ type: 1, paymentReferenceKey: 1 }, {

@@ -12,11 +12,14 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.isEmailDeliveryConfigured = void 0;
 exports.sendMagicLinkEmail = sendMagicLinkEmail;
 exports.sendCompanyInviteEmail = sendCompanyInviteEmail;
 exports.sendReportPreviewEmail = sendReportPreviewEmail;
 const mail_1 = __importDefault(require("@sendgrid/mail"));
 mail_1.default.setApiKey(process.env.SENDGRID_API_KEY || '');
+const isEmailDeliveryConfigured = () => typeof process.env.SENDGRID_API_KEY === 'string' && process.env.SENDGRID_API_KEY.trim().length > 0;
+exports.isEmailDeliveryConfigured = isEmailDeliveryConfigured;
 function sendMagicLinkEmail(to, magicLink) {
     return __awaiter(this, void 0, void 0, function* () {
         // Configured as per request: using SENDGRID_FROM_NAME and SENDGRID_FROM_EMAIL
@@ -61,14 +64,18 @@ function sendMagicLinkEmail(to, magicLink) {
 function sendCompanyInviteEmail(to, companyName, inviteUrl) {
     return __awaiter(this, void 0, void 0, function* () {
         const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
-        if (!process.env.SENDGRID_API_KEY) {
+        if (!(0, exports.isEmailDeliveryConfigured)()) {
             console.warn('⚠️ SendGrid credentials not found. Company invite will be logged to console only.');
             console.log('--- COMPANY INVITE ---');
             console.log(`To: ${to}`);
             console.log(`Company: ${companyName}`);
             console.log(`URL: ${inviteUrl}`);
             console.log('----------------------');
-            return;
+            return {
+                delivered: false,
+                provider: 'disabled',
+                reason: 'SENDGRID_API_KEY is not configured'
+            };
         }
         try {
             yield mail_1.default.send({
@@ -94,6 +101,10 @@ function sendCompanyInviteEmail(to, companyName, inviteUrl) {
       `,
             });
             console.log('✓ Company invite email sent via SendGrid to:', to);
+            return {
+                delivered: true,
+                provider: 'sendgrid'
+            };
         }
         catch (error) {
             console.error('Error sending company invite email:', error);
@@ -115,7 +126,7 @@ const safeNumber = (value, digits = 2) => {
 function sendReportPreviewEmail(to, payload) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c, _d, _e, _f, _g, _h;
-        const from = `${process.env.SENDGRID_REPORTS_FROM_NAME || 'Aura Reports'} <${process.env.SENDGRID_REPORTS_FROM_EMAIL || 'reports@aura.net.za'}>`;
+        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
         const metricReach = Number(((_a = payload.metrics) === null || _a === void 0 ? void 0 : _a.reach) || 0).toLocaleString();
         const metricCtr = safeNumber((_b = payload.metrics) === null || _b === void 0 ? void 0 : _b.ctr, 2);
         const metricClicks = Number(((_c = payload.metrics) === null || _c === void 0 ? void 0 : _c.clicks) || 0).toLocaleString();
@@ -132,14 +143,18 @@ function sendReportPreviewEmail(to, payload) {
             ? payload.pdfAttachment.contentBase64.replace(/^data:application\/pdf;base64,/, '').trim()
             : '';
         const shouldAttachPdf = deliveryMode === 'pdf_attachment' && attachmentContent.length > 0;
-        if (!process.env.SENDGRID_API_KEY) {
+        if (!(0, exports.isEmailDeliveryConfigured)()) {
             console.warn('⚠️ SendGrid credentials not found. Report preview email will be logged to console only.');
             console.log('--- REPORT PREVIEW EMAIL ---');
             console.log(`To: ${to}`);
             console.log(`Period: ${periodLabel}`);
             console.log(`Scope: ${scopeLabel}`);
             console.log('----------------------------');
-            return;
+            return {
+                delivered: false,
+                provider: 'disabled',
+                reason: 'SENDGRID_API_KEY is not configured'
+            };
         }
         try {
             const message = {
@@ -192,6 +207,10 @@ function sendReportPreviewEmail(to, payload) {
             }
             yield mail_1.default.send(message);
             console.log('✓ Report preview email sent via SendGrid to:', to);
+            return {
+                delivered: true,
+                provider: 'sendgrid'
+            };
         }
         catch (error) {
             console.error('Error sending report preview email:', error);

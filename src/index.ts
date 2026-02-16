@@ -26,7 +26,7 @@ import privacyRoutes from './routes/privacyRoutes';
 import shareRoutes from './routes/shareRoutes';
 import mediaRoutes from './routes/mediaRoutes';
 import companyRoutes from './routes/companyRoutes';
-import reportsRoutes from './routes/reportsRoutes';
+import reportsRoutes, { startReportScheduleWorker } from './routes/reportsRoutes';
 import ownerControlRoutes from './routes/ownerControlRoutes';
 import { attachUser, requireAuth } from './middleware/authMiddleware';
 import path from 'path';
@@ -1031,7 +1031,7 @@ async function startServer() {
         credentials: true,
         methods: ["GET", "POST"]
       },
-      transports: ['websocket'],
+      transports: ['websocket', 'polling'],
       path: '/socket.io/',
       pingInterval: 25000,
       pingTimeout: 20000,
@@ -1472,6 +1472,8 @@ async function startServer() {
         console.warn('⚠️  Database connection not available. Some features will be unavailable until DB reconnects.');
       } else {
         console.log('✅ Database connection established');
+        startReportScheduleWorker();
+        console.log('📬 Scheduled report worker started');
 
         const shouldSeedDemoData =
           process.env.NODE_ENV !== 'production' &&
