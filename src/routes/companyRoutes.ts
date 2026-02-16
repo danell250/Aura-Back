@@ -44,6 +44,41 @@ const normalizeUniqueIds = (input: unknown): string[] => {
   ));
 };
 
+const MAX_PROFILE_LINKS = 8;
+
+const sanitizeProfileLinks = (value: unknown): Array<{ id: string; label: string; url: string }> | null => {
+  if (!Array.isArray(value)) return null;
+
+  const cleaned: Array<{ id: string; label: string; url: string }> = [];
+  const seen = new Set<string>();
+
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const rawLabel = String((item as any).label || '').trim();
+    const rawUrl = String((item as any).url || '').trim();
+    if (!rawLabel || !rawUrl) continue;
+
+    const label = rawLabel.slice(0, 40);
+    const prefixedUrl = /^(https?:\/\/|\/)/i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+    const safeUrl = prefixedUrl.replace(/\s+/g, '');
+    if (!/^https?:\/\/.+/i.test(safeUrl) && !safeUrl.startsWith('/')) continue;
+
+    const dedupeKey = safeUrl.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    cleaned.push({
+      id: String((item as any).id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+      label,
+      url: safeUrl
+    });
+
+    if (cleaned.length >= MAX_PROFILE_LINKS) break;
+  }
+
+  return cleaned;
+};
+
 const resolveCompanyAccess = async (
   db: any,
   companyId: string,
@@ -258,6 +293,7 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
       'industry',
       'bio',
       'website',
+      'profileLinks',
       'location',
       'employeeCount',
       'email',
@@ -327,6 +363,14 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
         return res.status(400).json({ success: false, error: 'Company email is invalid' });
       }
       updates.email = normalizedCompanyEmail;
+    }
+
+    if (rawUpdates.profileLinks !== undefined) {
+      const normalizedProfileLinks = sanitizeProfileLinks(rawUpdates.profileLinks);
+      if (!normalizedProfileLinks) {
+        return res.status(400).json({ success: false, error: 'Invalid profile links payload' });
+      }
+      updates.profileLinks = normalizedProfileLinks;
     }
 
     if (rawUpdates.avatarCrop !== undefined) {

@@ -50,6 +50,38 @@ const normalizeUniqueIds = (input) => {
         return [];
     return Array.from(new Set(input.filter((value) => typeof value === 'string' && value.trim().length > 0)));
 };
+const MAX_PROFILE_LINKS = 8;
+const sanitizeProfileLinks = (value) => {
+    if (!Array.isArray(value))
+        return null;
+    const cleaned = [];
+    const seen = new Set();
+    for (const item of value) {
+        if (!item || typeof item !== 'object')
+            continue;
+        const rawLabel = String(item.label || '').trim();
+        const rawUrl = String(item.url || '').trim();
+        if (!rawLabel || !rawUrl)
+            continue;
+        const label = rawLabel.slice(0, 40);
+        const prefixedUrl = /^(https?:\/\/|\/)/i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+        const safeUrl = prefixedUrl.replace(/\s+/g, '');
+        if (!/^https?:\/\/.+/i.test(safeUrl) && !safeUrl.startsWith('/'))
+            continue;
+        const dedupeKey = safeUrl.toLowerCase();
+        if (seen.has(dedupeKey))
+            continue;
+        seen.add(dedupeKey);
+        cleaned.push({
+            id: String(item.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+            label,
+            url: safeUrl
+        });
+        if (cleaned.length >= MAX_PROFILE_LINKS)
+            break;
+    }
+    return cleaned;
+};
 const resolveCompanyAccess = (db_2, companyId_1, userId_1, ...args_1) => __awaiter(void 0, [db_2, companyId_1, userId_1, ...args_1], void 0, function* (db, companyId, userId, minimumRole = 'moderator') {
     const company = yield db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
     if (!company) {
@@ -218,6 +250,7 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
             'industry',
             'bio',
             'website',
+            'profileLinks',
             'location',
             'employeeCount',
             'email',
@@ -278,6 +311,13 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
                 return res.status(400).json({ success: false, error: 'Company email is invalid' });
             }
             updates.email = normalizedCompanyEmail;
+        }
+        if (rawUpdates.profileLinks !== undefined) {
+            const normalizedProfileLinks = sanitizeProfileLinks(rawUpdates.profileLinks);
+            if (!normalizedProfileLinks) {
+                return res.status(400).json({ success: false, error: 'Invalid profile links payload' });
+            }
+            updates.profileLinks = normalizedProfileLinks;
         }
         if (rawUpdates.avatarCrop !== undefined) {
             const normalizedAvatarCrop = normalizeCrop(rawUpdates.avatarCrop);

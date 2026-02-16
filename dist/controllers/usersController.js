@@ -97,6 +97,8 @@ const USER_SELF_UPDATE_ALLOWLIST = new Set([
     'bio',
     'phone',
     'country',
+    'website',
+    'profileLinks',
     'dob',
     'zodiacSign',
     'avatar',
@@ -111,6 +113,38 @@ const USER_SELF_UPDATE_ALLOWLIST = new Set([
     'activeGlow',
     'userMode'
 ]);
+const MAX_PROFILE_LINKS = 8;
+const sanitizeProfileLinks = (value) => {
+    if (!Array.isArray(value))
+        return null;
+    const cleaned = [];
+    const seen = new Set();
+    for (const item of value) {
+        if (!item || typeof item !== 'object')
+            continue;
+        const rawLabel = String(item.label || '').trim();
+        const rawUrl = String(item.url || '').trim();
+        if (!rawLabel || !rawUrl)
+            continue;
+        const label = rawLabel.slice(0, 40);
+        const prefixedUrl = /^(https?:\/\/|\/)/i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+        const safeUrl = prefixedUrl.replace(/\s+/g, '');
+        if (!/^https?:\/\/.+/i.test(safeUrl) && !safeUrl.startsWith('/'))
+            continue;
+        const dedupeKey = safeUrl.toLowerCase();
+        if (seen.has(dedupeKey))
+            continue;
+        seen.add(dedupeKey);
+        cleaned.push({
+            id: String(item.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+            label,
+            url: safeUrl
+        });
+        if (cleaned.length >= MAX_PROFILE_LINKS)
+            break;
+    }
+    return cleaned;
+};
 const USER_SENSITIVE_UPDATE_FIELDS = new Set([
     'id',
     'googleId',
@@ -629,6 +663,21 @@ exports.usersController = {
                 });
             }
             const updateData = Object.assign({}, mutableUpdates);
+            if (typeof mutableUpdates.website === 'string') {
+                const website = mutableUpdates.website.trim();
+                updateData.website = website ? (/^https?:\/\//i.test(website) ? website : `https://${website}`) : '';
+            }
+            if (mutableUpdates.profileLinks !== undefined) {
+                const normalizedProfileLinks = sanitizeProfileLinks(mutableUpdates.profileLinks);
+                if (!normalizedProfileLinks) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Invalid profile links',
+                        message: 'profileLinks must be an array of { id, label, url }.'
+                    });
+                }
+                updateData.profileLinks = normalizedProfileLinks;
+            }
             if (typeof mutableUpdates.handle === 'string') {
                 const handleValidation = validateHandleFormat(mutableUpdates.handle);
                 if (!handleValidation.ok) {

@@ -13,6 +13,11 @@ export interface IUser {
   bio?: string;
   location?: string;
   website?: string;
+  profileLinks?: Array<{
+    id: string;
+    label: string;
+    url: string;
+  }>;
   joinDate?: string;
   acquaintances?: string[];
   subscribedCompanyIds?: string[];
