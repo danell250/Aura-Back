@@ -1816,7 +1816,10 @@ exports.postsController = {
                 status: 'open'
             };
             yield db.collection('reports').insertOne(reportDoc);
-            const toEmail = 'danelloosthuizen3@gmail.com';
+            const toEmail = process.env.ADMIN_EMAIL ||
+                process.env.SUPPORT_EMAIL ||
+                process.env.SENDGRID_FROM_EMAIL ||
+                'support@aura.net.za';
             const subject = `Aura Post Report: ${((_a = post.author) === null || _a === void 0 ? void 0 : _a.name) || ((_b = post.author) === null || _b === void 0 ? void 0 : _b.handle) || id}`;
             const body = [
                 `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,

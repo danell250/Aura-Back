@@ -2257,7 +2257,11 @@ export const postsController = {
 
       await db.collection('reports').insertOne(reportDoc);
 
-      const toEmail = 'danelloosthuizen3@gmail.com';
+      const toEmail =
+        process.env.ADMIN_EMAIL ||
+        process.env.SUPPORT_EMAIL ||
+        process.env.SENDGRID_FROM_EMAIL ||
+        'support@aura.net.za';
       const subject = `Aura Post Report: ${post.author?.name || post.author?.handle || id}`;
       const body = [
         `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,

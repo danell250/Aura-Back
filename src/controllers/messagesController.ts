@@ -141,7 +141,7 @@ const extractUserEmailAlias = (rawId: string): string | null => {
   const value = rawId.trim().toLowerCase();
   if (!value) return null;
 
-  // Legacy support alias generated in frontend for Aura Support.
+  // Legacy support alias generated in older frontend builds.
   if (value.startsWith('support-')) {
     const candidate = value.slice('support-'.length);
     if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate)) {

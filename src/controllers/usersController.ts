@@ -1445,7 +1445,11 @@ export const usersController = {
 
       await db.collection('reports').insertOne(reportDoc);
 
-      const toEmail = process.env.ADMIN_EMAIL || 'danelloosthuizen3@gmail.com';
+      const toEmail =
+        process.env.ADMIN_EMAIL ||
+        process.env.SUPPORT_EMAIL ||
+        process.env.SENDGRID_FROM_EMAIL ||
+        'support@aura.net.za';
       const subject = `Aura© User Report: ${target.name || target.handle || targetUserId}`;
       const body = [
         `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,
