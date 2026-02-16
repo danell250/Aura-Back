@@ -83,6 +83,58 @@ const sanitizeProfileLinks = (value) => {
     }
     return cleaned;
 };
+const PERSONAL_ONLY_COMPANY_FIELDS = [
+    'firstName',
+    'lastName',
+    'dob',
+    'zodiacSign',
+    'phone',
+    'acquaintances',
+    'sentAcquaintanceRequests',
+    'sentConnectionRequests',
+    'subscribedCompanyIds',
+    'blockedUsers',
+    'profileViews',
+    'notifications',
+    'userMode',
+    'companyName',
+    'companyWebsite',
+    'isCompany',
+    'legacySourceUserId'
+];
+const sanitizeCompanyEntity = (company) => {
+    if (!company || typeof company !== 'object')
+        return company;
+    const sanitized = Object.assign(Object.assign({}, company), { type: 'company' });
+    for (const field of PERSONAL_ONLY_COMPANY_FIELDS) {
+        delete sanitized[field];
+    }
+    if (!Array.isArray(sanitized.subscribers)) {
+        sanitized.subscribers = [];
+    }
+    if (typeof sanitized.subscriberCount !== 'number') {
+        sanitized.subscriberCount = sanitized.subscribers.length;
+    }
+    if (!Array.isArray(sanitized.profileLinks)) {
+        sanitized.profileLinks = [];
+    }
+    if (typeof sanitized.avatar !== 'string') {
+        sanitized.avatar = '';
+    }
+    if (typeof sanitized.coverImage !== 'string') {
+        sanitized.coverImage = '';
+    }
+    if (sanitized.avatarType !== 'video') {
+        sanitized.avatarType = 'image';
+    }
+    if (sanitized.coverType !== 'video') {
+        sanitized.coverType = 'image';
+    }
+    if (typeof sanitized.bio !== 'string') {
+        sanitized.bio = '';
+    }
+    return sanitized;
+};
 const resolveCompanyAccess = (db_2, companyId_1, userId_1, ...args_1) => __awaiter(void 0, [db_2, companyId_1, userId_1, ...args_1], void 0, function* (db, companyId, userId, minimumRole = 'moderator') {
     const company = yield db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
     if (!company) {
@@ -148,7 +200,7 @@ router.get('/me', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, 
         // Merge role into company data
         const data = companies.map(c => {
             const membership = memberships.find(m => m.companyId === c.id);
-            return Object.assign(Object.assign({}, c), { role: (membership === null || membership === void 0 ? void 0 : membership.role) || (c.ownerId === currentUser.id ? 'owner' : 'member') });
+            return sanitizeCompanyEntity(Object.assign(Object.assign({}, c), { role: (membership === null || membership === void 0 ? void 0 : membership.role) || (c.ownerId === currentUser.id ? 'owner' : 'member') }));
         });
         res.json({ success: true, data });
     }
@@ -219,7 +271,8 @@ router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, v
         const currentUser = req.user;
         const { name, industry, bio, website, location, employeeCount, email, handle: providedHandle } = req.body;
         const db = (0, db_1.getDB)();
-        if (!name) {
+        const normalizedName = typeof name === 'string' ? name.trim() : '';
+        if (!normalizedName) {
             return res.status(400).json({ success: false, error: 'Identity name is required' });
         }
         const normalizedEmployeeCount = Number.isFinite(Number(employeeCount)) && Number(employeeCount) > 0
@@ -246,7 +299,7 @@ router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, v
             }
         }
         else {
-            handle = yield generateCompanyHandle(name);
+            handle = yield generateCompanyHandle(normalizedName);
         }
         // 1. Limit validation: Check how many companies the user owns
         const ownedCompaniesCount = yield db.collection('companies').countDocuments({
@@ -261,21 +314,23 @@ router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, v
             });
         }
         const companyId = `comp-${crypto_1.default.randomBytes(8).toString('hex')}`;
-        const newCompany = {
+        const newCompany = sanitizeCompanyEntity({
             id: companyId,
-            name,
+            name: normalizedName,
             handle,
-            industry: industry || 'Technology',
-            bio: bio || '',
-            website: website || '',
-            location: location || '',
+            industry: typeof industry === 'string' && industry.trim() ? industry.trim() : 'Technology',
+            bio: typeof bio === 'string' ? bio.trim() : '',
+            website: typeof website === 'string' ? website.trim() : '',
+            location: typeof location === 'string' ? location.trim() : '',
             employeeCount: normalizedEmployeeCount,
             email: normalizedCompanyEmail || '',
             ownerId: currentUser.id,
-            isVerified: !!website,
+            isVerified: typeof website === 'string' && website.trim().length > 0,
+            trustScore: 100,
+            auraCredits: 0,
             createdAt: new Date(),
             updatedAt: new Date()
-        };
+        });
         yield db.collection('companies').insertOne(newCompany);
         // Add creator as owner
         yield db.collection('company_members').updateOne({ companyId, userId: currentUser.id }, {
@@ -430,7 +485,11 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
             return res.status(404).json({ success: false, error: 'Corporate identity not found' });
         }
         const updatedCompany = yield db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
-        res.json({ success: true, data: updatedCompany, message: 'Corporate identity updated successfully' });
+        res.json({
+            success: true,
+            data: sanitizeCompanyEntity(updatedCompany),
+            message: 'Corporate identity updated successfully'
+        });
     }
     catch (error) {
         console.error('Update company error:', error);
@@ -494,7 +553,7 @@ router.get('/:id', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0,
             // For now, restrict this route to members only as it's used in management views
             return res.status(403).json({ success: false, error: 'You are not a member of this corporate identity' });
         }
-        res.json({ success: true, data: company });
+        res.json({ success: true, data: sanitizeCompanyEntity(company) });
     }
     catch (error) {
         console.error('Get company error:', error);

@@ -80,6 +80,62 @@ const sanitizeProfileLinks = (value: unknown): Array<{ id: string; label: string
   return cleaned;
 };
 
+const PERSONAL_ONLY_COMPANY_FIELDS = [
+  'firstName',
+  'lastName',
+  'dob',
+  'zodiacSign',
+  'phone',
+  'acquaintances',
+  'sentAcquaintanceRequests',
+  'sentConnectionRequests',
+  'subscribedCompanyIds',
+  'blockedUsers',
+  'profileViews',
+  'notifications',
+  'userMode',
+  'companyName',
+  'companyWebsite',
+  'isCompany',
+  'legacySourceUserId'
+] as const;
+
+const sanitizeCompanyEntity = (company: any): any => {
+  if (!company || typeof company !== 'object') return company;
+  const sanitized = { ...company, type: 'company' as const };
+
+  for (const field of PERSONAL_ONLY_COMPANY_FIELDS) {
+    delete (sanitized as any)[field];
+  }
+
+  if (!Array.isArray(sanitized.subscribers)) {
+    sanitized.subscribers = [];
+  }
+  if (typeof sanitized.subscriberCount !== 'number') {
+    sanitized.subscriberCount = sanitized.subscribers.length;
+  }
+  if (!Array.isArray(sanitized.profileLinks)) {
+    sanitized.profileLinks = [];
+  }
+  if (typeof sanitized.avatar !== 'string') {
+    sanitized.avatar = '';
+  }
+  if (typeof sanitized.coverImage !== 'string') {
+    sanitized.coverImage = '';
+  }
+  if (sanitized.avatarType !== 'video') {
+    sanitized.avatarType = 'image';
+  }
+  if (sanitized.coverType !== 'video') {
+    sanitized.coverType = 'image';
+  }
+  if (typeof sanitized.bio !== 'string') {
+    sanitized.bio = '';
+  }
+
+  return sanitized;
+};
+
 const resolveCompanyAccess = async (
   db: any,
   companyId: string,
@@ -174,7 +230,10 @@ router.get('/me', requireAuth, async (req, res) => {
     // Merge role into company data
     const data = companies.map(c => {
       const membership = memberships.find(m => m.companyId === c.id);
-      return { ...c, role: membership?.role || (c.ownerId === currentUser.id ? 'owner' : 'member') };
+      return sanitizeCompanyEntity({
+        ...c,
+        role: membership?.role || (c.ownerId === currentUser.id ? 'owner' : 'member')
+      });
     });
 
     res.json({ success: true, data });
@@ -251,7 +310,8 @@ router.post('/', requireAuth, async (req, res) => {
     const { name, industry, bio, website, location, employeeCount, email, handle: providedHandle } = req.body;
     const db = getDB();
 
-    if (!name) {
+    const normalizedName = typeof name === 'string' ? name.trim() : '';
+    if (!normalizedName) {
       return res.status(400).json({ success: false, error: 'Identity name is required' });
     }
 
@@ -280,7 +340,7 @@ router.post('/', requireAuth, async (req, res) => {
         return res.status(409).json({ success: false, error: 'Handle already taken' });
       }
     } else {
-      handle = await generateCompanyHandle(name);
+      handle = await generateCompanyHandle(normalizedName);
     }
 
     // 1. Limit validation: Check how many companies the user owns
@@ -298,21 +358,23 @@ router.post('/', requireAuth, async (req, res) => {
 
     const companyId = `comp-${crypto.randomBytes(8).toString('hex')}`;
 
-    const newCompany = {
+    const newCompany = sanitizeCompanyEntity({
       id: companyId,
-      name,
+      name: normalizedName,
       handle,
-      industry: industry || 'Technology',
-      bio: bio || '',
-      website: website || '',
-      location: location || '',
+      industry: typeof industry === 'string' && industry.trim() ? industry.trim() : 'Technology',
+      bio: typeof bio === 'string' ? bio.trim() : '',
+      website: typeof website === 'string' ? website.trim() : '',
+      location: typeof location === 'string' ? location.trim() : '',
       employeeCount: normalizedEmployeeCount,
       email: normalizedCompanyEmail || '',
       ownerId: currentUser.id,
-      isVerified: !!website,
+      isVerified: typeof website === 'string' && website.trim().length > 0,
+      trustScore: 100,
+      auraCredits: 0,
       createdAt: new Date(),
       updatedAt: new Date()
-    };
+    });
 
     await db.collection('companies').insertOne(newCompany);
 
@@ -500,7 +562,11 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
     }
 
     const updatedCompany = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
-    res.json({ success: true, data: updatedCompany, message: 'Corporate identity updated successfully' });
+    res.json({
+      success: true,
+      data: sanitizeCompanyEntity(updatedCompany),
+      message: 'Corporate identity updated successfully'
+    });
   } catch (error) {
     console.error('Update company error:', error);
     res.status(500).json({ success: false, error: 'Failed to update corporate identity' });
@@ -582,7 +648,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       return res.status(403).json({ success: false, error: 'You are not a member of this corporate identity' });
     }
 
-    res.json({ success: true, data: company });
+    res.json({ success: true, data: sanitizeCompanyEntity(company) });
   } catch (error) {
     console.error('Get company error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch corporate identity' });
