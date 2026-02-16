@@ -37,6 +37,68 @@ const generateCompanyHandle = async (name: string): Promise<string> => {
 
 const router = Router();
 
+const normalizeUniqueIds = (input: unknown): string[] => {
+  if (!Array.isArray(input)) return [];
+  return Array.from(new Set(
+    input.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+  ));
+};
+
+const resolveCompanyAccess = async (
+  db: any,
+  companyId: string,
+  userId: string,
+  minimumRole: 'member' | 'moderator' = 'moderator'
+): Promise<{
+  allowed: boolean;
+  status?: number;
+  error?: string;
+  company?: any;
+}> => {
+  const company = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
+  if (!company) {
+    return { allowed: false, status: 404, error: 'Company not found' };
+  }
+
+  const membershipFilter: Record<string, unknown> = { companyId, userId };
+  if (minimumRole === 'moderator') {
+    membershipFilter.role = { $in: ['owner', 'admin'] };
+  }
+
+  const membership = await db.collection('company_members').findOne(membershipFilter);
+
+  if (!membership && company.ownerId !== userId) {
+    return { allowed: false, status: 403, error: 'Unauthorized' };
+  }
+
+  return { allowed: true, company };
+};
+
+const syncCompanySubscriberState = async (db: any, companyId: string) => {
+  const company = await db.collection('companies').findOne(
+    { id: companyId, legacyArchived: { $ne: true } },
+    { projection: { subscribers: 1, blockedSubscriberIds: 1 } }
+  );
+
+  const blockedSubscriberIds = normalizeUniqueIds(company?.blockedSubscriberIds);
+  const blockedSet = new Set(blockedSubscriberIds);
+  const subscribers = normalizeUniqueIds(company?.subscribers).filter((id) => !blockedSet.has(id));
+
+  await db.collection('companies').updateOne(
+    { id: companyId, legacyArchived: { $ne: true } },
+    {
+      $set: {
+        subscribers,
+        blockedSubscriberIds,
+        subscriberCount: subscribers.length,
+        updatedAt: new Date()
+      }
+    }
+  );
+
+  return { subscribers, blockedSubscriberIds, subscriberCount: subscribers.length };
+};
+
 // GET /api/companies/me - Get companies the current user belongs to
 router.get('/me', requireAuth, async (req, res) => {
   try {
@@ -963,6 +1025,15 @@ router.post('/:companyId/subscribe', requireAuth, async (req, res) => {
   const company = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
   if (!company) return res.status(404).json({ success: false, error: 'Company not found' });
 
+  const blockedSubscriberIds = normalizeUniqueIds(company.blockedSubscriberIds);
+  if (blockedSubscriberIds.includes(currentUser.id)) {
+    return res.status(403).json({
+      success: false,
+      error: 'Subscription denied',
+      message: 'This company has blocked your subscription access.'
+    });
+  }
+
   await db.collection('users').updateOne(
     { id: currentUser.id },
     { $addToSet: { subscribedCompanyIds: companyId }, $set: { updatedAt: new Date().toISOString() } }
@@ -973,14 +1044,9 @@ router.post('/:companyId/subscribe', requireAuth, async (req, res) => {
     { $addToSet: { subscribers: currentUser.id }, $set: { updatedAt: new Date() } }
   );
 
-  const refreshed = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
-  const subscribers = Array.isArray(refreshed?.subscribers) ? [...new Set(refreshed.subscribers)] : [];
-  await db.collection('companies').updateOne(
-    { id: companyId, legacyArchived: { $ne: true } },
-    { $set: { subscriberCount: subscribers.length, subscribers } }
-  );
+  const synced = await syncCompanySubscriberState(db, companyId);
 
-  return res.json({ success: true, data: { subscribed: true, subscriberCount: subscribers.length } });
+  return res.json({ success: true, data: { subscribed: true, subscriberCount: synced.subscriberCount } });
 });
 
 router.post('/:companyId/unsubscribe', requireAuth, async (req, res) => {
@@ -998,29 +1064,204 @@ router.post('/:companyId/unsubscribe', requireAuth, async (req, res) => {
     ({ $pull: { subscribers: currentUser.id }, $set: { updatedAt: new Date() } } as any)
   );
 
-  const refreshed = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
-  const subscribers = Array.isArray(refreshed?.subscribers) ? [...new Set(refreshed.subscribers)] : [];
-  await db.collection('companies').updateOne(
-    { id: companyId, legacyArchived: { $ne: true } },
-    { $set: { subscriberCount: subscribers.length, subscribers } }
-  );
+  const synced = await syncCompanySubscriberState(db, companyId);
 
-  return res.json({ success: true, data: { subscribed: false, subscriberCount: subscribers.length } });
+  return res.json({ success: true, data: { subscribed: false, subscriberCount: synced.subscriberCount } });
 });
 
 router.get('/:companyId/subscribers', requireAuth, async (req, res) => {
   const { companyId } = req.params;
+  const currentUser = (req as any).user;
   const db = getDB();
-  const company = await db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } });
-  if (!company) return res.status(404).json({ success: false, error: 'Company not found' });
 
-  const ids: string[] = Array.isArray(company.subscribers) ? company.subscribers : [];
+  const access = await resolveCompanyAccess(db, companyId, currentUser.id, 'member');
+  if (!access.allowed) {
+    return res.status(access.status || 403).json({ success: false, error: access.error || 'Unauthorized' });
+  }
+
+  const synced = await syncCompanySubscriberState(db, companyId);
+  const ids = synced.subscribers;
   const users = ids.length ? await db.collection('users').find({ id: { $in: ids } }).toArray() : [];
   return res.json({
     success: true,
     data: users.map(u => transformUser(u)),
-    count: ids.length
+    count: ids.length,
+    blockedCount: synced.blockedSubscriberIds.length
   });
+});
+
+router.post('/:companyId/subscribers/:subscriberId/remove', requireAuth, async (req, res) => {
+  const { companyId, subscriberId } = req.params;
+  const currentUser = (req as any).user;
+  const db = getDB();
+
+  const access = await resolveCompanyAccess(db, companyId, currentUser.id, 'moderator');
+  if (!access.allowed) {
+    return res.status(access.status || 403).json({ success: false, error: access.error || 'Unauthorized' });
+  }
+
+  const subscribers = normalizeUniqueIds(access.company?.subscribers);
+  if (!subscribers.includes(subscriberId)) {
+    return res.status(404).json({ success: false, error: 'Subscriber not found for this company' });
+  }
+
+  await Promise.all([
+    db.collection('users').updateOne(
+      { id: subscriberId },
+      ({ $pull: { subscribedCompanyIds: companyId }, $set: { updatedAt: new Date().toISOString() } } as any)
+    ),
+    db.collection('companies').updateOne(
+      { id: companyId, legacyArchived: { $ne: true } },
+      ({ $pull: { subscribers: subscriberId }, $set: { updatedAt: new Date() } } as any)
+    )
+  ]);
+
+  const synced = await syncCompanySubscriberState(db, companyId);
+
+  return res.json({
+    success: true,
+    data: {
+      subscriberId,
+      subscriberCount: synced.subscriberCount
+    },
+    message: 'Subscriber removed successfully'
+  });
+});
+
+router.post('/:companyId/subscribers/:subscriberId/block', requireAuth, async (req, res) => {
+  const { companyId, subscriberId } = req.params;
+  const currentUser = (req as any).user;
+  const db = getDB();
+
+  const access = await resolveCompanyAccess(db, companyId, currentUser.id, 'moderator');
+  if (!access.allowed) {
+    return res.status(access.status || 403).json({ success: false, error: access.error || 'Unauthorized' });
+  }
+
+  const subscribers = normalizeUniqueIds(access.company?.subscribers);
+  if (!subscribers.includes(subscriberId)) {
+    return res.status(404).json({ success: false, error: 'Subscriber not found for this company' });
+  }
+
+  const targetUser = await db.collection('users').findOne({ id: subscriberId });
+  if (!targetUser) {
+    return res.status(404).json({ success: false, error: 'Subscriber user not found' });
+  }
+
+  await Promise.all([
+    db.collection('users').updateOne(
+      { id: subscriberId },
+      ({ $pull: { subscribedCompanyIds: companyId }, $set: { updatedAt: new Date().toISOString() } } as any)
+    ),
+    db.collection('companies').updateOne(
+      { id: companyId, legacyArchived: { $ne: true } },
+      {
+        $addToSet: { blockedSubscriberIds: subscriberId },
+        $pull: { subscribers: subscriberId },
+        $set: { updatedAt: new Date() }
+      } as any
+    )
+  ]);
+
+  const synced = await syncCompanySubscriberState(db, companyId);
+
+  return res.json({
+    success: true,
+    data: {
+      subscriberId,
+      subscriberCount: synced.subscriberCount,
+      blockedCount: synced.blockedSubscriberIds.length
+    },
+    message: 'Subscriber blocked successfully'
+  });
+});
+
+router.post('/:companyId/subscribers/:subscriberId/report', requireAuth, async (req, res) => {
+  try {
+    const { companyId, subscriberId } = req.params;
+    const { reason, notes } = req.body || {};
+    const currentUser = (req as any).user;
+    const db = getDB();
+
+    const access = await resolveCompanyAccess(db, companyId, currentUser.id, 'moderator');
+    if (!access.allowed) {
+      return res.status(access.status || 403).json({ success: false, error: access.error || 'Unauthorized' });
+    }
+
+    const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
+    const trimmedNotes = typeof notes === 'string' ? notes.trim() : '';
+    if (!trimmedReason) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing reason',
+        message: 'reason is required'
+      });
+    }
+
+    const company = access.company;
+    const subscribers = normalizeUniqueIds(company?.subscribers);
+    if (!subscribers.includes(subscriberId)) {
+      return res.status(404).json({ success: false, error: 'Subscriber not found for this company' });
+    }
+
+    const targetUser = await db.collection('users').findOne({ id: subscriberId });
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: 'Subscriber user not found' });
+    }
+
+    const reportDoc = {
+      id: `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'user',
+      reporterId: `company:${companyId}`,
+      reporterType: 'company',
+      companyId,
+      targetUserId: subscriberId,
+      reason: trimmedReason,
+      notes: trimmedNotes,
+      createdAt: new Date().toISOString(),
+      status: 'open'
+    };
+
+    await db.collection('reports').insertOne(reportDoc);
+
+    const toEmail =
+      process.env.ADMIN_EMAIL ||
+      process.env.SUPPORT_EMAIL ||
+      process.env.SENDGRID_FROM_EMAIL ||
+      'support@aura.net.za';
+
+    const subject = `Aura company subscriber report: ${targetUser.name || targetUser.handle || subscriberId}`;
+    const body = [
+      `Reporter Company: ${company.name || company.handle || companyId}`,
+      `Reporter User: ${currentUser.id}`,
+      `Company ID: ${companyId}`,
+      `Target Subscriber: ${targetUser.name || targetUser.handle || subscriberId} (${subscriberId})`,
+      `Reason: ${trimmedReason}`,
+      `Notes: ${trimmedNotes}`,
+      `Created At: ${reportDoc.createdAt}`,
+      `Report ID: ${reportDoc.id}`
+    ].join('\n');
+
+    await db.collection('email_outbox').insertOne({
+      to: toEmail,
+      subject,
+      body,
+      createdAt: new Date().toISOString(),
+      status: 'pending'
+    });
+
+    return res.json({
+      success: true,
+      data: reportDoc,
+      message: 'Subscriber reported successfully'
+    });
+  } catch (error) {
+    console.error('Report subscriber error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to report subscriber'
+    });
+  }
 });
 
 export default router;
