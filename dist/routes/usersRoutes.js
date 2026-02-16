@@ -133,5 +133,5 @@ router.delete('/force-delete/:email', authMiddleware_1.requireAuth, authMiddlewa
 // POST /api/users/:id/recalculate-trust - Recalculate trust score for a single user
 router.post('/:id/recalculate-trust', authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, usersController_1.usersController.recalculateTrustForUser);
 // POST /api/users/recalculate-trust-all - Recalculate trust scores for all users
-router.post('/recalculate-trust-all', authMiddleware_1.requireAuth, usersController_1.usersController.recalculateTrustForAllUsers);
+router.post('/recalculate-trust-all', authMiddleware_1.requireAuth, authMiddleware_1.requireAdmin, usersController_1.usersController.recalculateTrustForAllUsers);
 exports.default = router;

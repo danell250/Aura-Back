@@ -7,6 +7,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import multer from 'multer';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import cookieParser from 'cookie-parser';
@@ -146,7 +147,18 @@ if (!fs.existsSync(uploadsDir)) {
 app.set("trust proxy", 1);
 
 // CORS Configuration
-const allowedOrigins = [
+const normalizeOrigin = (origin: string): string => origin.trim().replace(/\/$/, '').toLowerCase();
+
+const parseEnvOriginList = (value: string | undefined): string[] => {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map(normalizeOrigin);
+};
+
+const STATIC_ALLOWED_ORIGINS = [
   "https://www.aura.net.za",
   "https://aura.net.za",
   "https://auraso.vercel.app",
@@ -156,8 +168,14 @@ const allowedOrigins = [
   "https://aura-front-s1bw.onrender.com",
   "http://localhost:5173",
   "http://localhost:5003",
-  process.env.VITE_FRONTEND_URL?.replace(/\/$/, '')
-].filter(Boolean) as string[];
+].map(normalizeOrigin);
+
+const allowedOrigins = Array.from(new Set([
+  ...STATIC_ALLOWED_ORIGINS,
+  ...parseEnvOriginList(process.env.CORS_ALLOWED_ORIGINS),
+  ...(process.env.VITE_FRONTEND_URL ? [normalizeOrigin(process.env.VITE_FRONTEND_URL)] : []),
+  ...(process.env.FRONTEND_URL ? [normalizeOrigin(process.env.FRONTEND_URL)] : []),
+]));
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, cb) => {
@@ -165,16 +183,10 @@ const corsOptions: cors.CorsOptions = {
     if (!origin) return cb(null, true);
     
     // Normalize origin by removing trailing slash
-    const normalizedOrigin = origin.replace(/\/$/, '');
+    const normalizedOrigin = normalizeOrigin(origin);
     
-    // Check for allowed origins or vercel deployments
-    if (
-      allowedOrigins.includes(normalizedOrigin) || 
-      normalizedOrigin.endsWith('.vercel.app') || 
-      normalizedOrigin.includes('aura-socialr') ||
-      normalizedOrigin.includes('aura-front') ||
-      normalizedOrigin.includes('onrender.com')
-    ) {
+    // Strict allowlist with explicit origins only.
+    if (allowedOrigins.includes(normalizedOrigin)) {
       return cb(null, true);
     }
     
@@ -647,6 +659,25 @@ app.get('/', (_req, res) => {
 
 // Enhanced error handling middleware
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (err instanceof multer.MulterError) {
+    const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    return res.status(status).json({
+      success: false,
+      error: 'Invalid upload',
+      message: err.code === 'LIMIT_FILE_SIZE'
+        ? 'Uploaded file exceeds the 15MB limit'
+        : err.message
+    });
+  }
+
+  if (err instanceof Error && err.message.startsWith('Unsupported file type:')) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid upload',
+      message: err.message
+    });
+  }
+
   console.error('❌ Unhandled error:', err);
   res.status(500).json({
     success: false,
@@ -994,16 +1025,6 @@ async function startServer() {
       console.log(`🌐 Health check available at: http://localhost:${PORT}/health`);
     });
     
-    const frontendUrl = process.env.VITE_FRONTEND_URL;
-    const allowedOrigins = [
-      frontendUrl,
-      'https://www.aura.net.za',
-      'https://aura.net.za',
-      'https://auraradiance.vercel.app',
-      'https://aura-front-s1bw.onrender.com',
-      'http://localhost:5173'
-    ].filter(Boolean) as string[];
-
     const io = new SocketIOServer(server, {
       cors: {
         origin: allowedOrigins,

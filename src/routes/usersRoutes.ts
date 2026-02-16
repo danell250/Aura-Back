@@ -168,6 +168,6 @@ router.delete('/force-delete/:email', requireAuth, requireAdmin, usersController
 router.post('/:id/recalculate-trust', requireAuth, requirePersonalIdentity, requireSelfParam, usersController.recalculateTrustForUser);
 
 // POST /api/users/recalculate-trust-all - Recalculate trust scores for all users
-router.post('/recalculate-trust-all', requireAuth, usersController.recalculateTrustForAllUsers);
+router.post('/recalculate-trust-all', requireAuth, requireAdmin, usersController.recalculateTrustForAllUsers);
 
 export default router;

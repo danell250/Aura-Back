@@ -22,6 +22,49 @@ import { User } from '../types';
 
 const router = Router();
 
+const normalizeFrontendUrl = (value: string): string => value.trim().replace(/\/$/, '');
+const parseFrontendUrlList = (value: string | undefined): string[] => {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map(normalizeFrontendUrl);
+};
+
+const DEFAULT_FRONTEND_URL = process.env.NODE_ENV === 'development'
+  ? 'http://localhost:5003'
+  : 'https://www.aura.net.za';
+
+const TRUSTED_FRONTEND_URLS = new Set<string>([
+  'https://www.aura.net.za',
+  'https://aura.net.za',
+  'https://auraso.vercel.app',
+  'https://www.auraso.vercel.app',
+  'https://auraradiance.vercel.app',
+  'https://www.auraradiance.vercel.app',
+  'http://localhost:5003',
+  'http://localhost:5173',
+  ...parseFrontendUrlList(process.env.CORS_ALLOWED_ORIGINS),
+  ...parseFrontendUrlList(process.env.FRONTEND_ALLOWED_ORIGINS),
+  ...(process.env.VITE_FRONTEND_URL ? [process.env.VITE_FRONTEND_URL] : []),
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+].map(normalizeFrontendUrl));
+
+const resolveTrustedFrontendUrl = (req: Request): string => {
+  const configured = process.env.VITE_FRONTEND_URL || process.env.FRONTEND_URL;
+  if (configured && configured.trim().length > 0) {
+    return normalizeFrontendUrl(configured);
+  }
+
+  const requestOrigin = typeof req.headers.origin === 'string' ? normalizeFrontendUrl(req.headers.origin) : '';
+  if (requestOrigin && TRUSTED_FRONTEND_URLS.has(requestOrigin)) {
+    return requestOrigin;
+  }
+
+  return DEFAULT_FRONTEND_URL;
+};
+
 const normalizeUserHandle = (rawHandle: string): string => {
   const base = (rawHandle || '').trim().toLowerCase();
   const withoutAt = base.startsWith('@') ? base.slice(1) : base;
@@ -187,9 +230,7 @@ router.get('/google/callback',
 passport.authenticate('google', { failureRedirect: '/login', failureMessage: true }),
 async (req: Request, res: Response) => {
   try {
-    const frontendUrl = process.env.VITE_FRONTEND_URL ||
-      (req.headers.origin ? req.headers.origin.toString() : 
-      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+    const frontendUrl = resolveTrustedFrontendUrl(req);
 
     if (req.user) {
       const db = getDB();
@@ -265,18 +306,14 @@ async (req: Request, res: Response) => {
 
       setTokenCookies(res, accessToken, refreshToken);
 
-      const frontendUrl = process.env.VITE_FRONTEND_URL ||
-        (req.headers.origin ? req.headers.origin.toString() : 
-        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+      const frontendUrl = resolveTrustedFrontendUrl(req);
 
       console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
       res.redirect(`${frontendUrl}/feed`);
     }
   } catch (error) {
     console.error('Error in OAuth callback:', error);
-    const frontendUrl = process.env.VITE_FRONTEND_URL ||
-      (req.headers.origin ? req.headers.origin.toString() : 
-      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+    const frontendUrl = resolveTrustedFrontendUrl(req);
     res.redirect(`${frontendUrl}/login?error=oauth_failed`);
   }
 }
@@ -298,9 +335,7 @@ passport.authenticate('github', { scope: ['user:email'] })
 
 router.get('/github/callback',
 (req, res, next) => {
-  const frontendUrl = process.env.VITE_FRONTEND_URL ||
-    (req.headers.origin ? req.headers.origin.toString() : 
-    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+  const frontendUrl = resolveTrustedFrontendUrl(req);
   if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
     return res.redirect(`${frontendUrl}/login?error=github_not_configured`);
   }
@@ -309,9 +344,7 @@ router.get('/github/callback',
 passport.authenticate('github', { failureRedirect: '/login' }),
 async (req: Request, res: Response) => {
   try {
-    const frontendUrl = process.env.VITE_FRONTEND_URL ||
-      (req.headers.origin ? req.headers.origin.toString() : 
-      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+    const frontendUrl = resolveTrustedFrontendUrl(req);
     if (req.user) {
       const db = getDB();
       const userData = req.user as any;
@@ -384,18 +417,14 @@ async (req: Request, res: Response) => {
 
       setTokenCookies(res, accessToken, refreshToken);
 
-      const frontendUrl = process.env.VITE_FRONTEND_URL ||
-        (req.headers.origin ? req.headers.origin.toString() : 
-        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+      const frontendUrl = resolveTrustedFrontendUrl(req);
 
       console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
       res.redirect(`${frontendUrl}/feed`);
     }
   } catch (error) {
     console.error('Error in OAuth callback:', error);
-    const frontendUrl = process.env.VITE_FRONTEND_URL ||
-      (req.headers.origin ? req.headers.origin.toString() : 
-      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+    const frontendUrl = resolveTrustedFrontendUrl(req);
     res.redirect(`${frontendUrl}/login?error=oauth_failed`);
   }
 }
@@ -435,9 +464,7 @@ res.redirect(authUrl);
 router.get('/linkedin/callback', async (req: Request, res: Response) => {
 const { code, state, error } = req.query;
 
-const frontendUrl = process.env.VITE_FRONTEND_URL ||
-  (req.headers.origin ? req.headers.origin.toString() : 
-  (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+const frontendUrl = resolveTrustedFrontendUrl(req);
 
 // Handle LinkedIn errors
 if (error) {
@@ -574,18 +601,14 @@ try {
 
   setTokenCookies(res, newAccessToken, refreshToken);
 
-  const frontendUrl = process.env.VITE_FRONTEND_URL ||
-    (req.headers.origin ? req.headers.origin.toString() : 
-    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+  const frontendUrl = resolveTrustedFrontendUrl(req);
 
   console.log('[OAuth:LinkedIn] Redirecting to:', `${frontendUrl}/dashboard`);
   res.redirect(`${frontendUrl}/dashboard`);
 
 } catch (error: any) {
   console.error('LinkedIn OAuth callback error:', error?.response?.data || error.message);
-  const frontendUrl = process.env.VITE_FRONTEND_URL ||
-    (req.headers.origin ? req.headers.origin.toString() : 
-    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+  const frontendUrl = resolveTrustedFrontendUrl(req);
   res.redirect(`${frontendUrl}/login?error=linkedin_callback_error`);
 }
 });
@@ -619,9 +642,7 @@ if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
 router.get('/discord/callback', async (req: Request, res: Response) => {
   const { code, error } = req.query;
 
-  const frontendUrl =
-    process.env.VITE_FRONTEND_URL ||
-    (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+  const frontendUrl = resolveTrustedFrontendUrl(req);
 
   if (error) return res.redirect(`${frontendUrl}/login?error=discord_auth_failed`);
   if (!code) return res.redirect(`${frontendUrl}/login?error=discord_no_code`);
@@ -736,9 +757,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
     return res.redirect(`${frontendUrl}/feed`);
   } catch (e: any) {
     console.error('Discord OAuth callback error:', e?.response?.data || e.message);
-    const errorFrontendUrl =
-      process.env.VITE_FRONTEND_URL ||
-      (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za');
+    const errorFrontendUrl = resolveTrustedFrontendUrl(req);
     return res.redirect(`${errorFrontendUrl}/login?error=discord_callback_error`);
   }
 });
@@ -746,7 +765,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
 // ============ MAGIC LINK ============
 
 router.post("/magic-link", async (req: Request, res: Response) => {
-  console.log('🔹 POST /magic-link hit with body:', req.body);
+  console.log('🔹 POST /magic-link hit');
   try {
     const { email, inviteToken } = req.body || {};
     if (!email) {
@@ -811,9 +830,7 @@ router.post("/magic-link", async (req: Request, res: Response) => {
       { $set: updates }
     );
 
-    const frontendUrl = process.env.VITE_FRONTEND_URL || 
-      (req.headers.origin ? req.headers.origin.toString() : 
-      (process.env.NODE_ENV === "development" ? "http://localhost:5173" : "https://www.aura.net.za"));
+    const frontendUrl = resolveTrustedFrontendUrl(req);
     const magicLink = `${frontendUrl}/magic-login?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
     
     console.log('📧 Attempting to send magic link email to:', normalizedEmail);
@@ -941,8 +958,6 @@ router.post("/magic-link/verify", async (req: Request, res: Response) => {
 // ============ REFRESH TOKEN ============
 router.post('/refresh-token', async (req: Request, res: Response) => {
   console.log('🔄 POST /refresh-token hit');
-  console.log('   - Cookies:', req.cookies);
-  console.log('   - Origin:', req.headers.origin);
   
   try {
     const refreshToken = req.cookies.refreshToken;
@@ -1075,9 +1090,7 @@ router.get('/github/callback',
   passport.authenticate('github', { failureRedirect: '/login' }),
   async (req: Request, res: Response) => {
     try {
-      const frontendUrl = process.env.VITE_FRONTEND_URL ||
-        (req.headers.origin ? req.headers.origin.toString() : 
-        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+      const frontendUrl = resolveTrustedFrontendUrl(req);
 
       if (req.user) {
         const db = getDB();
@@ -1153,23 +1166,17 @@ router.get('/github/callback',
 
         setTokenCookies(res, accessToken, refreshToken);
 
-        const frontendUrl = process.env.VITE_FRONTEND_URL ||
-          (req.headers.origin ? req.headers.origin.toString() : 
-          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+        const frontendUrl = resolveTrustedFrontendUrl(req);
 
         console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}/feed`);
         res.redirect(`${frontendUrl}/feed`);
       } else {
-        const frontendUrl = process.env.VITE_FRONTEND_URL ||
-          (req.headers.origin ? req.headers.origin.toString() : 
-          (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+        const frontendUrl = resolveTrustedFrontendUrl(req);
         res.redirect(`${frontendUrl}/login`);
       }
     } catch (error) {
       console.error('GitHub OAuth callback error:', error);
-      const frontendUrl = process.env.VITE_FRONTEND_URL ||
-        (req.headers.origin ? req.headers.origin.toString() : 
-        (process.env.NODE_ENV === 'development' ? 'http://localhost:5003' : 'https://www.aura.net.za'));
+      const frontendUrl = resolveTrustedFrontendUrl(req);
       res.redirect(`${frontendUrl}/login`);
     }
   }

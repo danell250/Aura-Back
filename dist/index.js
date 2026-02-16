@@ -44,7 +44,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.app = void 0;
 const express_1 = __importDefault(require("express"));
@@ -56,6 +55,7 @@ const helmet_1 = __importDefault(require("helmet"));
 const compression_1 = __importDefault(require("compression"));
 const morgan_1 = __importDefault(require("morgan"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const multer_1 = __importDefault(require("multer"));
 const passport_google_oauth20_1 = require("passport-google-oauth20");
 const passport_github2_1 = require("passport-github2");
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
@@ -187,7 +187,17 @@ if (!fs_1.default.existsSync(uploadsDir)) {
 // Enable trust proxy for secure cookies behind load balancers (like Render/Heroku)
 app.set("trust proxy", 1);
 // CORS Configuration
-const allowedOrigins = [
+const normalizeOrigin = (origin) => origin.trim().replace(/\/$/, '').toLowerCase();
+const parseEnvOriginList = (value) => {
+    if (!value)
+        return [];
+    return value
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+        .map(normalizeOrigin);
+};
+const STATIC_ALLOWED_ORIGINS = [
     "https://www.aura.net.za",
     "https://aura.net.za",
     "https://auraso.vercel.app",
@@ -197,21 +207,22 @@ const allowedOrigins = [
     "https://aura-front-s1bw.onrender.com",
     "http://localhost:5173",
     "http://localhost:5003",
-    (_a = process.env.VITE_FRONTEND_URL) === null || _a === void 0 ? void 0 : _a.replace(/\/$/, '')
-].filter(Boolean);
+].map(normalizeOrigin);
+const allowedOrigins = Array.from(new Set([
+    ...STATIC_ALLOWED_ORIGINS,
+    ...parseEnvOriginList(process.env.CORS_ALLOWED_ORIGINS),
+    ...(process.env.VITE_FRONTEND_URL ? [normalizeOrigin(process.env.VITE_FRONTEND_URL)] : []),
+    ...(process.env.FRONTEND_URL ? [normalizeOrigin(process.env.FRONTEND_URL)] : []),
+]));
 const corsOptions = {
     origin: (origin, cb) => {
         // allow non-browser tools (no origin) and allow your frontends
         if (!origin)
             return cb(null, true);
         // Normalize origin by removing trailing slash
-        const normalizedOrigin = origin.replace(/\/$/, '');
-        // Check for allowed origins or vercel deployments
-        if (allowedOrigins.includes(normalizedOrigin) ||
-            normalizedOrigin.endsWith('.vercel.app') ||
-            normalizedOrigin.includes('aura-socialr') ||
-            normalizedOrigin.includes('aura-front') ||
-            normalizedOrigin.includes('onrender.com')) {
+        const normalizedOrigin = normalizeOrigin(origin);
+        // Strict allowlist with explicit origins only.
+        if (allowedOrigins.includes(normalizedOrigin)) {
             return cb(null, true);
         }
         console.error("❌ Blocked by CORS:", origin);
@@ -632,6 +643,23 @@ app.get('/', (_req, res) => {
 });
 // Enhanced error handling middleware
 app.use((err, _req, res, _next) => {
+    if (err instanceof multer_1.default.MulterError) {
+        const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(status).json({
+            success: false,
+            error: 'Invalid upload',
+            message: err.code === 'LIMIT_FILE_SIZE'
+                ? 'Uploaded file exceeds the 15MB limit'
+                : err.message
+        });
+    }
+    if (err instanceof Error && err.message.startsWith('Unsupported file type:')) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid upload',
+            message: err.message
+        });
+    }
     console.error('❌ Unhandled error:', err);
     res.status(500).json({
         success: false,
@@ -959,15 +987,6 @@ function startServer() {
                 console.log(`🚀 Server is running on port ${PORT}`);
                 console.log(`🌐 Health check available at: http://localhost:${PORT}/health`);
             });
-            const frontendUrl = process.env.VITE_FRONTEND_URL;
-            const allowedOrigins = [
-                frontendUrl,
-                'https://www.aura.net.za',
-                'https://aura.net.za',
-                'https://auraradiance.vercel.app',
-                'https://aura-front-s1bw.onrender.com',
-                'http://localhost:5173'
-            ].filter(Boolean);
             const io = new socket_io_1.Server(server, {
                 cors: {
                     origin: allowedOrigins,
