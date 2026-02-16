@@ -17,6 +17,15 @@ const db_1 = require("../db");
 const firebaseAdmin_1 = __importDefault(require("../firebaseAdmin"));
 const jwtUtils_1 = require("../utils/jwtUtils");
 const userUtils_1 = require("../utils/userUtils");
+const logFirebaseTokenVerificationError = (context, error) => {
+    const normalizedError = error;
+    const fallbackMessage = error instanceof Error ? error.message : String(error);
+    const errorInfo = {
+        code: (normalizedError === null || normalizedError === void 0 ? void 0 : normalizedError.code) || 'unknown',
+        message: (normalizedError === null || normalizedError === void 0 ? void 0 : normalizedError.message) || fallbackMessage
+    };
+    console.error(`[Auth] ${context} Firebase token verification failed`, { errorInfo });
+};
 // Middleware to check if user is authenticated via JWT or Firebase
 const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     // Check database connection first
@@ -121,7 +130,7 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
             return next();
         }
         catch (error) {
-            console.error('Error verifying Firebase token:', error);
+            logFirebaseTokenVerificationError('requireAuth', error);
             // Fall through to 401
         }
     }

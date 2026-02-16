@@ -5,6 +5,17 @@ import admin from '../firebaseAdmin';
 import { verifyAccessToken } from '../utils/jwtUtils';
 import { transformUser } from '../utils/userUtils';
 
+const logFirebaseTokenVerificationError = (context: string, error: unknown) => {
+  const normalizedError = error as { code?: string; message?: string };
+  const fallbackMessage = error instanceof Error ? error.message : String(error);
+  const errorInfo = {
+    code: normalizedError?.code || 'unknown',
+    message: normalizedError?.message || fallbackMessage
+  };
+
+  console.error(`[Auth] ${context} Firebase token verification failed`, { errorInfo });
+};
+
 // Middleware to check if user is authenticated via JWT or Firebase
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   // Check database connection first
@@ -118,7 +129,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
       req.isAuthenticated = (() => true) as any;
       return next();
     } catch (error) {
-      console.error('Error verifying Firebase token:', error);
+      logFirebaseTokenVerificationError('requireAuth', error);
       // Fall through to 401
     }
   }
