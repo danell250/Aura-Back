@@ -27,39 +27,12 @@ const normalizeTokenCandidate = (value) => {
     }
 };
 const readOwnerControlToken = (req) => {
-    var _a, _b, _c;
     const headerValue = req.headers['x-owner-control-token'];
     if (typeof headerValue === 'string' && headerValue.trim().length > 0) {
         return normalizeTokenCandidate(headerValue);
     }
     if (Array.isArray(headerValue) && typeof headerValue[0] === 'string' && headerValue[0].trim().length > 0) {
         return normalizeTokenCandidate(headerValue[0]);
-    }
-    const authHeader = req.headers.authorization;
-    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
-        const bearerToken = authHeader.slice('Bearer '.length);
-        const normalizedBearer = normalizeTokenCandidate(bearerToken);
-        if (normalizedBearer) {
-            return normalizedBearer;
-        }
-    }
-    const pathToken = (_a = req.params) === null || _a === void 0 ? void 0 : _a.accessToken;
-    if (typeof pathToken === 'string' && pathToken.trim().length > 0) {
-        return normalizeTokenCandidate(pathToken);
-    }
-    const queryToken = (_b = req.query) === null || _b === void 0 ? void 0 : _b.accessToken;
-    if (typeof queryToken === 'string' && queryToken.trim().length > 0) {
-        return normalizeTokenCandidate(queryToken);
-    }
-    const queryAliasToken = (_c = req.query) === null || _c === void 0 ? void 0 : _c.token;
-    if (typeof queryAliasToken === 'string' && queryAliasToken.trim().length > 0) {
-        return normalizeTokenCandidate(queryAliasToken);
-    }
-    const firstPathSegmentRaw = req.path.split('/').filter(Boolean)[0];
-    const firstPathSegment = typeof firstPathSegmentRaw === 'string' ? normalizeTokenCandidate(firstPathSegmentRaw) : '';
-    if (firstPathSegment &&
-        (firstPathSegment.startsWith('oc_') || firstPathSegment.toLowerCase().startsWith('orbit-admin-'))) {
-        return firstPathSegment;
     }
     return '';
 };
@@ -367,7 +340,6 @@ const getOverview = (_req, res) => __awaiter(void 0, void 0, void 0, function* (
     }
 });
 router.get('/overview', getOverview);
-router.get('/:accessToken/overview', getOverview);
 const patchReportStatus = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     try {
@@ -413,7 +385,6 @@ const patchReportStatus = (req, res) => __awaiter(void 0, void 0, void 0, functi
     }
 });
 router.patch('/reports/:reportId', patchReportStatus);
-router.patch('/:accessToken/reports/:reportId', patchReportStatus);
 const setUserSuspension = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     try {
@@ -454,7 +425,6 @@ const setUserSuspension = (req, res) => __awaiter(void 0, void 0, void 0, functi
     }
 });
 router.post('/users/:userId/suspend', setUserSuspension);
-router.post('/:accessToken/users/:userId/suspend', setUserSuspension);
 const setPostHiddenState = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
     try {
@@ -522,5 +492,4 @@ const setPostHiddenState = (req, res) => __awaiter(void 0, void 0, void 0, funct
     }
 });
 router.post('/posts/:postId/hide', setPostHiddenState);
-router.post('/:accessToken/posts/:postId/hide', setPostHiddenState);
 exports.default = router;

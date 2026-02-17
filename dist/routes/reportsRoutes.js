@@ -8,6 +8,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.startReportScheduleWorker = exports.processDueReportSchedules = void 0;
 const express_1 = require("express");
@@ -15,11 +18,14 @@ const db_1 = require("../db");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const emailService_1 = require("../services/emailService");
 const identityUtils_1 = require("../utils/identityUtils");
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const router = (0, express_1.Router)();
 const REPORT_SCHEDULES_COLLECTION = 'reportSchedules';
+const REPORT_PREVIEW_AUDIT_COLLECTION = 'reportPreviewAudit';
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REPORT_RUNNER_INTERVAL_MS = 60 * 1000;
 const REPORT_RUNNER_BATCH_LIMIT = 20;
+const REPORT_PREVIEW_DAILY_LIMIT = 30;
 const WEEKDAY_TO_INDEX = {
     Monday: 1,
     Tuesday: 2,
@@ -72,6 +78,63 @@ const getOwnerFromRequest = (req) => __awaiter(void 0, void 0, void 0, function*
     if (!resolved)
         return null;
     return { ownerId: resolved.id, ownerType: resolved.type };
+});
+const normalizeEmail = (value) => {
+    if (typeof value !== 'string')
+        return null;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized || !emailRegex.test(normalized))
+        return null;
+    return normalized;
+};
+const collectAllowedPreviewRecipients = (owner, actorId) => __awaiter(void 0, void 0, void 0, function* () {
+    const db = (0, db_1.getDB)();
+    const allowed = new Set();
+    const pushEmail = (value) => {
+        const normalized = normalizeEmail(value);
+        if (normalized) {
+            allowed.add(normalized);
+        }
+    };
+    const actor = yield db.collection('users').findOne({ id: actorId }, { projection: { email: 1 } });
+    pushEmail(actor === null || actor === void 0 ? void 0 : actor.email);
+    if (owner.ownerType === 'user') {
+        if (owner.ownerId !== actorId) {
+            const ownerUser = yield db.collection('users').findOne({ id: owner.ownerId }, { projection: { email: 1 } });
+            pushEmail(ownerUser === null || ownerUser === void 0 ? void 0 : ownerUser.email);
+        }
+        return allowed;
+    }
+    const [company, memberships] = yield Promise.all([
+        db.collection('companies').findOne({ id: owner.ownerId, legacyArchived: { $ne: true } }, { projection: { email: 1 } }),
+        db.collection('company_members')
+            .find({ companyId: owner.ownerId }, { projection: { userId: 1 } })
+            .toArray()
+    ]);
+    pushEmail(company === null || company === void 0 ? void 0 : company.email);
+    const memberIds = Array.from(new Set(memberships
+        .map((membership) => (typeof (membership === null || membership === void 0 ? void 0 : membership.userId) === 'string' ? membership.userId : ''))
+        .filter((memberId) => memberId.length > 0)));
+    if (memberIds.length > 0) {
+        const members = yield db.collection('users')
+            .find({ id: { $in: memberIds } }, { projection: { email: 1 } })
+            .toArray();
+        for (const member of members) {
+            pushEmail(member === null || member === void 0 ? void 0 : member.email);
+        }
+    }
+    return allowed;
+});
+const reportPreviewRateLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 10 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        success: false,
+        error: 'Too many report preview requests',
+        message: 'Please wait before sending another report preview.'
+    }
 });
 const computeNextRunAt = (schedule, fromMs = Date.now()) => {
     var _a;
@@ -295,12 +358,16 @@ const startReportScheduleWorker = () => {
     }, 10000);
 };
 exports.startReportScheduleWorker = startReportScheduleWorker;
-router.post('/preview-email', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+router.post('/preview-email', authMiddleware_1.requireAuth, reportPreviewRateLimiter, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b, _c, _d, _e, _f;
     try {
         const actor = req.user;
         if (!(actor === null || actor === void 0 ? void 0 : actor.id)) {
             return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+        const owner = yield getOwnerFromRequest(req);
+        if (!owner) {
+            return res.status(403).json({ success: false, error: 'Unauthorized identity context' });
         }
         if (!(0, emailService_1.isEmailDeliveryConfigured)()) {
             return res.status(503).json({
@@ -311,6 +378,31 @@ router.post('/preview-email', authMiddleware_1.requireAuth, (req, res) => __awai
         const recipients = normalizeRecipients((_a = req.body) === null || _a === void 0 ? void 0 : _a.recipients);
         if (recipients.length === 0) {
             return res.status(400).json({ success: false, error: 'At least one valid recipient is required' });
+        }
+        const db = (0, db_1.getDB)();
+        const nowMs = Date.now();
+        const last24h = nowMs - 24 * 60 * 60 * 1000;
+        const sentInLast24h = yield db.collection(REPORT_PREVIEW_AUDIT_COLLECTION).countDocuments({
+            ownerId: owner.ownerId,
+            ownerType: owner.ownerType,
+            createdAtMs: { $gte: last24h }
+        });
+        if (sentInLast24h >= REPORT_PREVIEW_DAILY_LIMIT) {
+            return res.status(429).json({
+                success: false,
+                error: 'Daily report preview limit reached',
+                message: 'Report preview quota exceeded for the last 24 hours.'
+            });
+        }
+        const allowedRecipients = yield collectAllowedPreviewRecipients(owner, actor.id);
+        const forbiddenRecipients = recipients.filter((recipient) => !allowedRecipients.has(recipient));
+        if (forbiddenRecipients.length > 0) {
+            return res.status(403).json({
+                success: false,
+                error: 'Recipient not allowed',
+                message: 'Report previews can only be sent to verified owner/team email recipients.',
+                recipients: forbiddenRecipients
+            });
         }
         const summary = typeof ((_b = req.body) === null || _b === void 0 ? void 0 : _b.summary) === 'object' && ((_c = req.body) === null || _c === void 0 ? void 0 : _c.summary) ? req.body.summary : {};
         const deliveryMode = ((_d = req.body) === null || _d === void 0 ? void 0 : _d.deliveryMode) === 'pdf_attachment' ? 'pdf_attachment' : 'inline_email';
@@ -339,6 +431,16 @@ router.post('/preview-email', authMiddleware_1.requireAuth, (req, res) => __awai
                 error: ((_f = results[0]) === null || _f === void 0 ? void 0 : _f.reason) || 'No report emails were delivered'
             });
         }
+        yield db.collection(REPORT_PREVIEW_AUDIT_COLLECTION).insertOne({
+            id: `report-preview-${nowMs}-${Math.random().toString(36).slice(2, 9)}`,
+            ownerId: owner.ownerId,
+            ownerType: owner.ownerType,
+            requestedByUserId: actor.id,
+            recipients,
+            sentTo,
+            createdAtMs: nowMs,
+            createdAt: new Date(nowMs).toISOString()
+        });
         return res.json({
             success: true,
             sentTo

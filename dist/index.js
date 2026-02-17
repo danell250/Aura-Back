@@ -77,6 +77,7 @@ const companyRoutes_1 = __importDefault(require("./routes/companyRoutes"));
 const reportsRoutes_1 = __importStar(require("./routes/reportsRoutes"));
 const ownerControlRoutes_1 = __importDefault(require("./routes/ownerControlRoutes"));
 const authMiddleware_1 = require("./middleware/authMiddleware");
+const csrfMiddleware_1 = require("./middleware/csrfMiddleware");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const db_1 = require("./db");
@@ -268,6 +269,7 @@ const limiter = (0, express_rate_limit_1.default)({
 });
 app.use('/api', limiter);
 app.use((0, cookie_parser_1.default)());
+app.use('/api', (0, csrfMiddleware_1.createCsrfProtection)({ allowedOrigins }));
 // Passport GitHub OAuth Strategy Configuration
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
     passport_1.default.use(new passport_github2_1.Strategy({

@@ -168,17 +168,43 @@ const USER_SENSITIVE_UPDATE_FIELDS = new Set([
     'createdAt',
     'updatedAt'
 ]);
+const PUBLIC_USER_PROFILE_FIELDS = new Set([
+    'id',
+    'firstName',
+    'lastName',
+    'name',
+    'handle',
+    'avatar',
+    'avatarType',
+    'avatarKey',
+    'avatarCrop',
+    'coverImage',
+    'coverType',
+    'coverKey',
+    'coverCrop',
+    'bio',
+    'industry',
+    'companyName',
+    'website',
+    'profileLinks',
+    'country',
+    'isPrivate',
+    'isVerified',
+    'trustScore',
+    'activeGlow',
+    'userMode',
+    'type'
+]);
 const sanitizePublicUserProfile = (user) => {
-    if (!user)
+    if (!user || typeof user !== 'object')
         return user;
-    const sanitized = Object.assign({}, user);
-    delete sanitized.email;
-    delete sanitized.notifications;
-    delete sanitized.profileViews;
-    delete sanitized.blockedUsers;
-    delete sanitized.sentAcquaintanceRequests;
-    delete sanitized.sentConnectionRequests;
-    return sanitized;
+    const publicProfile = {};
+    for (const [key, value] of Object.entries(user)) {
+        if (PUBLIC_USER_PROFILE_FIELDS.has(key)) {
+            publicProfile[key] = value;
+        }
+    }
+    return publicProfile;
 };
 const dashboardDayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const formatDashboardHour = (hour) => {
