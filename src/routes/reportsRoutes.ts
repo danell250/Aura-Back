@@ -3,6 +3,7 @@ import { getDB, isDBConnected } from '../db';
 import { requireAuth } from '../middleware/authMiddleware';
 import { sendReportPreviewEmail, isEmailDeliveryConfigured } from '../services/emailService';
 import { resolveIdentityActor, validateIdentityAccess } from '../utils/identityUtils';
+import rateLimit from 'express-rate-limit';
 
 const router = Router();
 
@@ -40,9 +41,11 @@ interface ReportScheduleDoc {
 }
 
 const REPORT_SCHEDULES_COLLECTION = 'reportSchedules';
+const REPORT_PREVIEW_AUDIT_COLLECTION = 'reportPreviewAudit';
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REPORT_RUNNER_INTERVAL_MS = 60 * 1000;
 const REPORT_RUNNER_BATCH_LIMIT = 20;
+const REPORT_PREVIEW_DAILY_LIMIT = 30;
 const WEEKDAY_TO_INDEX: Record<WeekdayName, number> = {
   Monday: 1,
   Tuesday: 2,
@@ -103,6 +106,86 @@ const getOwnerFromRequest = async (req: any): Promise<{ ownerId: string; ownerTy
   if (!resolved) return null;
   return { ownerId: resolved.id, ownerType: resolved.type };
 };
+
+const normalizeEmail = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || !emailRegex.test(normalized)) return null;
+  return normalized;
+};
+
+const collectAllowedPreviewRecipients = async (
+  owner: { ownerId: string; ownerType: 'user' | 'company' },
+  actorId: string
+): Promise<Set<string>> => {
+  const db = getDB();
+  const allowed = new Set<string>();
+
+  const pushEmail = (value: unknown) => {
+    const normalized = normalizeEmail(value);
+    if (normalized) {
+      allowed.add(normalized);
+    }
+  };
+
+  const actor = await db.collection('users').findOne(
+    { id: actorId },
+    { projection: { email: 1 } }
+  );
+  pushEmail(actor?.email);
+
+  if (owner.ownerType === 'user') {
+    if (owner.ownerId !== actorId) {
+      const ownerUser = await db.collection('users').findOne(
+        { id: owner.ownerId },
+        { projection: { email: 1 } }
+      );
+      pushEmail(ownerUser?.email);
+    }
+    return allowed;
+  }
+
+  const [company, memberships] = await Promise.all([
+    db.collection('companies').findOne(
+      { id: owner.ownerId, legacyArchived: { $ne: true } },
+      { projection: { email: 1 } }
+    ),
+    db.collection('company_members')
+      .find({ companyId: owner.ownerId }, { projection: { userId: 1 } })
+      .toArray()
+  ]);
+
+  pushEmail(company?.email);
+
+  const memberIds = Array.from(new Set(
+    memberships
+      .map((membership: any) => (typeof membership?.userId === 'string' ? membership.userId : ''))
+      .filter((memberId: string) => memberId.length > 0)
+  ));
+
+  if (memberIds.length > 0) {
+    const members = await db.collection('users')
+      .find({ id: { $in: memberIds } }, { projection: { email: 1 } })
+      .toArray();
+    for (const member of members) {
+      pushEmail((member as any)?.email);
+    }
+  }
+
+  return allowed;
+};
+
+const reportPreviewRateLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too many report preview requests',
+    message: 'Please wait before sending another report preview.'
+  }
+});
 
 const computeNextRunAt = (schedule: Pick<ReportScheduleDoc, 'frequency' | 'weeklyDay' | 'monthlyDay' | 'time'>, fromMs = Date.now()): number => {
   const [hourPart, minutePart] = normalizeTime(schedule.time).split(':');
@@ -348,11 +431,15 @@ export const startReportScheduleWorker = () => {
   }, 10000);
 };
 
-router.post('/preview-email', requireAuth, async (req, res) => {
+router.post('/preview-email', requireAuth, reportPreviewRateLimiter, async (req, res) => {
   try {
     const actor = (req as any).user;
     if (!actor?.id) {
       return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+    const owner = await getOwnerFromRequest(req);
+    if (!owner) {
+      return res.status(403).json({ success: false, error: 'Unauthorized identity context' });
     }
     if (!isEmailDeliveryConfigured()) {
       return res.status(503).json({
@@ -364,6 +451,33 @@ router.post('/preview-email', requireAuth, async (req, res) => {
     const recipients = normalizeRecipients(req.body?.recipients);
     if (recipients.length === 0) {
       return res.status(400).json({ success: false, error: 'At least one valid recipient is required' });
+    }
+    const db = getDB();
+    const nowMs = Date.now();
+    const last24h = nowMs - 24 * 60 * 60 * 1000;
+    const sentInLast24h = await db.collection(REPORT_PREVIEW_AUDIT_COLLECTION).countDocuments({
+      ownerId: owner.ownerId,
+      ownerType: owner.ownerType,
+      createdAtMs: { $gte: last24h }
+    });
+
+    if (sentInLast24h >= REPORT_PREVIEW_DAILY_LIMIT) {
+      return res.status(429).json({
+        success: false,
+        error: 'Daily report preview limit reached',
+        message: 'Report preview quota exceeded for the last 24 hours.'
+      });
+    }
+
+    const allowedRecipients = await collectAllowedPreviewRecipients(owner, actor.id);
+    const forbiddenRecipients = recipients.filter((recipient) => !allowedRecipients.has(recipient));
+    if (forbiddenRecipients.length > 0) {
+      return res.status(403).json({
+        success: false,
+        error: 'Recipient not allowed',
+        message: 'Report previews can only be sent to verified owner/team email recipients.',
+        recipients: forbiddenRecipients
+      });
     }
 
     const summary = typeof req.body?.summary === 'object' && req.body?.summary ? req.body.summary : {};
@@ -401,6 +515,17 @@ router.post('/preview-email', requireAuth, async (req, res) => {
         error: results[0]?.reason || 'No report emails were delivered'
       });
     }
+
+    await db.collection(REPORT_PREVIEW_AUDIT_COLLECTION).insertOne({
+      id: `report-preview-${nowMs}-${Math.random().toString(36).slice(2, 9)}`,
+      ownerId: owner.ownerId,
+      ownerType: owner.ownerType,
+      requestedByUserId: actor.id,
+      recipients,
+      sentTo,
+      createdAtMs: nowMs,
+      createdAt: new Date(nowMs).toISOString()
+    });
 
     return res.json({
       success: true,

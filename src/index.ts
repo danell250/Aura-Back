@@ -29,6 +29,7 @@ import companyRoutes from './routes/companyRoutes';
 import reportsRoutes, { startReportScheduleWorker } from './routes/reportsRoutes';
 import ownerControlRoutes from './routes/ownerControlRoutes';
 import { attachUser, requireAuth } from './middleware/authMiddleware';
+import { createCsrfProtection } from './middleware/csrfMiddleware';
 import path from 'path';
 import fs from 'fs';
 import { connectDB, checkDBHealth, isDBConnected, getDB } from './db';
@@ -238,6 +239,7 @@ const limiter = rateLimit({
 app.use('/api', limiter);
 
 app.use(cookieParser());
+app.use('/api', createCsrfProtection({ allowedOrigins }));
 
 // Passport GitHub OAuth Strategy Configuration
 if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {

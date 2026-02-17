@@ -24,35 +24,6 @@ const readOwnerControlToken = (req: Request): string => {
   if (Array.isArray(headerValue) && typeof headerValue[0] === 'string' && headerValue[0].trim().length > 0) {
     return normalizeTokenCandidate(headerValue[0]);
   }
-  const authHeader = req.headers.authorization;
-  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
-    const bearerToken = authHeader.slice('Bearer '.length);
-    const normalizedBearer = normalizeTokenCandidate(bearerToken);
-    if (normalizedBearer) {
-      return normalizedBearer;
-    }
-  }
-  const pathToken = (req.params as Record<string, unknown>)?.accessToken;
-  if (typeof pathToken === 'string' && pathToken.trim().length > 0) {
-    return normalizeTokenCandidate(pathToken);
-  }
-  const queryToken = req.query?.accessToken;
-  if (typeof queryToken === 'string' && queryToken.trim().length > 0) {
-    return normalizeTokenCandidate(queryToken);
-  }
-  const queryAliasToken = req.query?.token;
-  if (typeof queryAliasToken === 'string' && queryAliasToken.trim().length > 0) {
-    return normalizeTokenCandidate(queryAliasToken);
-  }
-  const firstPathSegmentRaw = req.path.split('/').filter(Boolean)[0];
-  const firstPathSegment =
-    typeof firstPathSegmentRaw === 'string' ? normalizeTokenCandidate(firstPathSegmentRaw) : '';
-  if (
-    firstPathSegment &&
-    (firstPathSegment.startsWith('oc_') || firstPathSegment.toLowerCase().startsWith('orbit-admin-'))
-  ) {
-    return firstPathSegment;
-  }
   return '';
 };
 
@@ -398,7 +369,6 @@ const getOverview = async (_req: Request, res: Response) => {
 };
 
 router.get('/overview', getOverview);
-router.get('/:accessToken/overview', getOverview);
 
 const patchReportStatus = async (req: Request, res: Response) => {
   try {
@@ -451,7 +421,6 @@ const patchReportStatus = async (req: Request, res: Response) => {
 };
 
 router.patch('/reports/:reportId', patchReportStatus);
-router.patch('/:accessToken/reports/:reportId', patchReportStatus);
 
 const setUserSuspension = async (req: Request, res: Response) => {
   try {
@@ -498,7 +467,6 @@ const setUserSuspension = async (req: Request, res: Response) => {
 };
 
 router.post('/users/:userId/suspend', setUserSuspension);
-router.post('/:accessToken/users/:userId/suspend', setUserSuspension);
 
 const setPostHiddenState = async (req: Request, res: Response) => {
   try {
@@ -575,6 +543,5 @@ const setPostHiddenState = async (req: Request, res: Response) => {
 };
 
 router.post('/posts/:postId/hide', setPostHiddenState);
-router.post('/:accessToken/posts/:postId/hide', setPostHiddenState);
 
 export default router;

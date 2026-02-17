@@ -169,16 +169,43 @@ const USER_SENSITIVE_UPDATE_FIELDS = new Set<string>([
   'updatedAt'
 ]);
 
+const PUBLIC_USER_PROFILE_FIELDS = new Set<string>([
+  'id',
+  'firstName',
+  'lastName',
+  'name',
+  'handle',
+  'avatar',
+  'avatarType',
+  'avatarKey',
+  'avatarCrop',
+  'coverImage',
+  'coverType',
+  'coverKey',
+  'coverCrop',
+  'bio',
+  'industry',
+  'companyName',
+  'website',
+  'profileLinks',
+  'country',
+  'isPrivate',
+  'isVerified',
+  'trustScore',
+  'activeGlow',
+  'userMode',
+  'type'
+]);
+
 const sanitizePublicUserProfile = (user: any): any => {
-  if (!user) return user;
-  const sanitized = { ...user };
-  delete sanitized.email;
-  delete sanitized.notifications;
-  delete sanitized.profileViews;
-  delete sanitized.blockedUsers;
-  delete sanitized.sentAcquaintanceRequests;
-  delete sanitized.sentConnectionRequests;
-  return sanitized;
+  if (!user || typeof user !== 'object') return user;
+  const publicProfile: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(user)) {
+    if (PUBLIC_USER_PROFILE_FIELDS.has(key)) {
+      publicProfile[key] = value;
+    }
+  }
+  return publicProfile;
 };
 
 interface UserDashboardTotals {
