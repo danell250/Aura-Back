@@ -1327,15 +1327,22 @@ exports.postsController = {
             }
             const db = (0, db_1.getDB)();
             const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!authenticatedUserId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Unauthorized',
+                    message: 'Authentication required'
+                });
+            }
             const viewerActor = yield resolveViewerActor(req);
-            if (authenticatedUserId && viewerActor === null) {
+            if (!viewerActor) {
                 return res.status(403).json({
                     success: false,
                     error: 'Forbidden',
                     message: 'Unauthorized identity context'
                 });
             }
-            const viewerIdentityId = (viewerActor === null || viewerActor === void 0 ? void 0 : viewerActor.id) || authenticatedUserId;
+            const viewerIdentityId = viewerActor.id;
             // Find the post first to check the author
             const post = yield db.collection(POSTS_COLLECTION).findOne({ id });
             if (!post) {
@@ -1344,7 +1351,7 @@ exports.postsController = {
             const authorId = (_b = post.author) === null || _b === void 0 ? void 0 : _b.id;
             let updatedPost = post;
             // Only increment if viewer is NOT the author
-            if (!viewerIdentityId || viewerIdentityId !== authorId) {
+            if (viewerIdentityId !== authorId) {
                 const result = yield db.collection(POSTS_COLLECTION).findOneAndUpdate({ id }, {
                     $inc: { viewCount: 1 },
                     $setOnInsert: { viewCount: 1 }
@@ -1959,6 +1966,7 @@ exports.postsController = {
     }),
     // POST /api/posts/:id/media/:mediaId/metrics - Update media item metrics
     updateMediaMetrics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b;
         try {
             const { id } = req.params;
             let { mediaId } = req.params;
@@ -1969,6 +1977,10 @@ exports.postsController = {
                 return res.status(400).json({ success: false, error: 'Invalid metric' });
             }
             const db = (0, db_1.getDB)();
+            const post = yield db.collection(POSTS_COLLECTION).findOne({ id }, { projection: { id: 1, author: 1 } });
+            if (!post) {
+                return res.status(404).json({ success: false, error: 'Post or media item not found' });
+            }
             const updateField = `mediaItems.$[elem].metrics.${metric}`;
             // For dwellMs, we increment by the value provided. For others, we increment by 1.
             const incrementValue = metric === 'dwellMs' ? (Number(value) || 0) : 1;
@@ -1992,9 +2004,15 @@ exports.postsController = {
             else if (metric === 'dwellMs') {
                 updateDoc.$inc['metrics.totalDwellMs'] = incrementValue;
             }
-            const result = yield db.collection(POSTS_COLLECTION).updateOne({ id }, updateDoc, { arrayFilters: [{ "elem.id": normalizedMediaId }] });
+            const result = yield db.collection(POSTS_COLLECTION).updateOne({ id, 'mediaItems.id': normalizedMediaId }, updateDoc, { arrayFilters: [{ "elem.id": normalizedMediaId }] });
             if (result.matchedCount === 0) {
                 return res.status(404).json({ success: false, error: 'Post or media item not found' });
+            }
+            const authorId = (_a = post.author) === null || _a === void 0 ? void 0 : _a.id;
+            if (authorId) {
+                (0, exports.emitAuthorInsightsUpdate)(req.app, authorId, ((_b = post.author) === null || _b === void 0 ? void 0 : _b.type) === 'company' ? 'company' : 'user').catch((err) => {
+                    console.error('Failed to emit insights update in updateMediaMetrics:', err);
+                });
             }
             res.json({ success: true, message: 'Metrics updated' });
         }

@@ -1579,15 +1579,22 @@ export const postsController = {
 
       const db = getDB();
       const authenticatedUserId = (req as any).user?.id as string | undefined;
+      if (!authenticatedUserId) {
+        return res.status(401).json({
+          success: false,
+          error: 'Unauthorized',
+          message: 'Authentication required'
+        });
+      }
       const viewerActor = await resolveViewerActor(req);
-      if (authenticatedUserId && viewerActor === null) {
+      if (!viewerActor) {
         return res.status(403).json({
           success: false,
           error: 'Forbidden',
           message: 'Unauthorized identity context'
         });
       }
-      const viewerIdentityId = viewerActor?.id || authenticatedUserId;
+      const viewerIdentityId = viewerActor.id;
 
       // Find the post first to check the author
       const post = await db.collection(POSTS_COLLECTION).findOne({ id });
@@ -1599,7 +1606,7 @@ export const postsController = {
       let updatedPost = post;
 
       // Only increment if viewer is NOT the author
-      if (!viewerIdentityId || viewerIdentityId !== authorId) {
+      if (viewerIdentityId !== authorId) {
         const result = await db.collection(POSTS_COLLECTION).findOneAndUpdate(
           { id },
           {
@@ -2459,6 +2466,14 @@ export const postsController = {
       }
 
       const db = getDB();
+      const post = await db.collection(POSTS_COLLECTION).findOne(
+        { id },
+        { projection: { id: 1, author: 1 } }
+      );
+      if (!post) {
+        return res.status(404).json({ success: false, error: 'Post or media item not found' });
+      }
+
       const updateField = `mediaItems.$[elem].metrics.${metric}`;
       // For dwellMs, we increment by the value provided. For others, we increment by 1.
       const incrementValue = metric === 'dwellMs' ? (Number(value) || 0) : 1;
@@ -2483,13 +2498,24 @@ export const postsController = {
       }
 
       const result = await db.collection(POSTS_COLLECTION).updateOne(
-        { id },
+        { id, 'mediaItems.id': normalizedMediaId },
         updateDoc,
         { arrayFilters: [{ "elem.id": normalizedMediaId }] }
       );
 
       if (result.matchedCount === 0) {
         return res.status(404).json({ success: false, error: 'Post or media item not found' });
+      }
+
+      const authorId = post.author?.id;
+      if (authorId) {
+        emitAuthorInsightsUpdate(
+          req.app,
+          authorId,
+          post.author?.type === 'company' ? 'company' : 'user'
+        ).catch((err) => {
+          console.error('Failed to emit insights update in updateMediaMetrics:', err);
+        });
       }
 
       res.json({ success: true, message: 'Metrics updated' });
