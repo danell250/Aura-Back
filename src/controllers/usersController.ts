@@ -1836,11 +1836,25 @@ export const usersController = {
           handle: 1,
           avatar: 1,
           avatarType: 1,
+          avatarKey: 1,
+          avatarCrop: 1,
+          coverImage: 1,
+          coverType: 1,
+          coverKey: 1,
+          coverCrop: 1,
           bio: 1,
           firstName: 1,
           lastName: 1,
           industry: 1,
-          companyName: 1
+          companyName: 1,
+          isVerified: 1,
+          isPrivate: 1,
+          trustScore: 1,
+          activeGlow: 1,
+          userMode: 1,
+          website: 1,
+          profileLinks: 1,
+          country: 1
         })
         .limit(10)
         .toArray();
@@ -1865,22 +1879,53 @@ export const usersController = {
           handle: 1,
           avatar: 1,
           avatarType: 1,
+          avatarKey: 1,
+          avatarCrop: 1,
+          coverImage: 1,
+          coverType: 1,
+          coverKey: 1,
+          coverCrop: 1,
+          bio: 1,
           description: 1,
           industry: 1,
-          isVerified: 1
+          website: 1,
+          country: 1,
+          employeeCount: 1,
+          ownerId: 1,
+          isPrivate: 1,
+          isVerified: 1,
+          subscriberCount: 1,
+          subscribers: 1,
+          profileLinks: 1
         })
         .limit(10)
         .toArray();
 
       // Transform and combine results
       const searchResults = [
-        ...usersResults.map(u => ({ ...u, type: 'user' })),
-        ...companiesResults.map(c => ({
-          ...c,
-          type: 'company',
-          bio: c.description, // Map description to bio for consistent UI
-          userMode: 'company'
-        }))
+        ...usersResults.map((u) =>
+          sanitizePublicUserProfile({
+            ...transformUser(u),
+            type: 'user'
+          })
+        ),
+        ...companiesResults.map((c) => {
+          const transformedCompany = transformUser({
+            ...c,
+            type: 'company',
+            companyName: c.name,
+            companyWebsite: c.website,
+            userMode: 'company'
+          });
+
+          return {
+            ...transformedCompany,
+            type: 'company',
+            bio:
+              (typeof transformedCompany.bio === 'string' && transformedCompany.bio.trim()) ||
+              (typeof c.description === 'string' ? c.description : '')
+          };
+        })
       ];
 
       res.json({
