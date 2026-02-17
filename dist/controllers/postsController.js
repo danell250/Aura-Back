@@ -367,7 +367,7 @@ const getAuthorInsightsSnapshot = (authorId_1, ...args_1) => __awaiter(void 0, [
             .sort({ viewCount: -1 })
             .limit(5)
             .toArray(),
-        db.collection(authorCollection).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1, location: 1 } }),
+        db.collection(authorCollection).findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1, location: 1, profileViews: 1 } }),
         db.collection('adAnalytics').aggregate([
             { $match: buildAuthorAdAnalyticsMatch(authorId, authorType) },
             {
@@ -398,12 +398,40 @@ const getAuthorInsightsSnapshot = (authorId_1, ...args_1) => __awaiter(void 0, [
         });
     });
     const neuralInsights = buildLiveNeuralInsights(totals, mappedTopPosts, (_e = adAgg === null || adAgg === void 0 ? void 0 : adAgg.totalImpressions) !== null && _e !== void 0 ? _e : 0, (_f = adAgg === null || adAgg === void 0 ? void 0 : adAgg.totalClicks) !== null && _f !== void 0 ? _f : 0, (owner === null || owner === void 0 ? void 0 : owner.country) || (owner === null || owner === void 0 ? void 0 : owner.location));
+    const profileViewIds = Array.from(new Set((Array.isArray(owner === null || owner === void 0 ? void 0 : owner.profileViews) ? owner.profileViews : [])
+        .map((id) => String(id || '').trim())
+        .filter((id) => id.length > 0)));
+    let profileViewers = [];
+    if (profileViewIds.length > 0) {
+        const viewerDocs = yield db.collection(USERS_COLLECTION)
+            .find({ id: { $in: profileViewIds } })
+            .project({ id: 1, name: 1, handle: 1, avatar: 1, avatarType: 1 })
+            .toArray();
+        const viewerById = new Map();
+        for (const viewer of viewerDocs) {
+            if (viewer === null || viewer === void 0 ? void 0 : viewer.id) {
+                viewerById.set(String(viewer.id), viewer);
+            }
+        }
+        profileViewers = profileViewIds.map((viewerId) => {
+            const viewer = viewerById.get(viewerId);
+            return {
+                id: viewerId,
+                name: (viewer === null || viewer === void 0 ? void 0 : viewer.name) || 'Aura member',
+                handle: (viewer === null || viewer === void 0 ? void 0 : viewer.handle) || '@aura',
+                avatar: (viewer === null || viewer === void 0 ? void 0 : viewer.avatar) || '',
+                avatarType: (viewer === null || viewer === void 0 ? void 0 : viewer.avatarType) === 'video' ? 'video' : 'image'
+            };
+        });
+    }
     return {
         totals,
         credits: {
             balance: (_g = owner === null || owner === void 0 ? void 0 : owner.auraCredits) !== null && _g !== void 0 ? _g : 0,
             spent: (_h = owner === null || owner === void 0 ? void 0 : owner.auraCreditsSpent) !== null && _h !== void 0 ? _h : 0
         },
+        profileViews: profileViewIds,
+        profileViewers,
         topPosts: mappedTopPosts,
         neuralInsights
     };

@@ -114,6 +114,24 @@ const USER_SELF_UPDATE_ALLOWLIST = new Set([
     'userMode'
 ]);
 const MAX_PROFILE_LINKS = 8;
+const MAX_FEATURED_POSTS = 3;
+const normalizeFeaturedPostIds = (input) => {
+    if (!Array.isArray(input))
+        return null;
+    const seen = new Set();
+    const normalized = [];
+    for (const value of input) {
+        const id = String(value || '').trim();
+        if (!id || seen.has(id))
+            continue;
+        seen.add(id);
+        normalized.push(id);
+        if (normalized.length > MAX_FEATURED_POSTS) {
+            return null;
+        }
+    }
+    return normalized;
+};
 const sanitizeProfileLinks = (value) => {
     if (!Array.isArray(value))
         return null;
@@ -312,7 +330,7 @@ exports.usersController = {
                 .limit(5)
                 .toArray();
             const [user, activeSub, adAgg] = yield Promise.all([
-                db.collection('users').findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1 } }),
+                db.collection('users').findOne({ id: authorId }, { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1, profileViews: 1 } }),
                 db.collection('adSubscriptions').findOne({
                     userId: authorId,
                     status: 'active',
@@ -340,6 +358,32 @@ exports.usersController = {
                     }
                 ]).toArray().then(rows => rows[0] || null)
             ]);
+            const profileViewIds = Array.from(new Set((Array.isArray(user === null || user === void 0 ? void 0 : user.profileViews) ? user.profileViews : [])
+                .map((id) => String(id || '').trim())
+                .filter((id) => id.length > 0)));
+            let profileViewers = [];
+            if (profileViewIds.length > 0) {
+                const viewerDocs = yield db.collection('users')
+                    .find({ id: { $in: profileViewIds } })
+                    .project({ id: 1, name: 1, handle: 1, avatar: 1, avatarType: 1 })
+                    .toArray();
+                const viewerById = new Map();
+                for (const viewer of viewerDocs) {
+                    if (viewer === null || viewer === void 0 ? void 0 : viewer.id) {
+                        viewerById.set(String(viewer.id), viewer);
+                    }
+                }
+                profileViewers = profileViewIds.map((viewerId) => {
+                    const viewer = viewerById.get(viewerId);
+                    return {
+                        id: viewerId,
+                        name: (viewer === null || viewer === void 0 ? void 0 : viewer.name) || 'Aura member',
+                        handle: (viewer === null || viewer === void 0 ? void 0 : viewer.handle) || '@aura',
+                        avatar: (viewer === null || viewer === void 0 ? void 0 : viewer.avatar) || '',
+                        avatarType: (viewer === null || viewer === void 0 ? void 0 : viewer.avatarType) === 'video' ? 'video' : 'image'
+                    };
+                });
+            }
             let analyticsLevel = 'none';
             if (activeSub) {
                 if (activeSub.packageId === 'pkg-enterprise')
@@ -373,6 +417,8 @@ exports.usersController = {
                     balance: (_g = user === null || user === void 0 ? void 0 : user.auraCredits) !== null && _g !== void 0 ? _g : 0,
                     spent: (_h = user === null || user === void 0 ? void 0 : user.auraCreditsSpent) !== null && _h !== void 0 ? _h : 0
                 },
+                profileViews: profileViewIds,
+                profileViewers,
                 topPosts: mappedTopPosts,
                 neuralInsights
             };
@@ -385,6 +431,137 @@ exports.usersController = {
         catch (error) {
             console.error('getMyDashboard error', error);
             res.status(500).json({ success: false, error: 'Failed to fetch dashboard data' });
+        }
+    }),
+    // GET /api/users/:id/featured-posts - Get ordered featured post IDs for a personal profile
+    getFeaturedPosts: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const user = yield db.collection('users').findOne({ id }, { projection: { id: 1, featuredPostIds: 1 } });
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found'
+                });
+            }
+            const requestedIds = normalizeFeaturedPostIds(user.featuredPostIds || []) || [];
+            if (requestedIds.length === 0) {
+                return res.json({
+                    success: true,
+                    data: {
+                        ownerType: 'user',
+                        ownerId: id,
+                        featuredPostIds: [],
+                        maxFeaturedPosts: MAX_FEATURED_POSTS
+                    }
+                });
+            }
+            const ownedPosts = yield db.collection('posts')
+                .find({
+                id: { $in: requestedIds },
+                'author.id': id,
+                $or: [
+                    { ownerType: { $exists: false } },
+                    { ownerType: 'user' }
+                ]
+            })
+                .project({ id: 1 })
+                .toArray();
+            const validPostIds = new Set(ownedPosts
+                .map((post) => String((post === null || post === void 0 ? void 0 : post.id) || '').trim())
+                .filter((postId) => postId.length > 0));
+            const featuredPostIds = requestedIds.filter((postId) => validPostIds.has(postId));
+            // Auto-clean stale IDs when source posts no longer exist or changed ownership.
+            if (featuredPostIds.length !== requestedIds.length) {
+                yield db.collection('users').updateOne({ id }, {
+                    $set: {
+                        featuredPostIds,
+                        updatedAt: new Date().toISOString()
+                    }
+                });
+            }
+            return res.json({
+                success: true,
+                data: {
+                    ownerType: 'user',
+                    ownerId: id,
+                    featuredPostIds,
+                    maxFeaturedPosts: MAX_FEATURED_POSTS
+                }
+            });
+        }
+        catch (error) {
+            console.error('getFeaturedPosts error', error);
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to fetch featured posts'
+            });
+        }
+    }),
+    // PUT /api/users/:id/featured-posts - Update ordered featured post IDs for personal profile
+    updateFeaturedPosts: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const normalizedFeaturedPostIds = normalizeFeaturedPostIds((req.body || {}).featuredPostIds);
+            if (normalizedFeaturedPostIds === null) {
+                return res.status(400).json({
+                    success: false,
+                    error: `featuredPostIds must be an array of up to ${MAX_FEATURED_POSTS} unique post IDs`
+                });
+            }
+            const user = yield db.collection('users').findOne({ id }, { projection: { id: 1 } });
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'User not found'
+                });
+            }
+            if (normalizedFeaturedPostIds.length > 0) {
+                const ownedPosts = yield db.collection('posts')
+                    .find({
+                    id: { $in: normalizedFeaturedPostIds },
+                    'author.id': id,
+                    $or: [
+                        { ownerType: { $exists: false } },
+                        { ownerType: 'user' }
+                    ]
+                })
+                    .project({ id: 1 })
+                    .toArray();
+                if (ownedPosts.length !== normalizedFeaturedPostIds.length) {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'One or more selected posts are invalid for this personal profile'
+                    });
+                }
+            }
+            const updatedAt = new Date().toISOString();
+            yield db.collection('users').updateOne({ id }, {
+                $set: {
+                    featuredPostIds: normalizedFeaturedPostIds,
+                    updatedAt
+                }
+            });
+            const payload = {
+                ownerType: 'user',
+                ownerId: id,
+                featuredPostIds: normalizedFeaturedPostIds,
+                updatedAt
+            };
+            (0, socketHub_1.emitToIdentity)('user', id, 'featured_posts_updated', payload);
+            return res.json({
+                success: true,
+                data: payload
+            });
+        }
+        catch (error) {
+            console.error('updateFeaturedPosts error', error);
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to update featured posts'
+            });
         }
     }),
     // GET /api/users - Get all users (respects showInSearch privacy setting)
@@ -2251,6 +2428,7 @@ exports.usersController = {
                 ownerId: id,
                 notification: newNotification
             });
+            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id, 'user');
             res.json({
                 success: true,
                 data: {

@@ -18,6 +18,7 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const emailService_1 = require("../services/emailService");
 const notificationsController_1 = require("../controllers/notificationsController");
 const postsController_1 = require("../controllers/postsController");
+const socketHub_1 = require("../realtime/socketHub");
 const crypto_1 = __importDefault(require("crypto"));
 const userUtils_1 = require("../utils/userUtils");
 // Helper to generate unique handle for company
@@ -52,6 +53,24 @@ const normalizeUniqueIds = (input) => {
     return Array.from(new Set(input.filter((value) => typeof value === 'string' && value.trim().length > 0)));
 };
 const MAX_PROFILE_LINKS = 8;
+const MAX_FEATURED_POSTS = 3;
+const normalizeFeaturedPostIds = (input) => {
+    if (!Array.isArray(input))
+        return null;
+    const seen = new Set();
+    const normalized = [];
+    for (const value of input) {
+        const id = String(value || '').trim();
+        if (!id || seen.has(id))
+            continue;
+        seen.add(id);
+        normalized.push(id);
+        if (normalized.length > MAX_FEATURED_POSTS) {
+            return null;
+        }
+    }
+    return normalized;
+};
 const sanitizeProfileLinks = (value) => {
     if (!Array.isArray(value))
         return null;
@@ -262,6 +281,135 @@ router.get('/:companyId/dashboard', authMiddleware_1.requireAuth, (req, res) => 
         return res.status(500).json({
             success: false,
             error: 'Failed to fetch company dashboard data'
+        });
+    }
+}));
+// GET /api/companies/:companyId/featured-posts - Get ordered featured post IDs for a company profile
+router.get('/:companyId/featured-posts', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { companyId } = req.params;
+        const db = (0, db_1.getDB)();
+        const company = yield db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } }, { projection: { id: 1, featuredPostIds: 1 } });
+        if (!company) {
+            return res.status(404).json({
+                success: false,
+                error: 'Company not found'
+            });
+        }
+        const requestedIds = normalizeFeaturedPostIds(company.featuredPostIds || []) || [];
+        if (requestedIds.length === 0) {
+            return res.json({
+                success: true,
+                data: {
+                    ownerType: 'company',
+                    ownerId: companyId,
+                    featuredPostIds: [],
+                    maxFeaturedPosts: MAX_FEATURED_POSTS
+                }
+            });
+        }
+        const ownedPosts = yield db.collection('posts')
+            .find({
+            id: { $in: requestedIds },
+            'author.id': companyId,
+            $or: [
+                { ownerType: { $exists: false } },
+                { ownerType: 'company' }
+            ]
+        })
+            .project({ id: 1 })
+            .toArray();
+        const validPostIds = new Set(ownedPosts
+            .map((post) => String((post === null || post === void 0 ? void 0 : post.id) || '').trim())
+            .filter((postId) => postId.length > 0));
+        const featuredPostIds = requestedIds.filter((postId) => validPostIds.has(postId));
+        // Auto-clean stale IDs so ordering always maps to live company posts.
+        if (featuredPostIds.length !== requestedIds.length) {
+            yield db.collection('companies').updateOne({ id: companyId, legacyArchived: { $ne: true } }, {
+                $set: {
+                    featuredPostIds,
+                    updatedAt: new Date()
+                }
+            });
+        }
+        return res.json({
+            success: true,
+            data: {
+                ownerType: 'company',
+                ownerId: companyId,
+                featuredPostIds,
+                maxFeaturedPosts: MAX_FEATURED_POSTS
+            }
+        });
+    }
+    catch (error) {
+        console.error('Get company featured posts error:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to fetch featured posts'
+        });
+    }
+}));
+// PUT /api/companies/:companyId/featured-posts - Update ordered featured post IDs for company profile
+router.put('/:companyId/featured-posts', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { companyId } = req.params;
+        const currentUser = req.user;
+        const db = (0, db_1.getDB)();
+        const access = yield resolveCompanyAccess(db, companyId, currentUser.id, 'moderator');
+        if (!access.allowed) {
+            return res.status(access.status || 403).json({ success: false, error: access.error || 'Unauthorized' });
+        }
+        const normalizedFeaturedPostIds = normalizeFeaturedPostIds((req.body || {}).featuredPostIds);
+        if (normalizedFeaturedPostIds === null) {
+            return res.status(400).json({
+                success: false,
+                error: `featuredPostIds must be an array of up to ${MAX_FEATURED_POSTS} unique post IDs`
+            });
+        }
+        if (normalizedFeaturedPostIds.length > 0) {
+            const ownedPosts = yield db.collection('posts')
+                .find({
+                id: { $in: normalizedFeaturedPostIds },
+                'author.id': companyId,
+                $or: [
+                    { ownerType: { $exists: false } },
+                    { ownerType: 'company' }
+                ]
+            })
+                .project({ id: 1 })
+                .toArray();
+            if (ownedPosts.length !== normalizedFeaturedPostIds.length) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'One or more selected posts are invalid for this company profile'
+                });
+            }
+        }
+        const updatedAt = new Date();
+        yield db.collection('companies').updateOne({ id: companyId, legacyArchived: { $ne: true } }, {
+            $set: {
+                featuredPostIds: normalizedFeaturedPostIds,
+                updatedAt
+            }
+        });
+        const payload = {
+            ownerType: 'company',
+            ownerId: companyId,
+            featuredPostIds: normalizedFeaturedPostIds,
+            updatedAt: updatedAt.toISOString()
+        };
+        (0, socketHub_1.emitToIdentity)('company', companyId, 'featured_posts_updated', payload);
+        return res.json({
+            success: true,
+            data: payload
+        });
+    }
+    catch (error) {
+        console.error('Update company featured posts error:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to update featured posts'
         });
     }
 }));

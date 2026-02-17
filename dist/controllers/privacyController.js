@@ -13,6 +13,7 @@ exports.privacyController = void 0;
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
 const socketHub_1 = require("../realtime/socketHub");
+const postsController_1 = require("./postsController");
 exports.privacyController = {
     // GET /api/privacy/settings/:userId - Get user's privacy settings
     getPrivacySettings: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -403,6 +404,7 @@ exports.privacyController = {
                 ownerId: profileOwnerId,
                 notification: newNotification
             });
+            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, profileOwnerId, ownerType);
             console.log('Profile view notification created:', {
                 profileOwnerId,
                 viewerId: authenticatedUserId,

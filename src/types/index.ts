@@ -22,6 +22,7 @@ export interface User {
   blockedUsers?: string[];
   blockedBy?: string[];
   profileViews?: string[];
+  featuredPostIds?: string[];
   isPrivate?: boolean;
   isVerified?: boolean;
   userMode?: 'creator' | 'company' | 'hybrid' | 'corporate';
@@ -59,6 +60,7 @@ export interface Company {
   industry: string;
   bio: string;
   website: string;
+  featuredPostIds?: string[];
   ownerId: string;
   isVerified: boolean;
   createdAt: Date | string;

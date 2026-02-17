@@ -3,6 +3,7 @@ import { getDB } from '../db';
 import { User } from '../types';
 import { transformUsers } from '../utils/userUtils';
 import { emitToIdentity } from '../realtime/socketHub';
+import { emitAuthorInsightsUpdate } from './postsController';
 
 export const privacyController = {
   // GET /api/privacy/settings/:userId - Get user's privacy settings
@@ -433,6 +434,7 @@ export const privacyController = {
         ownerId: profileOwnerId,
         notification: newNotification
       });
+      emitAuthorInsightsUpdate(req.app, profileOwnerId, ownerType);
 
       console.log('Profile view notification created:', {
         profileOwnerId,

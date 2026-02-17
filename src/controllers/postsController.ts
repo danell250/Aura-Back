@@ -438,6 +438,14 @@ export const getAuthorInsightsSnapshot = async (
 ): Promise<{
   totals: LiveDashboardTotals;
   credits: { balance: number; spent: number };
+  profileViews: string[];
+  profileViewers: Array<{
+    id: string;
+    name: string;
+    handle: string;
+    avatar: string;
+    avatarType: 'image' | 'video';
+  }>;
   topPosts: LiveDashboardTopPost[];
   neuralInsights: ReturnType<typeof buildLiveNeuralInsights>;
 } | null> => {
@@ -468,7 +476,7 @@ export const getAuthorInsightsSnapshot = async (
       .toArray(),
     db.collection(authorCollection).findOne(
       { id: authorId },
-      { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1, location: 1 } }
+      { projection: { auraCredits: 1, auraCreditsSpent: 1, country: 1, location: 1, profileViews: 1 } }
     ),
     db.collection('adAnalytics').aggregate([
       { $match: buildAuthorAdAnalyticsMatch(authorId, authorType) },
@@ -507,12 +515,55 @@ export const getAuthorInsightsSnapshot = async (
     owner?.country || owner?.location
   );
 
+  const profileViewIds = Array.from(
+    new Set(
+      (Array.isArray(owner?.profileViews) ? owner.profileViews : [])
+        .map((id: unknown) => String(id || '').trim())
+        .filter((id: string) => id.length > 0)
+    )
+  );
+
+  let profileViewers: Array<{
+    id: string;
+    name: string;
+    handle: string;
+    avatar: string;
+    avatarType: 'image' | 'video';
+  }> = [];
+
+  if (profileViewIds.length > 0) {
+    const viewerDocs = await db.collection(USERS_COLLECTION)
+      .find({ id: { $in: profileViewIds } })
+      .project({ id: 1, name: 1, handle: 1, avatar: 1, avatarType: 1 })
+      .toArray();
+
+    const viewerById = new Map<string, any>();
+    for (const viewer of viewerDocs) {
+      if (viewer?.id) {
+        viewerById.set(String(viewer.id), viewer);
+      }
+    }
+
+    profileViewers = profileViewIds.map((viewerId) => {
+      const viewer = viewerById.get(viewerId);
+      return {
+        id: viewerId,
+        name: viewer?.name || 'Aura member',
+        handle: viewer?.handle || '@aura',
+        avatar: viewer?.avatar || '',
+        avatarType: viewer?.avatarType === 'video' ? 'video' : 'image'
+      };
+    });
+  }
+
   return {
     totals,
     credits: {
       balance: owner?.auraCredits ?? 0,
       spent: owner?.auraCreditsSpent ?? 0
     },
+    profileViews: profileViewIds,
+    profileViewers,
     topPosts: mappedTopPosts,
     neuralInsights
   };

@@ -148,6 +148,12 @@ router.post('/:id/remove-acquaintance', requireAuth, requirePersonalIdentity, re
 // POST /api/users/:id/record-profile-view - Record profile view
 router.post('/:id/record-profile-view', requireAuth, requirePersonalIdentity, usersController.recordProfileView);
 
+// GET /api/users/:id/featured-posts - Get ordered featured posts for a profile
+router.get('/:id/featured-posts', usersController.getFeaturedPosts);
+
+// PUT /api/users/:id/featured-posts - Update ordered featured posts for the authenticated personal profile
+router.put('/:id/featured-posts', requireAuth, requirePersonalIdentity, requireSelfParam, usersController.updateFeaturedPosts);
+
 // GET /api/users/:id - Get user by ID (public)
 router.get('/:id', usersController.getUserById);
 
