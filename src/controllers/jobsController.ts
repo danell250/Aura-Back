@@ -6,9 +6,11 @@ import { getDB, isDBConnected } from '../db';
 import { resolveIdentityActor } from '../utils/identityUtils';
 import { emitAuthorInsightsUpdate } from './postsController';
 import { getHashtagsFromText } from '../utils/hashtagUtils';
+import { sendJobApplicationReviewEmail } from '../services/emailService';
 
 const JOBS_COLLECTION = 'jobs';
 const JOB_APPLICATIONS_COLLECTION = 'job_applications';
+const JOB_APPLICATION_REVIEW_LINKS_COLLECTION = 'job_application_review_links';
 const COMPANIES_COLLECTION = 'companies';
 const COMPANY_MEMBERS_COLLECTION = 'company_members';
 const USERS_COLLECTION = 'users';
@@ -34,6 +36,26 @@ type Pagination = {
   page: number;
   limit: number;
   skip: number;
+};
+
+type JobReviewRecipient = {
+  userId: string;
+  email: string;
+  displayName: string;
+};
+
+type JobApplicationReviewLinkRecord = {
+  id: string;
+  tokenHash: string;
+  companyId: string;
+  jobId: string;
+  applicationId: string;
+  recipientUserId: string;
+  recipientEmail: string;
+  createdAt: string;
+  expiresAt: string;
+  lastResolvedAt: string | null;
+  lastResolvedByUserId: string | null;
 };
 
 const readString = (value: unknown, maxLength = 10000): string => {
@@ -88,6 +110,28 @@ const parseIsoOrNull = (value: unknown): string | null => {
   const parsed = new Date(asString);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed.toISOString();
+};
+
+const hashSecureToken = (token: string): string => {
+  return crypto.createHash('sha256').update(token).digest('hex');
+};
+
+const getReviewLinkTtlHours = (): number => {
+  const raw = Number(process.env.JOB_REVIEW_LINK_TTL_HOURS || 72);
+  if (!Number.isFinite(raw)) return 72;
+  return Math.min(168, Math.max(1, Math.round(raw)));
+};
+
+const getReviewPortalBaseUrl = (): string => {
+  const configured =
+    readString(process.env.FRONTEND_URL || '', 300) ||
+    readString(process.env.VITE_FRONTEND_URL || '', 300);
+  return configured ? configured.replace(/\/$/, '') : 'https://www.aura.net.za';
+};
+
+const buildReviewPortalUrl = (rawToken: string): string => {
+  const baseUrl = getReviewPortalBaseUrl();
+  return `${baseUrl}/company/manage?applicationReviewToken=${encodeURIComponent(rawToken)}`;
 };
 
 const sanitizeSearchRegex = (raw: string): RegExp | null => {
@@ -174,6 +218,141 @@ const canReadApplication = async (
   if (application.applicantUserId === authenticatedUserId) return true;
   const access = await resolveOwnerAdminCompanyAccess(String(application.companyId || ''), authenticatedUserId);
   return access.allowed;
+};
+
+const resolveJobReviewRecipients = async (
+  db: any,
+  companyId: string,
+): Promise<{ company: any | null; recipients: JobReviewRecipient[] }> => {
+  if (!companyId) {
+    return { company: null, recipients: [] };
+  }
+
+  const company = await db.collection(COMPANIES_COLLECTION).findOne(
+    { id: companyId, legacyArchived: { $ne: true } },
+    { projection: { id: 1, name: 1, ownerId: 1 } },
+  );
+
+  if (!company) {
+    return { company: null, recipients: [] };
+  }
+
+  const memberRows = await db.collection(COMPANY_MEMBERS_COLLECTION)
+    .find({
+      companyId,
+      role: { $in: ['owner', 'admin'] },
+    })
+    .project({ userId: 1 })
+    .toArray();
+
+  const reviewerIds = Array.from(
+    new Set(
+      [
+        String(company.ownerId || '').trim(),
+        ...memberRows.map((row: any) => String(row?.userId || '').trim()),
+      ].filter((id) => id.length > 0),
+    ),
+  );
+
+  if (reviewerIds.length === 0) {
+    return { company, recipients: [] };
+  }
+
+  const reviewerUsers = await db.collection(USERS_COLLECTION)
+    .find({ id: { $in: reviewerIds } })
+    .project({ id: 1, email: 1, name: 1, firstName: 1, lastName: 1 })
+    .toArray();
+
+  const emailDedupe = new Set<string>();
+  const recipients: JobReviewRecipient[] = [];
+
+  for (const reviewer of reviewerUsers) {
+    const email = readString(reviewer?.email, 160).toLowerCase();
+    if (!email || emailDedupe.has(email)) continue;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) continue;
+    emailDedupe.add(email);
+
+    const displayName =
+      readString(reviewer?.name, 120) ||
+      `${readString(reviewer?.firstName, 80)} ${readString(reviewer?.lastName, 80)}`.trim() ||
+      'Team';
+
+    recipients.push({
+      userId: String(reviewer?.id || ''),
+      email,
+      displayName,
+    });
+  }
+
+  return { company, recipients };
+};
+
+const sendApplicationReviewEmails = async (
+  db: any,
+  params: {
+    companyId: string;
+    jobId: string;
+    application: any;
+    job: any;
+  },
+): Promise<void> => {
+  const companyId = readString(params.companyId, 120);
+  const jobId = readString(params.jobId, 120);
+  const application = params.application;
+  const job = params.job;
+
+  if (!companyId || !jobId || !application || !job) return;
+
+  const { company, recipients } = await resolveJobReviewRecipients(db, companyId);
+  if (!company || recipients.length === 0) return;
+
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const ttlHours = getReviewLinkTtlHours();
+  const expiresAtIso = new Date(now + ttlHours * 60 * 60 * 1000).toISOString();
+
+  const linkRows: Array<{ recipient: JobReviewRecipient; rawToken: string; record: JobApplicationReviewLinkRecord }> = [];
+
+  for (const recipient of recipients) {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    linkRows.push({
+      recipient,
+      rawToken,
+      record: {
+        id: `jobreview-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+        tokenHash: hashSecureToken(rawToken),
+        companyId,
+        jobId,
+        applicationId: String(application?.id || ''),
+        recipientUserId: recipient.userId,
+        recipientEmail: recipient.email,
+        createdAt: nowIso,
+        expiresAt: expiresAtIso,
+        lastResolvedAt: null,
+        lastResolvedByUserId: null,
+      },
+    });
+  }
+
+  if (linkRows.length === 0) return;
+
+  await db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).insertMany(linkRows.map((row) => row.record));
+
+  await Promise.allSettled(
+    linkRows.map((row) =>
+      sendJobApplicationReviewEmail(row.recipient.email, {
+        reviewerName: row.recipient.displayName,
+        companyName: readString(company?.name, 160) || readString(job?.companyName, 160) || 'Aura Company',
+        jobTitle: readString(job?.title, 160) || 'Open role',
+        applicantName: readString(application?.applicantName, 160) || 'Applicant',
+        applicantEmail: readString(application?.applicantEmail, 160),
+        applicantPhone: readString(application?.applicantPhone, 60),
+        submittedAt: readString(application?.createdAt, 80) || nowIso,
+        securePortalUrl: buildReviewPortalUrl(row.rawToken),
+        expiresAt: expiresAtIso,
+      }),
+    ),
+  );
 };
 
 const toJobResponse = (job: any) => ({
@@ -773,6 +952,16 @@ export const jobsController = {
         { $inc: { applicationCount: 1 }, $set: { updatedAt: nowIso } },
       );
 
+      // Fire-and-forget: notify company owner/admin reviewers by email with a secure portal link.
+      sendApplicationReviewEmails(db, {
+        companyId: String(job.companyId || ''),
+        jobId,
+        application,
+        job,
+      }).catch((emailError) => {
+        console.error('Job application review email dispatch error:', emailError);
+      });
+
       return res.status(201).json({
         success: true,
         data: toApplicationResponse(application),
@@ -991,6 +1180,145 @@ export const jobsController = {
     } catch (error) {
       console.error('Get resume view URL error:', error);
       return res.status(500).json({ success: false, error: 'Failed to generate resume view URL' });
+    }
+  },
+
+  // POST /api/applications/review-portal/resolve
+  resolveApplicationReviewPortalToken: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.status(503).json({ success: false, error: 'Database service unavailable' });
+      }
+
+      const currentUserId = (req.user as any)?.id;
+      if (!currentUserId) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const token = readString((req.body as any)?.token, 400);
+      if (!token) {
+        return res.status(400).json({ success: false, error: 'Review token is required' });
+      }
+
+      const db = getDB();
+      const link = await db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).findOne({
+        tokenHash: hashSecureToken(token),
+      });
+
+      if (!link) {
+        return res.status(404).json({ success: false, error: 'Invalid review link' });
+      }
+
+      const expiresAtTs = new Date(link.expiresAt || '').getTime();
+      if (!Number.isFinite(expiresAtTs) || expiresAtTs < Date.now()) {
+        return res.status(410).json({ success: false, error: 'This review link has expired' });
+      }
+
+      const applicationId = readString(link.applicationId, 120);
+      const application = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
+      if (!application) {
+        return res.status(404).json({ success: false, error: 'Application for this review link was not found' });
+      }
+
+      const companyId = readString(application.companyId || link.companyId, 120);
+      const access = await resolveOwnerAdminCompanyAccess(companyId, currentUserId);
+      if (!access.allowed) {
+        return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
+      }
+
+      const jobId = readString(application.jobId || link.jobId, 120);
+      const job = await db.collection(JOBS_COLLECTION).findOne({ id: jobId });
+
+      const nowIso = new Date().toISOString();
+      await db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).updateOne(
+        { id: String(link.id || '') },
+        {
+          $set: {
+            lastResolvedAt: nowIso,
+            lastResolvedByUserId: currentUserId,
+          },
+        },
+      );
+
+      return res.json({
+        success: true,
+        data: {
+          companyId,
+          jobId,
+          applicationId,
+          jobTitle: readString(job?.title, 160),
+          applicantName: readString(application?.applicantName, 160),
+          status: readString(application?.status, 40),
+          expiresAt: readString(link?.expiresAt, 80) || null,
+          portal: {
+            view: 'profile',
+            targetId: companyId,
+            tab: 'jobs',
+          },
+        },
+      });
+    } catch (error) {
+      console.error('Resolve application review portal token error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to resolve review link' });
+    }
+  },
+
+  // GET /api/companies/:companyId/job-applications/attention-count
+  getCompanyApplicationAttentionCount: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: {
+            pendingReviewCount: 0,
+            activePipelineCount: 0,
+            totalOpenJobs: 0,
+          },
+        });
+      }
+
+      const currentUserId = (req.user as any)?.id;
+      if (!currentUserId) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const companyId = readString(req.params.companyId, 120);
+      if (!companyId) {
+        return res.status(400).json({ success: false, error: 'companyId is required' });
+      }
+
+      const access = await resolveOwnerAdminCompanyAccess(companyId, currentUserId);
+      if (!access.allowed) {
+        return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
+      }
+
+      const db = getDB();
+      const [pendingReviewCount, activePipelineCount, totalOpenJobs] = await Promise.all([
+        db.collection(JOB_APPLICATIONS_COLLECTION).countDocuments({
+          companyId,
+          status: 'submitted',
+        }),
+        db.collection(JOB_APPLICATIONS_COLLECTION).countDocuments({
+          companyId,
+          status: { $in: ['in_review', 'shortlisted'] },
+        }),
+        db.collection(JOBS_COLLECTION).countDocuments({
+          companyId,
+          status: 'open',
+        }),
+      ]);
+
+      return res.json({
+        success: true,
+        data: {
+          pendingReviewCount,
+          activePipelineCount,
+          totalOpenJobs,
+        },
+      });
+    } catch (error) {
+      console.error('Get company application attention count error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch application attention count' });
     }
   },
 

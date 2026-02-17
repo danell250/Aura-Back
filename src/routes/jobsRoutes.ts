@@ -58,6 +58,7 @@ const jobsApplyRateLimiter = rateLimit({
 
 // Public company jobs feed (v1 discovery surface)
 router.get('/companies/:companyId/jobs', optionalAuth, jobsController.listCompanyJobs);
+router.get('/companies/:companyId/job-applications/attention-count', requireAuth, jobsController.getCompanyApplicationAttentionCount);
 
 // Public job detail
 router.get('/jobs/:jobId', optionalAuth, jobsController.getJobById);
@@ -74,9 +75,9 @@ router.get('/applications/:applicationId', requireAuth, jobsController.getJobApp
 router.patch('/applications/:applicationId/status', requireAuth, jobsController.updateJobApplicationStatus);
 router.get('/applications/:applicationId/resume/view-url', requireAuth, jobsController.getApplicationResumeViewUrl);
 router.post('/applications/:applicationId/withdraw', requireAuth, jobsController.withdrawMyApplication);
+router.post('/applications/review-portal/resolve', requireAuth, jobsController.resolveApplicationReviewPortalToken);
 
 // Personal dashboard scope
 router.get('/me/job-applications', requireAuth, jobsController.getMyJobApplications);
 
 export default router;
-

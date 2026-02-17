@@ -233,3 +233,99 @@ export async function sendReportPreviewEmail(to: string, payload: ReportPreviewP
     throw error;
   }
 }
+
+interface JobApplicationReviewEmailPayload {
+  reviewerName?: string;
+  companyName?: string;
+  jobTitle?: string;
+  applicantName?: string;
+  applicantEmail?: string;
+  applicantPhone?: string;
+  submittedAt?: string;
+  securePortalUrl: string;
+  expiresAt?: string;
+}
+
+export async function sendJobApplicationReviewEmail(
+  to: string,
+  payload: JobApplicationReviewEmailPayload,
+): Promise<EmailDeliveryResult> {
+  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+
+  const reviewerName = safeText(payload.reviewerName, 'Team');
+  const companyName = safeText(payload.companyName, 'Aura Company');
+  const jobTitle = safeText(payload.jobTitle, 'Open role');
+  const applicantName = safeText(payload.applicantName, 'Applicant');
+  const applicantEmail = safeText(payload.applicantEmail, 'Not provided');
+  const applicantPhone = safeText(payload.applicantPhone, 'Not provided');
+  const submittedAtRaw = safeText(payload.submittedAt, new Date().toISOString());
+  const submittedAt = Number.isNaN(new Date(submittedAtRaw).getTime())
+    ? submittedAtRaw
+    : new Date(submittedAtRaw).toLocaleString();
+  const expiresAtRaw = safeText(payload.expiresAt, '');
+  const expiresAt = expiresAtRaw && !Number.isNaN(new Date(expiresAtRaw).getTime())
+    ? new Date(expiresAtRaw).toLocaleString()
+    : expiresAtRaw;
+
+  if (!isEmailDeliveryConfigured()) {
+    console.warn('⚠️ SendGrid credentials not found. Job review email will be logged to console only.');
+    console.log('--- JOB REVIEW EMAIL ---');
+    console.log(`To: ${to}`);
+    console.log(`Company: ${companyName}`);
+    console.log(`Role: ${jobTitle}`);
+    console.log(`Portal URL: ${payload.securePortalUrl}`);
+    console.log('------------------------');
+    return {
+      delivered: false,
+      provider: 'disabled',
+      reason: 'SENDGRID_API_KEY is not configured',
+    };
+  }
+
+  try {
+    await sgMail.send({
+      to,
+      from,
+      subject: `New job application: ${jobTitle} • ${companyName}`,
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 640px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden;">
+          <div style="background: linear-gradient(135deg, #0f172a 0%, #0b1120 70%); color: #fff; padding: 24px 26px;">
+            <p style="margin:0;font-size:11px;letter-spacing:0.15em;text-transform:uppercase;color:#6ee7b7;font-weight:800;">Aura Hiring</p>
+            <h2 style="margin:10px 0 6px 0;font-size:22px;line-height:1.25;">New application requires review</h2>
+            <p style="margin:0;color:#cbd5e1;font-size:13px;">${companyName} • ${jobTitle}</p>
+          </div>
+          <div style="padding: 22px 26px;">
+            <p style="margin:0 0 14px 0;color:#334155;font-size:14px;">Hi ${reviewerName}, a new candidate applied and is ready for review in the secure portal.</p>
+            <table style="width:100%;border-collapse:collapse;margin-bottom:18px;">
+              <tr><td style="padding:8px 0;color:#64748b;">Applicant</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${applicantName}</td></tr>
+              <tr><td style="padding:8px 0;color:#64748b;">Email</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${applicantEmail}</td></tr>
+              <tr><td style="padding:8px 0;color:#64748b;">Phone</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${applicantPhone}</td></tr>
+              <tr><td style="padding:8px 0;color:#64748b;">Submitted</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${submittedAt}</td></tr>
+              ${expiresAt ? `<tr><td style="padding:8px 0;color:#64748b;">Secure link expires</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${expiresAt}</td></tr>` : ''}
+            </table>
+
+            <p style="margin: 18px 0 0 0;">
+              <a href="${payload.securePortalUrl}"
+                 style="display:inline-block;padding:12px 20px;background:#10b981;color:#fff;border-radius:10px;text-decoration:none;font-weight:700;font-size:13px;">
+                 Review In Secure Portal
+              </a>
+            </p>
+
+            <p style="margin:14px 0 0 0;color:#64748b;font-size:12px;">This secure link opens your company application review workflow. Access still requires a valid owner/admin session.</p>
+          </div>
+        </div>
+      `,
+    });
+
+    return {
+      delivered: true,
+      provider: 'sendgrid',
+    };
+  } catch (error: any) {
+    console.error('Error sending job application review email:', error);
+    if (error?.response) {
+      console.error(error.response.body);
+    }
+    throw error;
+  }
+}
