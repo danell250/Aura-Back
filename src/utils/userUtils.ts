@@ -4,9 +4,9 @@ export const transformUser = (user: any): any => {
   
   const s3Bucket = process.env.S3_BUCKET_NAME;
   const s3Region = process.env.S3_REGION || 'us-east-1';
-  const s3BaseUrl = process.env.S3_PUBLIC_BASE_URL 
-    ? process.env.S3_PUBLIC_BASE_URL.replace(/\/$/, '') 
-    : `https://${s3Bucket}.s3.${s3Region}.amazonaws.com`;
+  const s3BaseUrl = process.env.S3_PUBLIC_BASE_URL
+    ? process.env.S3_PUBLIC_BASE_URL.replace(/\/$/, '')
+    : (s3Bucket ? `https://${s3Bucket}.s3.${s3Region}.amazonaws.com` : '');
 
   // Create a copy to ensure we don't mutate the original if it's frozen (though unlikely for DB results)
   // and to treat it as a plain object.
@@ -44,11 +44,21 @@ export const transformUser = (user: any): any => {
     delete transformed.sentConnectionRequests;
   }
 
-  if (transformed.avatarKey) {
+  if (
+    transformed.avatarKey &&
+    typeof s3BaseUrl === 'string' &&
+    s3BaseUrl.length > 0 &&
+    (!transformed.avatar || typeof transformed.avatar !== 'string' || !/^https?:\/\//i.test(transformed.avatar))
+  ) {
     transformed.avatar = `${s3BaseUrl}/${transformed.avatarKey}`;
   }
 
-  if (transformed.coverKey) {
+  if (
+    transformed.coverKey &&
+    typeof s3BaseUrl === 'string' &&
+    s3BaseUrl.length > 0 &&
+    (!transformed.coverImage || typeof transformed.coverImage !== 'string' || !/^https?:\/\//i.test(transformed.coverImage))
+  ) {
     transformed.coverImage = `${s3BaseUrl}/${transformed.coverKey}`;
   }
 
