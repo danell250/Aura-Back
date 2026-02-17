@@ -26,10 +26,131 @@ const AD_UPDATE_ALLOWLIST = new Set([
     'mediaType',
     'ctaText',
     'ctaLink',
+    'ctaPositionX',
+    'ctaPositionY',
+    'campaignWhy',
+    'leadCapture',
     'placement',
     'expiryDate'
 ]);
 const AD_ALLOWED_PLACEMENTS = new Set(['feed', 'left', 'right', 'sidebar', 'story', 'search']);
+const AD_ALLOWED_CAMPAIGN_WHY = new Set([
+    'safe_clicks_conversions',
+    'lead_capture_no_exit',
+    'email_growth',
+    'book_more_calls',
+    'gate_high_intent_downloads'
+]);
+const AD_ALLOWED_LEAD_CAPTURE_TYPES = new Set([
+    'none',
+    'get_quote',
+    'request_demo',
+    'email_capture',
+    'calendar_booking',
+    'download_gate'
+]);
+const AD_LEAD_EMAIL_REQUIRED_TYPES = new Set([
+    'get_quote',
+    'request_demo',
+    'email_capture',
+    'calendar_booking',
+    'download_gate'
+]);
+const SIMPLE_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const trimOptionalText = (value, maxLength) => {
+    if (typeof value !== 'string')
+        return undefined;
+    const trimmed = value.trim().slice(0, maxLength);
+    return trimmed.length > 0 ? trimmed : undefined;
+};
+const normalizeActionUrl = (value, maxLength) => {
+    const raw = trimOptionalText(value, maxLength);
+    if (!raw)
+        return undefined;
+    if (raw.startsWith('http://') ||
+        raw.startsWith('https://') ||
+        raw.startsWith('mailto:') ||
+        raw.startsWith('tel:') ||
+        raw.startsWith('/')) {
+        return raw;
+    }
+    return `https://${raw}`;
+};
+const sanitizeLeadCaptureConfig = (incoming) => {
+    if (!incoming || typeof incoming !== 'object')
+        return undefined;
+    const candidate = incoming;
+    const rawType = typeof candidate.type === 'string' ? candidate.type.trim().toLowerCase() : 'none';
+    const type = AD_ALLOWED_LEAD_CAPTURE_TYPES.has(rawType)
+        ? rawType
+        : 'none';
+    const title = trimOptionalText(candidate.title, 120);
+    const description = trimOptionalText(candidate.description, 500);
+    const submitLabel = trimOptionalText(candidate.submitLabel, 60);
+    const successMessage = trimOptionalText(candidate.successMessage, 240);
+    const downloadLabel = trimOptionalText(candidate.downloadLabel, 80);
+    const calendarUrl = normalizeActionUrl(candidate.calendarUrl, 500);
+    const downloadUrl = normalizeActionUrl(candidate.downloadUrl, 500);
+    const includeName = typeof candidate.includeName === 'boolean' ? candidate.includeName : undefined;
+    const includeEmail = typeof candidate.includeEmail === 'boolean' ? candidate.includeEmail : undefined;
+    const includePhone = typeof candidate.includePhone === 'boolean' ? candidate.includePhone : undefined;
+    const includeMessage = typeof candidate.includeMessage === 'boolean' ? candidate.includeMessage : undefined;
+    const sanitized = { type };
+    if (title)
+        sanitized.title = title;
+    if (description)
+        sanitized.description = description;
+    if (submitLabel)
+        sanitized.submitLabel = submitLabel;
+    if (successMessage)
+        sanitized.successMessage = successMessage;
+    if (downloadLabel)
+        sanitized.downloadLabel = downloadLabel;
+    if (calendarUrl)
+        sanitized.calendarUrl = calendarUrl;
+    if (downloadUrl)
+        sanitized.downloadUrl = downloadUrl;
+    if (typeof includeName === 'boolean')
+        sanitized.includeName = includeName;
+    if (typeof includeEmail === 'boolean')
+        sanitized.includeEmail = includeEmail;
+    if (typeof includePhone === 'boolean')
+        sanitized.includePhone = includePhone;
+    if (typeof includeMessage === 'boolean')
+        sanitized.includeMessage = includeMessage;
+    return sanitized;
+};
+const sanitizeLeadSubmissionPayload = (incoming, fallbackType) => {
+    var _a;
+    const candidate = incoming && typeof incoming === 'object'
+        ? incoming
+        : {};
+    const rawType = typeof candidate.type === 'string' ? candidate.type.trim().toLowerCase() : fallbackType;
+    const resolvedType = AD_ALLOWED_LEAD_CAPTURE_TYPES.has(rawType)
+        ? rawType
+        : fallbackType;
+    if (resolvedType === 'none') {
+        return { error: 'Lead capture is not configured for this ad.' };
+    }
+    const email = (_a = trimOptionalText(candidate.email, 200)) === null || _a === void 0 ? void 0 : _a.toLowerCase();
+    if (AD_LEAD_EMAIL_REQUIRED_TYPES.has(resolvedType) && (!email || !SIMPLE_EMAIL_REGEX.test(email))) {
+        return { error: 'A valid email is required.' };
+    }
+    const name = trimOptionalText(candidate.name, 120);
+    const phone = trimOptionalText(candidate.phone, 64);
+    const message = trimOptionalText(candidate.message, 1200);
+    const sanitized = {
+        type: resolvedType,
+        email: email
+    };
+    if (name)
+        sanitized.name = name;
+    if (phone)
+        sanitized.phone = phone;
+    if (message)
+        sanitized.message = message;
+    return { data: sanitized };
+};
 const sanitizeAdUpdates = (incoming) => {
     if (!incoming || typeof incoming !== 'object')
         return {};
@@ -82,6 +203,45 @@ const sanitizeAdUpdates = (incoming) => {
     else {
         delete sanitized.ctaLink;
     }
+    if (sanitized.ctaPositionX !== undefined) {
+        const x = Number(sanitized.ctaPositionX);
+        if (Number.isFinite(x)) {
+            sanitized.ctaPositionX = Math.max(0, Math.min(100, x));
+        }
+        else {
+            delete sanitized.ctaPositionX;
+        }
+    }
+    if (sanitized.ctaPositionY !== undefined) {
+        const y = Number(sanitized.ctaPositionY);
+        if (Number.isFinite(y)) {
+            sanitized.ctaPositionY = Math.max(0, Math.min(100, y));
+        }
+        else {
+            delete sanitized.ctaPositionY;
+        }
+    }
+    if (typeof sanitized.campaignWhy === 'string') {
+        const campaignWhy = sanitized.campaignWhy.trim().toLowerCase();
+        if (AD_ALLOWED_CAMPAIGN_WHY.has(campaignWhy)) {
+            sanitized.campaignWhy = campaignWhy;
+        }
+        else {
+            delete sanitized.campaignWhy;
+        }
+    }
+    else {
+        delete sanitized.campaignWhy;
+    }
+    if (sanitized.leadCapture !== undefined) {
+        const leadCapture = sanitizeLeadCaptureConfig(sanitized.leadCapture);
+        if (leadCapture) {
+            sanitized.leadCapture = leadCapture;
+        }
+        else {
+            delete sanitized.leadCapture;
+        }
+    }
     if (typeof sanitized.placement === 'string') {
         const placement = sanitized.placement.trim().toLowerCase();
         if (AD_ALLOWED_PLACEMENTS.has(placement)) {
@@ -125,8 +285,20 @@ const sanitizeAdCreatePayload = (incoming) => {
     if (typeof sanitized.ctaLink !== 'string') {
         sanitized.ctaLink = '';
     }
+    if (typeof sanitized.ctaPositionX !== 'number') {
+        sanitized.ctaPositionX = 50;
+    }
+    if (typeof sanitized.ctaPositionY !== 'number') {
+        sanitized.ctaPositionY = 84;
+    }
     if (typeof sanitized.placement !== 'string') {
         sanitized.placement = 'feed';
+    }
+    if (typeof sanitized.campaignWhy !== 'string') {
+        sanitized.campaignWhy = 'safe_clicks_conversions';
+    }
+    if (!sanitized.leadCapture || typeof sanitized.leadCapture !== 'object') {
+        sanitized.leadCapture = { type: 'none' };
     }
     return sanitized;
 };
@@ -588,6 +760,14 @@ exports.adsController = {
                 mediaType: adData.mediaType === 'video' ? 'video' : 'image',
                 ctaText: adData.ctaText,
                 ctaLink: adData.ctaLink,
+                ctaPositionX: Number.isFinite(adData.ctaPositionX) ? Number(adData.ctaPositionX) : 50,
+                ctaPositionY: Number.isFinite(adData.ctaPositionY) ? Number(adData.ctaPositionY) : 84,
+                campaignWhy: AD_ALLOWED_CAMPAIGN_WHY.has(adData.campaignWhy)
+                    ? adData.campaignWhy
+                    : 'safe_clicks_conversions',
+                leadCapture: adData.leadCapture && typeof adData.leadCapture === 'object'
+                    ? adData.leadCapture
+                    : { type: 'none' },
                 placement: adData.placement,
                 expiryDate: adData.expiryDate,
                 ownerId: effectiveOwnerId,

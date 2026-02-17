@@ -141,6 +141,23 @@ function connectDB() {
                 catch (postIndexError) {
                     console.warn("⚠️  Warning: Could not initialize post indexes:", postIndexError);
                 }
+                // Initialize jobs and applications indexes
+                try {
+                    yield db.collection('jobs').createIndex({ id: 1 }, { unique: true });
+                    yield db.collection('jobs').createIndex({ companyId: 1, status: 1, createdAt: -1 });
+                    yield db.collection('jobs').createIndex({ status: 1, publishedAt: -1 });
+                    yield db.collection('jobs').createIndex({ applicationDeadline: 1 });
+                    yield db.collection('jobs').createIndex({ tags: 1 });
+                    yield db.collection('job_applications').createIndex({ id: 1 }, { unique: true });
+                    yield db.collection('job_applications').createIndex({ jobId: 1, applicantUserId: 1 }, { unique: true, name: 'job_application_unique_per_user' });
+                    yield db.collection('job_applications').createIndex({ companyId: 1, status: 1, createdAt: -1 });
+                    yield db.collection('job_applications').createIndex({ applicantUserId: 1, createdAt: -1 });
+                    yield db.collection('job_applications').createIndex({ jobId: 1, status: 1, createdAt: -1 });
+                    console.log("✅ Jobs collection indexes initialized");
+                }
+                catch (jobsIndexError) {
+                    console.warn("⚠️  Warning: Could not initialize jobs indexes:", jobsIndexError);
+                }
                 // Initialize scheduled report indexes
                 try {
                     yield db.collection('reportSchedules').createIndex({ id: 1 }, { unique: true });

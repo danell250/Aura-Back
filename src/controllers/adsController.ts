@@ -6,6 +6,44 @@ import { AD_PLANS } from '../constants/adPlans';
 import { ensureCurrentPeriod } from './adSubscriptionsController';
 import crypto from 'crypto';
 
+type AdCampaignWhy =
+  | 'safe_clicks_conversions'
+  | 'lead_capture_no_exit'
+  | 'email_growth'
+  | 'book_more_calls'
+  | 'gate_high_intent_downloads';
+
+type AdLeadCaptureType =
+  | 'none'
+  | 'get_quote'
+  | 'request_demo'
+  | 'email_capture'
+  | 'calendar_booking'
+  | 'download_gate';
+
+type SanitizedLeadCaptureConfig = {
+  type: AdLeadCaptureType;
+  title?: string;
+  description?: string;
+  submitLabel?: string;
+  successMessage?: string;
+  includeName?: boolean;
+  includeEmail?: boolean;
+  includePhone?: boolean;
+  includeMessage?: boolean;
+  calendarUrl?: string;
+  downloadUrl?: string;
+  downloadLabel?: string;
+};
+
+type SanitizedLeadSubmission = {
+  type: Exclude<AdLeadCaptureType, 'none'>;
+  email: string;
+  name?: string;
+  phone?: string;
+  message?: string;
+};
+
 const AD_UPDATE_ALLOWLIST = new Set<string>([
   'headline',
   'description',
@@ -15,11 +53,132 @@ const AD_UPDATE_ALLOWLIST = new Set<string>([
   'ctaLink',
   'ctaPositionX',
   'ctaPositionY',
+  'campaignWhy',
+  'leadCapture',
   'placement',
   'expiryDate'
 ]);
 
 const AD_ALLOWED_PLACEMENTS = new Set<string>(['feed', 'left', 'right', 'sidebar', 'story', 'search']);
+const AD_ALLOWED_CAMPAIGN_WHY = new Set<AdCampaignWhy>([
+  'safe_clicks_conversions',
+  'lead_capture_no_exit',
+  'email_growth',
+  'book_more_calls',
+  'gate_high_intent_downloads'
+]);
+const AD_ALLOWED_LEAD_CAPTURE_TYPES = new Set<AdLeadCaptureType>([
+  'none',
+  'get_quote',
+  'request_demo',
+  'email_capture',
+  'calendar_booking',
+  'download_gate'
+]);
+const AD_LEAD_EMAIL_REQUIRED_TYPES = new Set<Exclude<AdLeadCaptureType, 'none'>>([
+  'get_quote',
+  'request_demo',
+  'email_capture',
+  'calendar_booking',
+  'download_gate'
+]);
+const SIMPLE_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const trimOptionalText = (value: unknown, maxLength: number): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().slice(0, maxLength);
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const normalizeActionUrl = (value: unknown, maxLength: number): string | undefined => {
+  const raw = trimOptionalText(value, maxLength);
+  if (!raw) return undefined;
+  if (
+    raw.startsWith('http://') ||
+    raw.startsWith('https://') ||
+    raw.startsWith('mailto:') ||
+    raw.startsWith('tel:') ||
+    raw.startsWith('/')
+  ) {
+    return raw;
+  }
+  return `https://${raw}`;
+};
+
+const sanitizeLeadCaptureConfig = (incoming: unknown): SanitizedLeadCaptureConfig | undefined => {
+  if (!incoming || typeof incoming !== 'object') return undefined;
+
+  const candidate = incoming as Record<string, unknown>;
+  const rawType = typeof candidate.type === 'string' ? candidate.type.trim().toLowerCase() : 'none';
+  const type: AdLeadCaptureType = AD_ALLOWED_LEAD_CAPTURE_TYPES.has(rawType as AdLeadCaptureType)
+    ? (rawType as AdLeadCaptureType)
+    : 'none';
+
+  const title = trimOptionalText(candidate.title, 120);
+  const description = trimOptionalText(candidate.description, 500);
+  const submitLabel = trimOptionalText(candidate.submitLabel, 60);
+  const successMessage = trimOptionalText(candidate.successMessage, 240);
+  const downloadLabel = trimOptionalText(candidate.downloadLabel, 80);
+  const calendarUrl = normalizeActionUrl(candidate.calendarUrl, 500);
+  const downloadUrl = normalizeActionUrl(candidate.downloadUrl, 500);
+
+  const includeName = typeof candidate.includeName === 'boolean' ? candidate.includeName : undefined;
+  const includeEmail = typeof candidate.includeEmail === 'boolean' ? candidate.includeEmail : undefined;
+  const includePhone = typeof candidate.includePhone === 'boolean' ? candidate.includePhone : undefined;
+  const includeMessage = typeof candidate.includeMessage === 'boolean' ? candidate.includeMessage : undefined;
+
+  const sanitized: SanitizedLeadCaptureConfig = { type };
+  if (title) sanitized.title = title;
+  if (description) sanitized.description = description;
+  if (submitLabel) sanitized.submitLabel = submitLabel;
+  if (successMessage) sanitized.successMessage = successMessage;
+  if (downloadLabel) sanitized.downloadLabel = downloadLabel;
+  if (calendarUrl) sanitized.calendarUrl = calendarUrl;
+  if (downloadUrl) sanitized.downloadUrl = downloadUrl;
+  if (typeof includeName === 'boolean') sanitized.includeName = includeName;
+  if (typeof includeEmail === 'boolean') sanitized.includeEmail = includeEmail;
+  if (typeof includePhone === 'boolean') sanitized.includePhone = includePhone;
+  if (typeof includeMessage === 'boolean') sanitized.includeMessage = includeMessage;
+
+  return sanitized;
+};
+
+const sanitizeLeadSubmissionPayload = (
+  incoming: unknown,
+  fallbackType: AdLeadCaptureType
+): { data?: SanitizedLeadSubmission; error?: string } => {
+  const candidate = incoming && typeof incoming === 'object'
+    ? (incoming as Record<string, unknown>)
+    : {};
+
+  const rawType = typeof candidate.type === 'string' ? candidate.type.trim().toLowerCase() : fallbackType;
+  const resolvedType = AD_ALLOWED_LEAD_CAPTURE_TYPES.has(rawType as AdLeadCaptureType)
+    ? (rawType as AdLeadCaptureType)
+    : fallbackType;
+
+  if (resolvedType === 'none') {
+    return { error: 'Lead capture is not configured for this ad.' };
+  }
+
+  const email = trimOptionalText(candidate.email, 200)?.toLowerCase();
+  if (AD_LEAD_EMAIL_REQUIRED_TYPES.has(resolvedType) && (!email || !SIMPLE_EMAIL_REGEX.test(email))) {
+    return { error: 'A valid email is required.' };
+  }
+
+  const name = trimOptionalText(candidate.name, 120);
+  const phone = trimOptionalText(candidate.phone, 64);
+  const message = trimOptionalText(candidate.message, 1200);
+
+  const sanitized: SanitizedLeadSubmission = {
+    type: resolvedType,
+    email: email as string
+  };
+  if (name) sanitized.name = name;
+  if (phone) sanitized.phone = phone;
+  if (message) sanitized.message = message;
+
+  return { data: sanitized };
+};
 
 const sanitizeAdUpdates = (incoming: unknown): Record<string, unknown> => {
   if (!incoming || typeof incoming !== 'object') return {};
@@ -90,6 +249,26 @@ const sanitizeAdUpdates = (incoming: unknown): Record<string, unknown> => {
     }
   }
 
+  if (typeof sanitized.campaignWhy === 'string') {
+    const campaignWhy = sanitized.campaignWhy.trim().toLowerCase() as AdCampaignWhy;
+    if (AD_ALLOWED_CAMPAIGN_WHY.has(campaignWhy)) {
+      sanitized.campaignWhy = campaignWhy;
+    } else {
+      delete sanitized.campaignWhy;
+    }
+  } else {
+    delete sanitized.campaignWhy;
+  }
+
+  if (sanitized.leadCapture !== undefined) {
+    const leadCapture = sanitizeLeadCaptureConfig(sanitized.leadCapture);
+    if (leadCapture) {
+      sanitized.leadCapture = leadCapture;
+    } else {
+      delete sanitized.leadCapture;
+    }
+  }
+
   if (typeof sanitized.placement === 'string') {
     const placement = sanitized.placement.trim().toLowerCase();
     if (AD_ALLOWED_PLACEMENTS.has(placement)) {
@@ -144,6 +323,12 @@ const sanitizeAdCreatePayload = (incoming: unknown): Record<string, unknown> => 
   }
   if (typeof sanitized.placement !== 'string') {
     sanitized.placement = 'feed';
+  }
+  if (typeof sanitized.campaignWhy !== 'string') {
+    sanitized.campaignWhy = 'safe_clicks_conversions';
+  }
+  if (!sanitized.leadCapture || typeof sanitized.leadCapture !== 'object') {
+    sanitized.leadCapture = { type: 'none' as AdLeadCaptureType };
   }
 
   return sanitized;
@@ -666,6 +851,12 @@ export const adsController = {
         ctaLink: adData.ctaLink as string,
         ctaPositionX: Number.isFinite(adData.ctaPositionX as number) ? Number(adData.ctaPositionX) : 50,
         ctaPositionY: Number.isFinite(adData.ctaPositionY as number) ? Number(adData.ctaPositionY) : 84,
+        campaignWhy: AD_ALLOWED_CAMPAIGN_WHY.has(adData.campaignWhy as AdCampaignWhy)
+          ? (adData.campaignWhy as AdCampaignWhy)
+          : 'safe_clicks_conversions',
+        leadCapture: adData.leadCapture && typeof adData.leadCapture === 'object'
+          ? (adData.leadCapture as SanitizedLeadCaptureConfig)
+          : { type: 'none' as AdLeadCaptureType },
         placement: adData.placement as string,
         expiryDate: adData.expiryDate as number | undefined,
         ownerId: effectiveOwnerId,

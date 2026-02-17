@@ -1441,7 +1441,7 @@ exports.usersController = {
                 process.env.SUPPORT_EMAIL ||
                 process.env.SENDGRID_FROM_EMAIL ||
                 'support@aura.net.za';
-            const subject = `Aura© User Report: ${target.name || target.handle || targetUserId}`;
+            const subject = `Aura Social User Report: ${target.name || target.handle || targetUserId}`;
             const body = [
                 `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,
                 `Target: ${target.name || target.handle || targetUserId} (${targetUserId})`,
@@ -1516,11 +1516,25 @@ exports.usersController = {
                 handle: 1,
                 avatar: 1,
                 avatarType: 1,
+                avatarKey: 1,
+                avatarCrop: 1,
+                coverImage: 1,
+                coverType: 1,
+                coverKey: 1,
+                coverCrop: 1,
                 bio: 1,
                 firstName: 1,
                 lastName: 1,
                 industry: 1,
-                companyName: 1
+                companyName: 1,
+                isVerified: 1,
+                isPrivate: 1,
+                trustScore: 1,
+                activeGlow: 1,
+                userMode: 1,
+                website: 1,
+                profileLinks: 1,
+                country: 1
             })
                 .limit(10)
                 .toArray();
@@ -1544,16 +1558,35 @@ exports.usersController = {
                 handle: 1,
                 avatar: 1,
                 avatarType: 1,
+                avatarKey: 1,
+                avatarCrop: 1,
+                coverImage: 1,
+                coverType: 1,
+                coverKey: 1,
+                coverCrop: 1,
+                bio: 1,
                 description: 1,
                 industry: 1,
-                isVerified: 1
+                website: 1,
+                country: 1,
+                employeeCount: 1,
+                ownerId: 1,
+                isPrivate: 1,
+                isVerified: 1,
+                subscriberCount: 1,
+                subscribers: 1,
+                profileLinks: 1
             })
                 .limit(10)
                 .toArray();
             // Transform and combine results
             const searchResults = [
-                ...usersResults.map(u => (Object.assign(Object.assign({}, u), { type: 'user' }))),
-                ...companiesResults.map(c => (Object.assign(Object.assign({}, c), { type: 'company', bio: c.description, userMode: 'company' })))
+                ...usersResults.map((u) => sanitizePublicUserProfile(Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(u)), { type: 'user' }))),
+                ...companiesResults.map((c) => {
+                    const transformedCompany = (0, userUtils_1.transformUser)(Object.assign(Object.assign({}, c), { type: 'company', companyName: c.name, companyWebsite: c.website, userMode: 'company' }));
+                    return Object.assign(Object.assign({}, transformedCompany), { type: 'company', bio: (typeof transformedCompany.bio === 'string' && transformedCompany.bio.trim()) ||
+                            (typeof c.description === 'string' ? c.description : '') });
+                })
             ];
             res.json({
                 success: true,

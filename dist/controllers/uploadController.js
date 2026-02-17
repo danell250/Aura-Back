@@ -66,7 +66,15 @@ const uploadFile = (req, res) => __awaiter(void 0, void 0, void 0, function* () 
         req.file.mimetype === 'image/png' ||
         req.file.mimetype === 'image/webp' ||
         req.file.mimetype === 'video/mp4' ||
-        req.file.mimetype === 'application/pdf';
+        req.file.mimetype === 'application/pdf' ||
+        req.file.mimetype === 'application/msword' ||
+        req.file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+        req.file.mimetype === 'application/vnd.ms-excel' ||
+        req.file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+        req.file.mimetype === 'application/vnd.ms-powerpoint' ||
+        req.file.mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+        req.file.mimetype === 'text/plain' ||
+        req.file.mimetype === 'text/csv';
     if (!isAllowedType) {
         return res.status(400).json({ error: 'Invalid file type' });
     }

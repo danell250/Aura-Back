@@ -170,6 +170,26 @@ export interface Ad {
   ctaLink?: string;
   ctaPositionX?: number;
   ctaPositionY?: number;
+  campaignWhy?:
+    | 'safe_clicks_conversions'
+    | 'lead_capture_no_exit'
+    | 'email_growth'
+    | 'book_more_calls'
+    | 'gate_high_intent_downloads';
+  leadCapture?: {
+    type: 'none' | 'get_quote' | 'request_demo' | 'email_capture' | 'calendar_booking' | 'download_gate';
+    title?: string;
+    description?: string;
+    submitLabel?: string;
+    successMessage?: string;
+    includeName?: boolean;
+    includeEmail?: boolean;
+    includePhone?: boolean;
+    includeMessage?: boolean;
+    calendarUrl?: string;
+    downloadUrl?: string;
+    downloadLabel?: string;
+  };
   status: 'active' | 'paused' | 'expired' | 'draft';
   placement: 'feed' | 'sidebar' | 'story' | 'search';
   hashtags: string[];

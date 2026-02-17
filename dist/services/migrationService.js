@@ -71,6 +71,7 @@ function migrateLegacyCompanies() {
                         website,
                         industry,
                         bio: '',
+                        isPrivate: false,
                         isVerified: !!website,
                         ownerId: user.id,
                         avatar: '',
