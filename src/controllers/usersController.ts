@@ -1755,7 +1755,7 @@ export const usersController = {
         process.env.SUPPORT_EMAIL ||
         process.env.SENDGRID_FROM_EMAIL ||
         'support@aura.net.za';
-      const subject = `Aura© User Report: ${target.name || target.handle || targetUserId}`;
+      const subject = `Aura Social User Report: ${target.name || target.handle || targetUserId}`;
       const body = [
         `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,
         `Target: ${target.name || target.handle || targetUserId} (${targetUserId})`,

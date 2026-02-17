@@ -27,15 +27,15 @@ export async function sendMagicLinkEmail(to: string, magicLink: string) {
     await sgMail.send({
       to,
       from,
-      subject: 'Your secure login link for Aura©',
+      subject: 'Your secure login link for Aura Social',
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Login to Aura©</h2>
+          <h2>Login to Aura Social</h2>
           <p>Click the button below to sign in. This link expires in 15 minutes.</p>
           <p>
             <a href="${magicLink}"
                style="display:inline-block;padding:10px 14px;background:#10b981;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;">
-               Sign in to Aura©
+               Sign in to Aura Social
             </a>
           </p>
           <p style="color: #666; font-size: 14px;">If you didn’t request this, you can safely ignore this email.</p>

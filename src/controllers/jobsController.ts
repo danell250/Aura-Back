@@ -850,6 +850,59 @@ export const jobsController = {
     }
   },
 
+  // DELETE /api/jobs/:jobId
+  deleteJob: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.status(503).json({ success: false, error: 'Database service unavailable' });
+      }
+
+      const currentUserId = (req.user as any)?.id;
+      if (!currentUserId) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const { jobId } = req.params;
+      const db = getDB();
+      const existingJob = await db.collection(JOBS_COLLECTION).findOne({ id: jobId });
+      if (!existingJob) {
+        return res.status(404).json({ success: false, error: 'Job not found' });
+      }
+
+      const companyId = readString(existingJob.companyId, 120);
+      const access = await resolveOwnerAdminCompanyAccess(companyId, currentUserId);
+      if (!access.allowed) {
+        return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
+      }
+
+      const announcementPostId = readString(existingJob.announcementPostId, 120);
+      const postDeleteFilter: Record<string, unknown> = announcementPostId
+        ? { $or: [{ id: announcementPostId }, { 'jobMeta.jobId': jobId }] }
+        : { 'jobMeta.jobId': jobId };
+
+      await Promise.all([
+        db.collection(JOBS_COLLECTION).deleteOne({ id: jobId }),
+        db.collection(JOB_APPLICATIONS_COLLECTION).deleteMany({ jobId }),
+        db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).deleteMany({ jobId }),
+        db.collection('posts').deleteMany(postDeleteFilter),
+      ]);
+
+      emitAuthorInsightsUpdate(req.app, companyId, 'company').catch(() => undefined);
+
+      return res.json({
+        success: true,
+        data: {
+          id: jobId,
+          companyId,
+          announcementPostId: announcementPostId || null,
+        },
+      });
+    } catch (error) {
+      console.error('Delete job error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to delete job' });
+    }
+  },
+
   // POST /api/jobs/:jobId/applications
   createJobApplication: async (req: Request, res: Response) => {
     try {

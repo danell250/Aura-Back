@@ -13,6 +13,8 @@ const AD_UPDATE_ALLOWLIST = new Set<string>([
   'mediaType',
   'ctaText',
   'ctaLink',
+  'ctaPositionX',
+  'ctaPositionY',
   'placement',
   'expiryDate'
 ]);
@@ -70,6 +72,24 @@ const sanitizeAdUpdates = (incoming: unknown): Record<string, unknown> => {
     delete sanitized.ctaLink;
   }
 
+  if (sanitized.ctaPositionX !== undefined) {
+    const x = Number(sanitized.ctaPositionX);
+    if (Number.isFinite(x)) {
+      sanitized.ctaPositionX = Math.max(0, Math.min(100, x));
+    } else {
+      delete sanitized.ctaPositionX;
+    }
+  }
+
+  if (sanitized.ctaPositionY !== undefined) {
+    const y = Number(sanitized.ctaPositionY);
+    if (Number.isFinite(y)) {
+      sanitized.ctaPositionY = Math.max(0, Math.min(100, y));
+    } else {
+      delete sanitized.ctaPositionY;
+    }
+  }
+
   if (typeof sanitized.placement === 'string') {
     const placement = sanitized.placement.trim().toLowerCase();
     if (AD_ALLOWED_PLACEMENTS.has(placement)) {
@@ -115,6 +135,12 @@ const sanitizeAdCreatePayload = (incoming: unknown): Record<string, unknown> => 
   }
   if (typeof sanitized.ctaLink !== 'string') {
     sanitized.ctaLink = '';
+  }
+  if (typeof sanitized.ctaPositionX !== 'number') {
+    sanitized.ctaPositionX = 50;
+  }
+  if (typeof sanitized.ctaPositionY !== 'number') {
+    sanitized.ctaPositionY = 84;
   }
   if (typeof sanitized.placement !== 'string') {
     sanitized.placement = 'feed';
@@ -638,6 +664,8 @@ export const adsController = {
         mediaType: adData.mediaType === 'video' ? 'video' : 'image',
         ctaText: adData.ctaText as string,
         ctaLink: adData.ctaLink as string,
+        ctaPositionX: Number.isFinite(adData.ctaPositionX as number) ? Number(adData.ctaPositionX) : 50,
+        ctaPositionY: Number.isFinite(adData.ctaPositionY as number) ? Number(adData.ctaPositionY) : 84,
         placement: adData.placement as string,
         expiryDate: adData.expiryDate as number | undefined,
         ownerId: effectiveOwnerId,

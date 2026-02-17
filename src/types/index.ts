@@ -167,6 +167,9 @@ export interface Ad {
   videoUrl?: string;
   ctaText?: string;
   ctaUrl?: string;
+  ctaLink?: string;
+  ctaPositionX?: number;
+  ctaPositionY?: number;
   status: 'active' | 'paused' | 'expired' | 'draft';
   placement: 'feed' | 'sidebar' | 'story' | 'search';
   hashtags: string[];

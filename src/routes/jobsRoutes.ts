@@ -67,6 +67,7 @@ router.get('/jobs/:jobId', optionalAuth, jobsController.getJobById);
 router.post('/jobs', jobsWriteRateLimiter, requireAuth, jobsController.createJob);
 router.put('/jobs/:jobId', jobsWriteRateLimiter, requireAuth, jobsController.updateJob);
 router.patch('/jobs/:jobId/status', jobsWriteRateLimiter, requireAuth, jobsController.updateJobStatus);
+router.delete('/jobs/:jobId', jobsWriteRateLimiter, requireAuth, jobsController.deleteJob);
 
 // Applications
 router.post('/jobs/:jobId/applications', jobsApplyRateLimiter, requireAuth, jobsController.createJobApplication);
