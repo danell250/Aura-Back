@@ -62,6 +62,7 @@ export async function migrateLegacyCompanies(): Promise<void> {
           website,
           industry,
           bio: '',
+          isPrivate: false,
           isVerified: !!website,
           ownerId: user.id,
           avatar: '',

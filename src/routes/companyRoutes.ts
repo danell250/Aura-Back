@@ -150,6 +150,9 @@ const sanitizeCompanyEntity = (company: any): any => {
   if (typeof sanitized.bio !== 'string') {
     sanitized.bio = '';
   }
+  if (typeof sanitized.isPrivate !== 'boolean') {
+    sanitized.isPrivate = false;
+  }
 
   return sanitized;
 };
@@ -543,6 +546,7 @@ router.post('/', requireAuth, async (req, res) => {
       email: normalizedCompanyEmail || '',
       ownerId: currentUser.id,
       isVerified: typeof website === 'string' && website.trim().length > 0,
+      isPrivate: false,
       trustScore: 100,
       auraCredits: 0,
       createdAt: new Date(),
