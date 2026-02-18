@@ -196,6 +196,50 @@ const mapAnalyticsPlanLevel = (packageId) => {
         return 'basic';
     return 'none';
 };
+const COMPANY_PRIVACY_SETTINGS_ROUTE = '/:companyId/privacy-settings';
+const getDefaultCompanyPrivacySettings = () => ({
+    showInSearch: true,
+    showOnlineStatus: true,
+    showProfileViews: true,
+    allowTagging: true,
+    emailNotifications: true,
+    analyticsConsent: true,
+    profileVisibility: 'public',
+    allowDirectMessages: 'everyone',
+    dataProcessingConsent: true,
+    marketingConsent: false,
+    thirdPartySharing: false,
+    locationTracking: false,
+    activityTracking: true,
+    personalizedAds: false,
+    pushNotifications: true,
+    updatedAt: new Date().toISOString()
+});
+const normalizeCompanyPrivacySettings = (incoming, base) => {
+    const source = Object.assign(Object.assign(Object.assign({}, getDefaultCompanyPrivacySettings()), (base && typeof base === 'object' ? base : {})), (incoming && typeof incoming === 'object' ? incoming : {}));
+    return {
+        showInSearch: typeof source.showInSearch === 'boolean' ? source.showInSearch : true,
+        showOnlineStatus: typeof source.showOnlineStatus === 'boolean' ? source.showOnlineStatus : true,
+        showProfileViews: typeof source.showProfileViews === 'boolean' ? source.showProfileViews : true,
+        allowTagging: typeof source.allowTagging === 'boolean' ? source.allowTagging : true,
+        emailNotifications: typeof source.emailNotifications === 'boolean' ? source.emailNotifications : true,
+        analyticsConsent: typeof source.analyticsConsent === 'boolean' ? source.analyticsConsent : true,
+        profileVisibility: ['public', 'friends', 'private'].includes(source.profileVisibility)
+            ? source.profileVisibility
+            : 'public',
+        allowDirectMessages: ['everyone', 'friends', 'none'].includes(source.allowDirectMessages)
+            ? source.allowDirectMessages
+            : 'everyone',
+        dataProcessingConsent: typeof source.dataProcessingConsent === 'boolean' ? source.dataProcessingConsent : true,
+        marketingConsent: typeof source.marketingConsent === 'boolean' ? source.marketingConsent : false,
+        thirdPartySharing: typeof source.thirdPartySharing === 'boolean' ? source.thirdPartySharing : false,
+        locationTracking: typeof source.locationTracking === 'boolean' ? source.locationTracking : false,
+        activityTracking: typeof source.activityTracking === 'boolean' ? source.activityTracking : true,
+        personalizedAds: typeof source.personalizedAds === 'boolean' ? source.personalizedAds : false,
+        pushNotifications: typeof source.pushNotifications === 'boolean' ? source.pushNotifications : true,
+        updatedAt: new Date().toISOString()
+    };
+};
 // GET /api/companies/me - Get companies the current user belongs to
 router.get('/me', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
@@ -284,6 +328,66 @@ router.get('/:companyId/dashboard', authMiddleware_1.requireAuth, (req, res) => 
         return res.status(500).json({
             success: false,
             error: 'Failed to fetch company dashboard data'
+        });
+    }
+}));
+// GET /api/companies/:companyId/privacy-settings - Get company privacy settings
+router.get(COMPANY_PRIVACY_SETTINGS_ROUTE, authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { companyId } = req.params;
+        const currentUser = req.user;
+        const db = (0, db_1.getDB)();
+        const access = yield resolveCompanyAccess(db, companyId, currentUser.id, 'moderator');
+        if (!access.allowed) {
+            return res.status(access.status || 403).json({ success: false, error: access.error || 'Unauthorized' });
+        }
+        const company = access.company;
+        const privacySettings = normalizeCompanyPrivacySettings(company === null || company === void 0 ? void 0 : company.privacySettings);
+        const profileViewIds = normalizeUniqueIds(company === null || company === void 0 ? void 0 : company.profileViews);
+        return res.json({
+            success: true,
+            data: Object.assign(Object.assign({}, privacySettings), { profileViewIds }),
+            message: 'Company privacy settings retrieved successfully'
+        });
+    }
+    catch (error) {
+        console.error('Get company privacy settings error:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to get company privacy settings'
+        });
+    }
+}));
+// PUT /api/companies/:companyId/privacy-settings - Update company privacy settings
+router.put(COMPANY_PRIVACY_SETTINGS_ROUTE, authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { companyId } = req.params;
+        const currentUser = req.user;
+        const settings = req.body || {};
+        const db = (0, db_1.getDB)();
+        const access = yield resolveCompanyAccess(db, companyId, currentUser.id, 'moderator');
+        if (!access.allowed) {
+            return res.status(access.status || 403).json({ success: false, error: access.error || 'Unauthorized' });
+        }
+        const company = access.company;
+        const updatedSettings = normalizeCompanyPrivacySettings(settings, (company === null || company === void 0 ? void 0 : company.privacySettings) || {});
+        yield db.collection('companies').updateOne({ id: companyId, legacyArchived: { $ne: true } }, {
+            $set: {
+                privacySettings: updatedSettings,
+                updatedAt: new Date()
+            }
+        });
+        return res.json({
+            success: true,
+            data: updatedSettings,
+            message: 'Company privacy settings updated successfully'
+        });
+    }
+    catch (error) {
+        console.error('Update company privacy settings error:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to update company privacy settings'
         });
     }
 }));
