@@ -99,6 +99,7 @@ export interface Notification {
   type:
     | 'reaction'
     | 'comment'
+    | 'mention'
     | 'link'
     | 'credit_received'
     | 'boost_received'

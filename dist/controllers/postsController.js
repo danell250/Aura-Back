@@ -16,6 +16,7 @@ const notificationsController_1 = require("./notificationsController");
 const s3Upload_1 = require("../utils/s3Upload");
 const userUtils_1 = require("../utils/userUtils");
 const identityUtils_1 = require("../utils/identityUtils");
+const mentionUtils_1 = require("../utils/mentionUtils");
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const COMPANIES_COLLECTION = 'companies';
@@ -1516,7 +1517,11 @@ exports.postsController = {
                 ? (clampedVisibility === 'acquaintances' ? 'subscribers' : clampedVisibility)
                 : (clampedVisibility === 'subscribers' ? 'acquaintances' : clampedVisibility);
             const hashtags = (0, hashtagUtils_1.getHashtagsFromText)(safeContent);
-            const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
+            const explicitTagList = (0, mentionUtils_1.normalizeTaggedIdentityIds)(taggedUserIds);
+            const resolvedMentionIds = explicitTagList.length === 0 && typeof safeContent === 'string' && safeContent.includes('@')
+                ? yield (0, mentionUtils_1.resolveMentionedIdentityIds)(db, safeContent, 8)
+                : [];
+            const tagList = Array.from(new Set([...explicitTagList, ...resolvedMentionIds]));
             // Use provided ID if available, otherwise generate one
             const postId = id || (isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`);
             const currentYear = new Date().getFullYear();
@@ -1537,7 +1542,7 @@ exports.postsController = {
             if (tagList.length > 0) {
                 yield Promise.all(tagList
                     .filter(id => id && id !== authorEmbed.id)
-                    .map(id => (0, notificationsController_1.createNotificationInDB)(id, 'link', authorEmbed.id, 'mentioned you in a post', postId).catch(err => {
+                    .map(id => (0, notificationsController_1.createNotificationInDB)(id, 'mention', authorEmbed.id, 'mentioned you in a post', postId).catch(err => {
                     console.error('Error creating mention notification:', err);
                 })));
             }

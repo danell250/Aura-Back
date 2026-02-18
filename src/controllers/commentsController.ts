@@ -3,6 +3,7 @@ import { getDB } from '../db';
 import { createNotificationInDB } from './notificationsController';
 import { transformUser } from '../utils/userUtils';
 import { emitAuthorInsightsUpdate } from './postsController';
+import { normalizeTaggedIdentityIds, resolveMentionedIdentityIds } from '../utils/mentionUtils';
 
 const COMMENTS_COLLECTION = 'comments';
 const USERS_COLLECTION = 'users';
@@ -144,7 +145,12 @@ export const commentsController = {
         activeGlow: undefined
       };
 
-      const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];
+      const explicitTagList = normalizeTaggedIdentityIds(taggedUserIds);
+      const resolvedMentionIds =
+        explicitTagList.length > 0 || typeof text !== 'string' || !text.includes('@')
+          ? []
+          : await resolveMentionedIdentityIds(db, text, 8);
+      const tagList = Array.from(new Set([...explicitTagList, ...resolvedMentionIds]));
 
       const newComment = {
         id: `comment-${Date.now()}`,
@@ -179,7 +185,7 @@ export const commentsController = {
             uniqueTagIds.map(id =>
               createNotificationInDB(
                 id,
-                'link',
+                'mention',
                 authorEmbed.id,
                 'mentioned you in a comment',
                 postId

@@ -14,6 +14,7 @@ const db_1 = require("../db");
 const notificationsController_1 = require("./notificationsController");
 const userUtils_1 = require("../utils/userUtils");
 const postsController_1 = require("./postsController");
+const mentionUtils_1 = require("../utils/mentionUtils");
 const COMMENTS_COLLECTION = 'comments';
 const USERS_COLLECTION = 'users';
 exports.commentsController = {
@@ -145,7 +146,11 @@ exports.commentsController = {
                 avatarType: 'image',
                 activeGlow: undefined
             };
-            const tagList = Array.isArray(taggedUserIds) ? taggedUserIds : [];
+            const explicitTagList = (0, mentionUtils_1.normalizeTaggedIdentityIds)(taggedUserIds);
+            const resolvedMentionIds = explicitTagList.length > 0 || typeof text !== 'string' || !text.includes('@')
+                ? []
+                : yield (0, mentionUtils_1.resolveMentionedIdentityIds)(db, text, 8);
+            const tagList = Array.from(new Set([...explicitTagList, ...resolvedMentionIds]));
             const newComment = {
                 id: `comment-${Date.now()}`,
                 postId,
@@ -166,7 +171,7 @@ exports.commentsController = {
                 }
                 if (tagList.length > 0) {
                     const uniqueTagIds = Array.from(new Set(tagList)).filter(id => id && id !== authorEmbed.id);
-                    yield Promise.all(uniqueTagIds.map(id => (0, notificationsController_1.createNotificationInDB)(id, 'link', authorEmbed.id, 'mentioned you in a comment', postId).catch(err => {
+                    yield Promise.all(uniqueTagIds.map(id => (0, notificationsController_1.createNotificationInDB)(id, 'mention', authorEmbed.id, 'mentioned you in a comment', postId).catch(err => {
                         console.error('Error creating comment mention notification:', err);
                     })));
                 }

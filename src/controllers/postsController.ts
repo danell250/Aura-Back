@@ -7,6 +7,7 @@ import { transformUser } from '../utils/userUtils';
 import { AD_PLANS } from '../constants/adPlans';
 import { MediaItem, MediaItemMetrics } from '../types';
 import { resolveIdentityActor } from '../utils/identityUtils';
+import { normalizeTaggedIdentityIds, resolveMentionedIdentityIds } from '../utils/mentionUtils';
 
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
@@ -1826,7 +1827,12 @@ export const postsController = {
           ? (clampedVisibility === 'acquaintances' ? 'subscribers' : clampedVisibility)
           : (clampedVisibility === 'subscribers' ? 'acquaintances' : clampedVisibility);
       const hashtags = getHashtagsFromText(safeContent);
-      const tagList: string[] = Array.isArray(taggedUserIds) ? taggedUserIds : [];
+      const explicitTagList = normalizeTaggedIdentityIds(taggedUserIds);
+      const resolvedMentionIds =
+        explicitTagList.length === 0 && typeof safeContent === 'string' && safeContent.includes('@')
+          ? await resolveMentionedIdentityIds(db, safeContent, 8)
+          : [];
+      const tagList = Array.from(new Set([...explicitTagList, ...resolvedMentionIds]));
       // Use provided ID if available, otherwise generate one
       const postId = id || (isTimeCapsule ? `tc-${Date.now()}` : `post-${Date.now()}`);
 
@@ -1884,7 +1890,7 @@ export const postsController = {
             .map(id =>
               createNotificationInDB(
                 id,
-                'link',
+                'mention',
                 authorEmbed.id,
                 'mentioned you in a post',
                 postId
