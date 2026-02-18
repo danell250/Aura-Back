@@ -238,8 +238,8 @@ router.get('/google/callback', (req, res, next) => {
                 };
                 // DO NOT update these if they already exist
                 // This keeps the user's chosen identity intact
-                if (!existingUser.handle)
-                    updates.handle = userData.handle;
+                if (!existingUser.handle && userData.handle)
+                    updates.handle = normalizeUserHandle(userData.handle);
                 if (!existingUser.firstName)
                     updates.firstName = userData.firstName;
                 if (!existingUser.avatar)
@@ -886,8 +886,8 @@ router.get('/github/callback', (req, res, next) => {
                 };
                 // DO NOT update these if they already exist
                 // This keeps the user's chosen identity intact
-                if (!existingUser.handle)
-                    updates.handle = userData.handle;
+                if (!existingUser.handle && userData.handle)
+                    updates.handle = normalizeUserHandle(userData.handle);
                 if (!existingUser.firstName)
                     updates.firstName = userData.firstName;
                 if (!existingUser.avatar)

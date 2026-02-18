@@ -74,7 +74,38 @@ const validateHandleFormat = (handle: string): { ok: boolean; message?: string }
   return { ok: true };
 };
 
-const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escapeRegex = (value: string): string => {
+  let escaped = '';
+  for (const character of value) {
+    switch (character) {
+      case '.':
+      case '*':
+      case '+':
+      case '?':
+      case '^':
+      case '$':
+      case '{':
+      case '}':
+      case '(':
+      case ')':
+      case '|':
+      case '[':
+      case ']':
+      case '\\':
+      case '/':
+        escaped += `\\${character}`;
+        break;
+      default:
+        escaped += character;
+    }
+  }
+  return escaped;
+};
+
+const normalizeNamePart = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  return value.trim();
+};
 
 const CREDIT_BUNDLE_CONFIG: Record<string, { credits: number; price: number }> = {
   'Nano Pulse': { credits: 100, price: 9.99 },
@@ -1047,6 +1078,31 @@ export const usersController = {
         ...mutableUpdates
       };
 
+      const normalizedFirstName = normalizeNamePart(mutableUpdates.firstName);
+      const normalizedLastName = normalizeNamePart(mutableUpdates.lastName);
+
+      if (normalizedFirstName !== null) {
+        updateData.firstName = normalizedFirstName;
+      }
+
+      if (normalizedLastName !== null) {
+        updateData.lastName = normalizedLastName;
+      }
+
+      if (typeof mutableUpdates.name === 'string') {
+        updateData.name = mutableUpdates.name.trim();
+      }
+
+      if (normalizedFirstName !== null || normalizedLastName !== null) {
+        const nextFirstName =
+          normalizedFirstName ??
+          (typeof existingUser.firstName === 'string' ? existingUser.firstName.trim() : '');
+        const nextLastName =
+          normalizedLastName ??
+          (typeof existingUser.lastName === 'string' ? existingUser.lastName.trim() : '');
+        updateData.name = `${nextFirstName} ${nextLastName}`.trim();
+      }
+
       if (typeof mutableUpdates.website === 'string') {
         const website = mutableUpdates.website.trim();
         updateData.website = website ? (/^https?:\/\//i.test(website) ? website : `https://${website}`) : '';
@@ -1075,8 +1131,11 @@ export const usersController = {
         }
 
         const normalizedHandle = normalizeUserHandle(mutableUpdates.handle);
+        const existingNormalizedHandle = normalizeUserHandle(
+          typeof existingUser.handle === 'string' ? existingUser.handle : ''
+        );
 
-        if (normalizedHandle !== existingUser.handle) {
+        if (normalizedHandle !== existingNormalizedHandle) {
           const conflictingUser = await db.collection('users').findOne({ handle: normalizedHandle });
           const conflictingCompany = await db.collection('companies').findOne({ handle: normalizedHandle });
           if ((conflictingUser && conflictingUser.id !== id) || conflictingCompany) {

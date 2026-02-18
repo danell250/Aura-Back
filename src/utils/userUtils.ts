@@ -28,6 +28,16 @@ export const transformUser = (user: any): any => {
     transformed.type === 'company' ||
     (typeof transformed.ownerId === 'string' && transformed.ownerId.length > 0);
 
+  if (typeof transformed.handle === 'string') {
+    const trimmedHandle = transformed.handle.trim();
+    if (trimmedHandle) {
+      const withoutAt = trimmedHandle.startsWith('@') ? trimmedHandle.slice(1) : trimmedHandle;
+      transformed.handle = `@${withoutAt.toLowerCase()}`;
+    } else {
+      transformed.handle = '';
+    }
+  }
+
   // Remove legacy company fields from user objects only, while preserving actual company fields.
   if (!isCompanyRecord) {
     delete transformed.companyName;
