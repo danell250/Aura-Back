@@ -1287,6 +1287,32 @@ export const postsController = {
           // Optional: Remove reactionUsers from response to save bandwidth/privacy
           // delete post.reactionUsers; 
         }
+
+        if (Array.isArray(post.comments) && post.comments.length > 0) {
+          post.comments = post.comments.map((comment: any) => {
+            const normalizedComment = { ...comment };
+
+            if (normalizedComment.author) {
+              normalizedComment.author = transformUser(normalizedComment.author);
+            }
+
+            if (authenticatedUserId) {
+              if (normalizedComment.reactionUsers) {
+                normalizedComment.userReactions = Object.keys(normalizedComment.reactionUsers).filter(emoji =>
+                  Array.isArray(normalizedComment.reactionUsers[emoji]) &&
+                  normalizedComment.reactionUsers[emoji].includes(authenticatedUserId)
+                );
+              } else {
+                normalizedComment.userReactions = [];
+              }
+            } else if (!Array.isArray(normalizedComment.userReactions)) {
+              normalizedComment.userReactions = [];
+            }
+
+            return normalizedComment;
+          });
+        }
+
         return {
           ...post,
           type: 'post'

@@ -66,6 +66,65 @@ const resolveTrustedFrontendUrl = (req: Request): string => {
   return DEFAULT_FRONTEND_URL;
 };
 
+const AUTH_RETURN_TO_COOKIE = 'aura_auth_return_to';
+const AUTH_RETURN_TO_COOKIE_MAX_AGE_MS = 15 * 60 * 1000;
+
+const sanitizeReturnToPath = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  let next = value.trim();
+  if (!next) return null;
+  try {
+    next = decodeURIComponent(next);
+  } catch {
+    // Keep raw value when decode fails.
+  }
+  if (!next.startsWith('/')) return null;
+  if (next.startsWith('//')) return null;
+  if (next.includes('\n') || next.includes('\r')) return null;
+  return next;
+};
+
+const appendQueryParam = (path: string, key: string, value: string): string => {
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+};
+
+const buildLoginRedirectPath = (errorCode: string, returnTo: string | null): string => {
+  let path = appendQueryParam('/login', 'error', errorCode);
+  if (returnTo) {
+    path = appendQueryParam(path, 'returnTo', returnTo);
+  }
+  return path;
+};
+
+const rememberAuthReturnTo = (req: Request, res: Response): string | null => {
+  const requested = sanitizeReturnToPath((req.query as any)?.returnTo);
+  if (!requested) return null;
+  res.cookie(AUTH_RETURN_TO_COOKIE, requested, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: AUTH_RETURN_TO_COOKIE_MAX_AGE_MS
+  });
+  return requested;
+};
+
+const readAuthReturnTo = (req: Request): string | null =>
+  sanitizeReturnToPath((req as any)?.cookies?.[AUTH_RETURN_TO_COOKIE]);
+
+const consumeAuthReturnTo = (req: Request, res: Response): string | null => {
+  const rawValue = (req as any)?.cookies?.[AUTH_RETURN_TO_COOKIE];
+  const value = sanitizeReturnToPath(rawValue);
+  if (rawValue !== undefined) {
+    res.clearCookie(AUTH_RETURN_TO_COOKIE, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax'
+    });
+  }
+  return value;
+};
+
 const normalizeUserHandle = (rawHandle: string): string => {
   const base = (rawHandle || '').trim().toLowerCase();
   const withoutAt = base.startsWith('@') ? base.slice(1) : base;
@@ -227,6 +286,7 @@ router.get('/google',
         message: 'Google login is not configured on the server. Please contact Aura© support.'
     });
   }
+  rememberAuthReturnTo(req as Request, res as Response);
   next();
 },
 passport.authenticate('google', { scope: ['profile', 'email'] })
@@ -234,15 +294,24 @@ passport.authenticate('google', { scope: ['profile', 'email'] })
 
 router.get('/google/callback',
 (req, res, next) => {
+  const frontendUrl = resolveTrustedFrontendUrl(req as Request);
+  const returnTo = readAuthReturnTo(req as Request);
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-    return res.redirect('/login?error=google_not_configured');
+    const loginPath = buildLoginRedirectPath('google_not_configured', returnTo);
+    return res.redirect(`${frontendUrl}${loginPath}`);
   }
   next();
 },
-passport.authenticate('google', { failureRedirect: '/login', failureMessage: true }),
+(req, res, next) => {
+  const frontendUrl = resolveTrustedFrontendUrl(req as Request);
+  const returnTo = readAuthReturnTo(req as Request);
+  const failurePath = buildLoginRedirectPath('google_auth_failed', returnTo);
+  return passport.authenticate('google', { failureRedirect: `${frontendUrl}${failurePath}`, failureMessage: true })(req, res, next);
+},
 async (req: Request, res: Response) => {
   try {
     const frontendUrl = resolveTrustedFrontendUrl(req);
+    const returnTo = consumeAuthReturnTo(req, res);
 
     if (req.user) {
       const userData = req.user as any;
@@ -319,15 +388,19 @@ async (req: Request, res: Response) => {
 
       setTokenCookies(res, accessToken, refreshToken);
 
-      const frontendUrl = resolveTrustedFrontendUrl(req);
-
-      console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
-      res.redirect(`${frontendUrl}/feed`);
+      const redirectPath = returnTo || '/feed';
+      console.log('[OAuth] Redirecting to:', `${frontendUrl}${redirectPath}`);
+      return res.redirect(`${frontendUrl}${redirectPath}`);
     }
+
+    const loginPath = buildLoginRedirectPath('google_auth_failed', returnTo);
+    return res.redirect(`${frontendUrl}${loginPath}`);
   } catch (error) {
     console.error('Error in OAuth callback:', error);
     const frontendUrl = resolveTrustedFrontendUrl(req);
-    res.redirect(`${frontendUrl}/login?error=oauth_failed`);
+    const returnTo = consumeAuthReturnTo(req, res);
+    const loginPath = buildLoginRedirectPath('oauth_failed', returnTo);
+    return res.redirect(`${frontendUrl}${loginPath}`);
   }
 }
 );
@@ -341,6 +414,7 @@ router.get('/github',
       message: 'GitHub login is not configured on the server. Please contact Aura© support.'
     });
   }
+  rememberAuthReturnTo(req as Request, res as Response);
   next();
 },
 passport.authenticate('github', { scope: ['user:email'] })
@@ -349,15 +423,23 @@ passport.authenticate('github', { scope: ['user:email'] })
 router.get('/github/callback',
 (req, res, next) => {
   const frontendUrl = resolveTrustedFrontendUrl(req);
+  const returnTo = readAuthReturnTo(req as Request);
   if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-    return res.redirect(`${frontendUrl}/login?error=github_not_configured`);
+    const loginPath = buildLoginRedirectPath('github_not_configured', returnTo);
+    return res.redirect(`${frontendUrl}${loginPath}`);
   }
   next();
 },
-passport.authenticate('github', { failureRedirect: '/login' }),
+(req, res, next) => {
+  const frontendUrl = resolveTrustedFrontendUrl(req as Request);
+  const returnTo = readAuthReturnTo(req as Request);
+  const failurePath = buildLoginRedirectPath('github_auth_failed', returnTo);
+  return passport.authenticate('github', { failureRedirect: `${frontendUrl}${failurePath}` })(req, res, next);
+},
 async (req: Request, res: Response) => {
   try {
     const frontendUrl = resolveTrustedFrontendUrl(req);
+    const returnTo = consumeAuthReturnTo(req, res);
     if (req.user) {
       const userData = req.user as any;
       const db = getDB();
@@ -431,15 +513,18 @@ async (req: Request, res: Response) => {
 
       setTokenCookies(res, accessToken, refreshToken);
 
-      const frontendUrl = resolveTrustedFrontendUrl(req);
-
-      console.log('[OAuth] Redirecting to:', `${frontendUrl}/feed`);
-      res.redirect(`${frontendUrl}/feed`);
+      const redirectPath = returnTo || '/feed';
+      console.log('[OAuth] Redirecting to:', `${frontendUrl}${redirectPath}`);
+      return res.redirect(`${frontendUrl}${redirectPath}`);
     }
+    const loginPath = buildLoginRedirectPath('github_auth_failed', returnTo);
+    return res.redirect(`${frontendUrl}${loginPath}`);
   } catch (error) {
     console.error('Error in OAuth callback:', error);
     const frontendUrl = resolveTrustedFrontendUrl(req);
-    res.redirect(`${frontendUrl}/login?error=oauth_failed`);
+    const returnTo = consumeAuthReturnTo(req, res);
+    const loginPath = buildLoginRedirectPath('oauth_failed', returnTo);
+    return res.redirect(`${frontendUrl}${loginPath}`);
   }
 }
 );
@@ -452,6 +537,8 @@ if (!process.env.LINKEDIN_CLIENT_ID || !process.env.LINKEDIN_CLIENT_SECRET) {
     message: 'LinkedIn login is not configured on the server. Please contact Aura© support.'
   });
 }
+
+rememberAuthReturnTo(req, res);
 
 // 1. Generate a secure random state
 const state = crypto.randomBytes(16).toString('hex');
@@ -479,22 +566,26 @@ router.get('/linkedin/callback', async (req: Request, res: Response) => {
 const { code, state, error } = req.query;
 
 const frontendUrl = resolveTrustedFrontendUrl(req);
+const returnTo = consumeAuthReturnTo(req, res);
 
 // Handle LinkedIn errors
 if (error) {
   console.error('LinkedIn OAuth Error:', error);
-  return res.redirect(`${frontendUrl}/login?error=linkedin_auth_failed`);
+  const loginPath = buildLoginRedirectPath('linkedin_auth_failed', returnTo);
+  return res.redirect(`${frontendUrl}${loginPath}`);
 }
 
 if (!code) {
-  return res.redirect(`${frontendUrl}/login?error=no_code`);
+  const loginPath = buildLoginRedirectPath('linkedin_no_code', returnTo);
+  return res.redirect(`${frontendUrl}${loginPath}`);
 }
 
 // 1. Validate State
 const storedState = req.cookies.linkedin_auth_state;
 if (!state || !storedState || state !== storedState) {
   console.error('LinkedIn OAuth State Mismatch:', { received: state, stored: storedState });
-  return res.redirect(`${frontendUrl}/login?error=state_mismatch`);
+  const loginPath = buildLoginRedirectPath('linkedin_state_mismatch', returnTo);
+  return res.redirect(`${frontendUrl}${loginPath}`);
 }
 
 // Clear the state cookie once used
@@ -530,7 +621,8 @@ try {
   // LinkedIn profile structure: { sub, name, given_name, family_name, picture, email, ... }
 
   if (!profile.email_verified) {
-     return res.redirect('/login?error=linkedin_email_not_verified');
+     const loginPath = buildLoginRedirectPath('linkedin_email_not_verified', returnTo);
+     return res.redirect(`${frontendUrl}${loginPath}`);
   }
 
   const db = getDB();
@@ -617,15 +709,14 @@ try {
 
   setTokenCookies(res, newAccessToken, refreshToken);
 
-  const frontendUrl = resolveTrustedFrontendUrl(req);
-
-  console.log('[OAuth:LinkedIn] Redirecting to:', `${frontendUrl}/dashboard`);
-  res.redirect(`${frontendUrl}/dashboard`);
+  const redirectPath = returnTo || '/feed';
+  console.log('[OAuth:LinkedIn] Redirecting to:', `${frontendUrl}${redirectPath}`);
+  res.redirect(`${frontendUrl}${redirectPath}`);
 
 } catch (error: any) {
   console.error('LinkedIn OAuth callback error:', error?.response?.data || error.message);
-  const frontendUrl = resolveTrustedFrontendUrl(req);
-  res.redirect(`${frontendUrl}/login?error=linkedin_callback_error`);
+  const loginPath = buildLoginRedirectPath('linkedin_callback_error', returnTo);
+  res.redirect(`${frontendUrl}${loginPath}`);
 }
 });
 
@@ -637,6 +728,8 @@ if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
     message: 'Discord login is not configured on the server. Please contact Aura© support.'
   });
 }
+
+  rememberAuthReturnTo(req, res);
 
   const state = crypto.randomBytes(16).toString('hex');
 
@@ -659,9 +752,16 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
   const { code, error } = req.query;
 
   const frontendUrl = resolveTrustedFrontendUrl(req);
+  const returnTo = consumeAuthReturnTo(req, res);
 
-  if (error) return res.redirect(`${frontendUrl}/login?error=discord_auth_failed`);
-  if (!code) return res.redirect(`${frontendUrl}/login?error=discord_no_code`);
+  if (error) {
+    const loginPath = buildLoginRedirectPath('discord_auth_failed', returnTo);
+    return res.redirect(`${frontendUrl}${loginPath}`);
+  }
+  if (!code) {
+    const loginPath = buildLoginRedirectPath('discord_no_code', returnTo);
+    return res.redirect(`${frontendUrl}${loginPath}`);
+  }
 
   const db = getDB();
 
@@ -700,8 +800,14 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
     };
 
     const email = (discord.email || '').trim().toLowerCase();
-    if (!email) return res.redirect(`${frontendUrl}/login?error=discord_no_email`);
-    if (discord.verified === false) return res.redirect(`${frontendUrl}/login?error=discord_email_not_verified`);
+    if (!email) {
+      const loginPath = buildLoginRedirectPath('discord_no_email', returnTo);
+      return res.redirect(`${frontendUrl}${loginPath}`);
+    }
+    if (discord.verified === false) {
+      const loginPath = buildLoginRedirectPath('discord_email_not_verified', returnTo);
+      return res.redirect(`${frontendUrl}${loginPath}`);
+    }
 
     const existingUser = await findUserByEmail(email);
 
@@ -772,11 +878,13 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
 
     setTokenCookies(res, newAccessToken, newRefreshToken);
 
-    return res.redirect(`${frontendUrl}/feed`);
+    const redirectPath = returnTo || '/feed';
+    return res.redirect(`${frontendUrl}${redirectPath}`);
   } catch (e: any) {
     console.error('Discord OAuth callback error:', e?.response?.data || e.message);
     const errorFrontendUrl = resolveTrustedFrontendUrl(req);
-    return res.redirect(`${errorFrontendUrl}/login?error=discord_callback_error`);
+    const loginPath = buildLoginRedirectPath('discord_callback_error', returnTo);
+    return res.redirect(`${errorFrontendUrl}${loginPath}`);
   }
 });
 
@@ -785,7 +893,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
 router.post("/magic-link", async (req: Request, res: Response) => {
   console.log('🔹 POST /magic-link hit');
   try {
-    const { email, inviteToken } = req.body || {};
+    const { email, inviteToken, returnTo } = req.body || {};
     if (!email) {
       console.log('❌ Email missing in request body');
       return res.status(400).json({ success: false, message: "Email is required" });
@@ -851,7 +959,15 @@ router.post("/magic-link", async (req: Request, res: Response) => {
     );
 
     const frontendUrl = resolveTrustedFrontendUrl(req);
-    const magicLink = `${frontendUrl}/magic-login?token=${token}&email=${encodeURIComponent(normalizedEmail)}`;
+    const magicParams = new URLSearchParams({
+      token,
+      email: normalizedEmail
+    });
+    const safeReturnTo = sanitizeReturnToPath(returnTo);
+    if (safeReturnTo) {
+      magicParams.set('returnTo', safeReturnTo);
+    }
+    const magicLink = `${frontendUrl}/magic-login?${magicParams.toString()}`;
     
     console.log('📧 Attempting to send magic link email to:', normalizedEmail);
     await sendMagicLinkEmail(normalizedEmail, magicLink);
@@ -1095,6 +1211,7 @@ router.get('/github',
         message: 'GitHub login is not configured on the server.'
       });
     }
+    rememberAuthReturnTo(req as Request, res as Response);
     next();
   },
   passport.authenticate('github', { scope: ['user:email'] })
@@ -1102,15 +1219,24 @@ router.get('/github',
 
 router.get('/github/callback',
   (req, res, next) => {
+    const frontendUrl = resolveTrustedFrontendUrl(req as Request);
+    const returnTo = readAuthReturnTo(req as Request);
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-      return res.redirect('/login?error=github_not_configured');
+      const loginPath = buildLoginRedirectPath('github_not_configured', returnTo);
+      return res.redirect(`${frontendUrl}${loginPath}`);
     }
     next();
   },
-  passport.authenticate('github', { failureRedirect: '/login' }),
+  (req, res, next) => {
+    const frontendUrl = resolveTrustedFrontendUrl(req as Request);
+    const returnTo = readAuthReturnTo(req as Request);
+    const failurePath = buildLoginRedirectPath('github_auth_failed', returnTo);
+    return passport.authenticate('github', { failureRedirect: `${frontendUrl}${failurePath}` })(req, res, next);
+  },
   async (req: Request, res: Response) => {
     try {
       const frontendUrl = resolveTrustedFrontendUrl(req);
+      const returnTo = consumeAuthReturnTo(req, res);
 
       if (req.user) {
         const db = getDB();
@@ -1187,18 +1313,19 @@ router.get('/github/callback',
 
         setTokenCookies(res, accessToken, refreshToken);
 
-        const frontendUrl = resolveTrustedFrontendUrl(req);
-
-        console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}/feed`);
-        res.redirect(`${frontendUrl}/feed`);
+        const redirectPath = returnTo || '/feed';
+        console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}${redirectPath}`);
+        return res.redirect(`${frontendUrl}${redirectPath}`);
       } else {
-        const frontendUrl = resolveTrustedFrontendUrl(req);
-        res.redirect(`${frontendUrl}/login`);
+        const loginPath = buildLoginRedirectPath('github_auth_failed', returnTo);
+        return res.redirect(`${frontendUrl}${loginPath}`);
       }
     } catch (error) {
       console.error('GitHub OAuth callback error:', error);
       const frontendUrl = resolveTrustedFrontendUrl(req);
-      res.redirect(`${frontendUrl}/login`);
+      const returnTo = consumeAuthReturnTo(req, res);
+      const loginPath = buildLoginRedirectPath('github_callback_error', returnTo);
+      res.redirect(`${frontendUrl}${loginPath}`);
     }
   }
 );
