@@ -14,6 +14,7 @@ const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
 const socketHub_1 = require("../realtime/socketHub");
 const postsController_1 = require("./postsController");
+const escapeRegexForSearch = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 exports.privacyController = {
     // GET /api/privacy/settings/:userId - Get user's privacy settings
     getPrivacySettings: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -233,24 +234,35 @@ exports.privacyController = {
             };
             // Add text search if query provided
             if (q && typeof q === 'string') {
-                const searchTerm = q.toLowerCase().trim();
-                const searchRegex = new RegExp(searchTerm, 'i');
-                searchQuery.$and = [
-                    { $or: searchQuery.$or }, // Keep the privacy filter
-                    {
-                        $or: [
-                            { name: searchRegex },
-                            { firstName: searchRegex },
-                            { lastName: searchRegex },
-                            { handle: searchRegex },
-                            { email: searchRegex },
-                            { bio: searchRegex },
-                            { companyName: searchRegex },
-                            { industry: searchRegex }
-                        ]
-                    }
-                ];
-                delete searchQuery.$or; // Remove the original $or since we're using $and now
+                const searchTokens = q
+                    .toLowerCase()
+                    .trim()
+                    .split(/\s+/)
+                    .map((token) => token.trim())
+                    .filter((token) => token.length > 0)
+                    .slice(0, 6);
+                if (searchTokens.length > 0) {
+                    const tokenClauses = searchTokens.map((token) => {
+                        const tokenRegex = new RegExp(escapeRegexForSearch(token.slice(0, 64)), 'i');
+                        return {
+                            $or: [
+                                { name: tokenRegex },
+                                { firstName: tokenRegex },
+                                { lastName: tokenRegex },
+                                { handle: tokenRegex },
+                                { email: tokenRegex },
+                                { bio: tokenRegex },
+                                { companyName: tokenRegex },
+                                { industry: tokenRegex }
+                            ]
+                        };
+                    });
+                    searchQuery.$and = [
+                        { $or: searchQuery.$or }, // Keep the privacy filter
+                        ...tokenClauses
+                    ];
+                    delete searchQuery.$or; // Remove the original $or since we're using $and now
+                }
             }
             const searchableUsers = yield db.collection('users').find(searchQuery).project({
                 id: 1,

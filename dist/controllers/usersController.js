@@ -1532,110 +1532,147 @@ exports.usersController = {
                 });
             }
             const db = (0, db_1.getDB)();
-            const searchTerm = q.toLowerCase().trim();
-            // Create a case-insensitive regex search
-            const searchRegex = new RegExp(searchTerm, 'i');
-            // Search users
-            const usersResults = yield db.collection('users').find({
-                $and: [
-                    // Privacy filter: only show users who allow being found in search
-                    {
-                        $or: [
-                            { 'privacySettings.showInSearch': { $ne: false } },
-                            { 'privacySettings.showInSearch': { $exists: false } }
-                        ]
-                    },
-                    // Text search filter
-                    {
-                        $or: [
-                            { name: searchRegex },
-                            { firstName: searchRegex },
-                            { lastName: searchRegex },
-                            { handle: searchRegex },
-                            { email: searchRegex },
-                            { bio: searchRegex }
-                        ]
-                    }
+            const rawSearchTerm = q.trim();
+            if (!rawSearchTerm) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing search query',
+                    message: 'Query parameter "q" cannot be empty'
+                });
+            }
+            const normalizedHandleSearch = normalizeUserHandle(rawSearchTerm);
+            const tokenRegexes = rawSearchTerm
+                .toLowerCase()
+                .split(/\s+/)
+                .map((token) => token.trim())
+                .filter((token) => token.length > 0)
+                .slice(0, 6)
+                .map((token) => new RegExp(escapeRegex(token.slice(0, 64)), 'i'));
+            const privacyFilter = {
+                $or: [
+                    { 'privacySettings.showInSearch': { $ne: false } },
+                    { 'privacySettings.showInSearch': { $exists: false } }
                 ]
-            })
-                .project({
-                id: 1,
-                name: 1,
-                handle: 1,
-                avatar: 1,
-                avatarType: 1,
-                avatarKey: 1,
-                avatarCrop: 1,
-                coverImage: 1,
-                coverType: 1,
-                coverKey: 1,
-                coverCrop: 1,
-                bio: 1,
-                firstName: 1,
-                lastName: 1,
-                industry: 1,
-                companyName: 1,
-                isVerified: 1,
-                isPrivate: 1,
-                trustScore: 1,
-                activeGlow: 1,
-                userMode: 1,
-                website: 1,
-                profileLinks: 1,
-                country: 1
-            })
-                .limit(10)
-                .toArray();
-            // Search companies
-            const companiesResults = yield db.collection('companies').find({
+            };
+            const userSearchFields = ['name', 'firstName', 'lastName', 'handle', 'email', 'bio', 'companyName', 'industry'];
+            const companySearchFields = ['name', 'handle', 'industry', 'description', 'bio', 'website', 'location'];
+            const buildTokenClauses = (fields) => tokenRegexes.map((tokenRegex) => ({
+                $or: fields.map((field) => ({ [field]: tokenRegex }))
+            }));
+            const usersQuery = {
+                $and: [
+                    privacyFilter,
+                    ...buildTokenClauses(userSearchFields)
+                ]
+            };
+            const companiesQuery = {
                 $and: [
                     { legacyArchived: { $ne: true } },
-                    {
-                        $or: [
-                            { name: searchRegex },
-                            { handle: searchRegex },
-                            { industry: searchRegex },
-                            { description: searchRegex }
-                        ]
-                    }
+                    ...buildTokenClauses(companySearchFields)
                 ]
-            })
-                .project({
-                id: 1,
-                name: 1,
-                handle: 1,
-                avatar: 1,
-                avatarType: 1,
-                avatarKey: 1,
-                avatarCrop: 1,
-                coverImage: 1,
-                coverType: 1,
-                coverKey: 1,
-                coverCrop: 1,
-                bio: 1,
-                description: 1,
-                industry: 1,
-                website: 1,
-                country: 1,
-                employeeCount: 1,
-                ownerId: 1,
-                isPrivate: 1,
-                isVerified: 1,
-                subscriberCount: 1,
-                subscribers: 1,
-                profileLinks: 1
-            })
-                .limit(10)
-                .toArray();
-            // Transform and combine results
-            const searchResults = [
-                ...usersResults.map((u) => sanitizePublicUserProfile(Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(u)), { type: 'user' }))),
-                ...companiesResults.map((c) => {
-                    const transformedCompany = (0, userUtils_1.transformUser)(Object.assign(Object.assign({}, c), { type: 'company', companyName: c.name, companyWebsite: c.website, userMode: 'company' }));
-                    return Object.assign(Object.assign({}, transformedCompany), { type: 'company', bio: (typeof transformedCompany.bio === 'string' && transformedCompany.bio.trim()) ||
-                            (typeof c.description === 'string' ? c.description : '') });
+            };
+            const [usersResults, companiesResults, exactUserByHandle, exactCompanyByHandle] = yield Promise.all([
+                db.collection('users')
+                    .find(usersQuery)
+                    .project({
+                    id: 1,
+                    name: 1,
+                    handle: 1,
+                    avatar: 1,
+                    avatarType: 1,
+                    avatarKey: 1,
+                    avatarCrop: 1,
+                    coverImage: 1,
+                    coverType: 1,
+                    coverKey: 1,
+                    coverCrop: 1,
+                    bio: 1,
+                    firstName: 1,
+                    lastName: 1,
+                    industry: 1,
+                    companyName: 1,
+                    isVerified: 1,
+                    isPrivate: 1,
+                    trustScore: 1,
+                    activeGlow: 1,
+                    userMode: 1,
+                    website: 1,
+                    profileLinks: 1,
+                    country: 1
                 })
-            ];
+                    .limit(25)
+                    .toArray(),
+                db.collection('companies')
+                    .find(companiesQuery)
+                    .project({
+                    id: 1,
+                    name: 1,
+                    handle: 1,
+                    avatar: 1,
+                    avatarType: 1,
+                    avatarKey: 1,
+                    avatarCrop: 1,
+                    coverImage: 1,
+                    coverType: 1,
+                    coverKey: 1,
+                    coverCrop: 1,
+                    bio: 1,
+                    description: 1,
+                    industry: 1,
+                    website: 1,
+                    country: 1,
+                    employeeCount: 1,
+                    ownerId: 1,
+                    isPrivate: 1,
+                    isVerified: 1,
+                    subscriberCount: 1,
+                    subscribers: 1,
+                    profileLinks: 1
+                })
+                    .limit(25)
+                    .toArray(),
+                normalizedHandleSearch
+                    ? db.collection('users').findOne(Object.assign({ handle: normalizedHandleSearch }, privacyFilter))
+                    : null,
+                normalizedHandleSearch
+                    ? db.collection('companies').findOne({
+                        handle: normalizedHandleSearch,
+                        legacyArchived: { $ne: true }
+                    })
+                    : null
+            ]);
+            const transformedUsers = usersResults.map((u) => sanitizePublicUserProfile(Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(u)), { type: 'user' })));
+            const transformedCompanies = companiesResults.map((c) => {
+                const transformedCompany = (0, userUtils_1.transformUser)(Object.assign(Object.assign({}, c), { type: 'company', companyName: c.name, companyWebsite: c.website, userMode: 'company' }));
+                return Object.assign(Object.assign({}, transformedCompany), { type: 'company', bio: (typeof transformedCompany.bio === 'string' && transformedCompany.bio.trim()) ||
+                        (typeof c.description === 'string' ? c.description : '') });
+            });
+            const exactUserResult = exactUserByHandle
+                ? sanitizePublicUserProfile(Object.assign(Object.assign({}, (0, userUtils_1.transformUser)(exactUserByHandle)), { type: 'user' }))
+                : null;
+            const exactCompanyResult = exactCompanyByHandle
+                ? (() => {
+                    const transformedCompany = (0, userUtils_1.transformUser)(Object.assign(Object.assign({}, exactCompanyByHandle), { type: 'company', companyName: exactCompanyByHandle.name, companyWebsite: exactCompanyByHandle.website, userMode: 'company' }));
+                    return Object.assign(Object.assign({}, transformedCompany), { type: 'company', bio: (typeof transformedCompany.bio === 'string' && transformedCompany.bio.trim()) ||
+                            (typeof exactCompanyByHandle.description === 'string' ? exactCompanyByHandle.description : '') });
+                })()
+                : null;
+            const dedupedResults = new Map();
+            const pushResult = (result) => {
+                if (!result || typeof result.id !== 'string')
+                    return;
+                const normalizedType = result.type === 'company' ? 'company' : 'user';
+                const key = `${normalizedType}:${result.id}`;
+                if (!dedupedResults.has(key)) {
+                    dedupedResults.set(key, result);
+                }
+            };
+            // Prioritize exact handle matches first.
+            pushResult(exactUserResult);
+            pushResult(exactCompanyResult);
+            transformedUsers.forEach(pushResult);
+            transformedCompanies.forEach(pushResult);
+            const searchResults = Array.from(dedupedResults.values()).slice(0, 50);
             res.json({
                 success: true,
                 data: searchResults,
