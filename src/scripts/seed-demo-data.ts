@@ -13,7 +13,24 @@ interface CliOptions {
   preset: PresetName;
   resetOnly: boolean;
   clearAllSeeded: boolean;
+  seedSource: string;
   batchId?: string;
+}
+
+interface SeedScriptDefaults {
+  preset: PresetName;
+  clearAllSeeded: boolean;
+  seedSource: string;
+  batchIdPrefix: string;
+  resetCommand: string;
+}
+
+export interface RunSeedDemoDataOptions {
+  preset?: PresetName;
+  clearAllSeeded?: boolean;
+  seedSource?: string;
+  batchIdPrefix?: string;
+  resetCommand?: string;
 }
 
 type OwnerType = 'user' | 'company';
@@ -160,7 +177,7 @@ const PRESETS: Record<PresetName, SeedPlan> = {
   large: { profiles: 600, posts: 10000 }
 };
 
-const SEED_SOURCE = 'seed-demo-data';
+const DEFAULT_SEED_SOURCE = 'seed-demo-data';
 const COMPANY_RATIO = 0.25;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -216,7 +233,40 @@ const COMPANY_WORDS = ['Signal', 'Orbit', 'Summit', 'North', 'Catalyst', 'Vertex
 
 const nowIso = (): string => new Date().toISOString();
 
-const parseCliOptions = (): CliOptions => {
+const sanitizeBatchId = (value: string): string => value
+  .toLowerCase()
+  .replace(/[^a-z0-9-_]/g, '-')
+  .replace(/^-+|-+$/g, '')
+  .slice(0, 64);
+
+const ensureBatchId = (value: string): string => {
+  const sanitized = sanitizeBatchId(value);
+  if (!sanitized) {
+    throw new Error('Invalid --batch value. Use letters, numbers, dashes, or underscores.');
+  }
+  return sanitized;
+};
+
+const sanitizeSeedSource = (value: string): string => value
+  .toLowerCase()
+  .replace(/[^a-z0-9-_]/g, '-')
+  .replace(/^-+|-+$/g, '')
+  .slice(0, 64);
+
+const ensureSeedSource = (value: string): string => {
+  const sanitized = sanitizeSeedSource(value);
+  if (!sanitized) {
+    throw new Error('Invalid --source value. Use letters, numbers, dashes, or underscores.');
+  }
+  return sanitized;
+};
+
+const buildDefaultBatchId = (prefix: string, preset: PresetName): string => {
+  const safePrefix = sanitizeBatchId(prefix) || 'seed';
+  return sanitizeBatchId(`${safePrefix}-${preset}-${Date.now()}`) || `seed-${Date.now()}`;
+};
+
+const parseCliOptions = (defaults: SeedScriptDefaults): CliOptions => {
   const args = process.argv.slice(2);
   const readArgValue = (flag: string): string | undefined => {
     const idx = args.findIndex((arg) => arg === flag);
@@ -224,28 +274,26 @@ const parseCliOptions = (): CliOptions => {
     return args[idx + 1];
   };
 
-  const presetInput = (readArgValue('--preset') || 'large').toLowerCase();
+  const presetInput = (readArgValue('--preset') || defaults.preset).toLowerCase();
   const preset = (['small', 'medium', 'large'] as PresetName[]).includes(presetInput as PresetName)
     ? (presetInput as PresetName)
-    : 'large';
+    : defaults.preset;
   const batchId = readArgValue('--batch');
   const resetOnly = args.includes('--reset');
-  const clearAllSeeded = args.includes('--clear-seeded') || !resetOnly;
+  const noClear = args.includes('--no-clear');
+  const clearFlag = args.includes('--clear-seeded');
+  const clearAllSeeded = resetOnly
+    ? false
+    : (clearFlag ? true : (noClear ? false : defaults.clearAllSeeded));
+  const seedSource = ensureSeedSource((readArgValue('--source') || defaults.seedSource).trim());
 
   return {
     preset,
     resetOnly,
     clearAllSeeded,
-    batchId: batchId && batchId.trim().length > 0 ? batchId.trim() : undefined
+    seedSource,
+    batchId: batchId && batchId.trim().length > 0 ? ensureBatchId(batchId.trim()) : undefined
   };
-};
-
-const sanitizeBatchId = (value?: string): string => {
-  if (!value) {
-    const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    return `demo-large-${datePart}`;
-  }
-  return value.toLowerCase().replace(/[^a-z0-9-_]/g, '-').slice(0, 64);
 };
 
 const ensureSeedingAllowed = (): void => {
@@ -306,7 +354,8 @@ const buildUsers = (
   rng: () => number,
   batchSlug: string,
   count: number,
-  seedBatchId: string
+  seedBatchId: string,
+  seedSource: string
 ): SeedUserDoc[] => {
   const createdAt = nowIso();
   const users: SeedUserDoc[] = [];
@@ -354,7 +403,7 @@ const buildUsers = (
       createdAt,
       updatedAt: createdAt,
       lastLogin: createdAt,
-      seedSource: SEED_SOURCE,
+      seedSource,
       seedBatchId
     });
   }
@@ -366,7 +415,8 @@ const buildCompanies = (
   batchSlug: string,
   count: number,
   users: SeedUserDoc[],
-  seedBatchId: string
+  seedBatchId: string,
+  seedSource: string
 ): SeedCompanyDoc[] => {
   const companies: SeedCompanyDoc[] = [];
   for (let i = 0; i < count; i += 1) {
@@ -405,7 +455,7 @@ const buildCompanies = (
       featuredPostIds: [],
       createdAt: new Date(createTimestamp(rng, 540)),
       updatedAt: new Date(),
-      seedSource: SEED_SOURCE,
+      seedSource,
       seedBatchId
     });
   }
@@ -464,7 +514,8 @@ const buildRelationships = (
 
 const buildCompanyMembers = (
   companies: SeedCompanyDoc[],
-  seedBatchId: string
+  seedBatchId: string,
+  seedSource: string
 ): SeedCompanyMemberDoc[] => companies.map((company, index) => ({
   id: `${seedBatchId}-member-${String(index + 1).padStart(4, '0')}`,
   companyId: company.id,
@@ -472,7 +523,7 @@ const buildCompanyMembers = (
   role: 'owner',
   joinedAt: new Date(),
   updatedAt: new Date(),
-  seedSource: SEED_SOURCE,
+  seedSource,
   seedBatchId
 }));
 
@@ -492,7 +543,8 @@ const buildPosts = (
   totalPosts: number,
   users: SeedUserDoc[],
   companies: SeedCompanyDoc[],
-  seedBatchId: string
+  seedBatchId: string,
+  seedSource: string
 ): SeedPostDoc[] => {
   const posts: SeedPostDoc[] = [];
   const authorPool = [
@@ -586,31 +638,32 @@ const buildPosts = (
       commentCount: 0,
       isBoosted,
       viewCount: baseViews,
-      seedSource: SEED_SOURCE,
+      seedSource,
       seedBatchId
     });
   }
   return posts;
 };
 
-const clearExistingSeedData = async (db: Db, seedBatchId?: string): Promise<void> => {
+const clearExistingSeedData = async (db: Db, seedSource: string, seedBatchId?: string): Promise<void> => {
   const query = seedBatchId
-    ? { seedSource: SEED_SOURCE, seedBatchId }
-    : { seedSource: SEED_SOURCE };
+    ? { seedSource, seedBatchId }
+    : { seedSource };
   await Promise.all([
     db.collection('posts').deleteMany(query),
     db.collection('comments').deleteMany(query),
     db.collection('company_members').deleteMany(query),
     db.collection('companies').deleteMany(query),
     db.collection('users').deleteMany(query),
-    db.collection('seed_batches').deleteMany(seedBatchId ? { batchId: seedBatchId } : { seedSource: SEED_SOURCE })
+    db.collection('seed_batches').deleteMany(seedBatchId ? { seedSource, batchId: seedBatchId } : { seedSource })
   ]);
 };
 
 const insertSeedData = async (
   db: Db,
   plan: SeedPlan,
-  seedBatchId: string
+  seedBatchId: string,
+  seedSource: string
 ): Promise<void> => {
   const batchSlug = sanitizeBatchId(seedBatchId).replace(/[^a-z0-9]/g, '').slice(-6) || 'seed';
   const seedNumber = seedFromString(seedBatchId);
@@ -618,11 +671,11 @@ const insertSeedData = async (
 
   const companyCount = Math.round(plan.profiles * COMPANY_RATIO);
   const userCount = plan.profiles - companyCount;
-  const users = buildUsers(rng, batchSlug, userCount, seedBatchId);
-  const companies = buildCompanies(rng, batchSlug, companyCount, users, seedBatchId);
+  const users = buildUsers(rng, batchSlug, userCount, seedBatchId, seedSource);
+  const companies = buildCompanies(rng, batchSlug, companyCount, users, seedBatchId, seedSource);
   buildRelationships(rng, users, companies);
-  const companyMembers = buildCompanyMembers(companies, seedBatchId);
-  const posts = buildPosts(rng, plan.posts, users, companies, seedBatchId);
+  const companyMembers = buildCompanyMembers(companies, seedBatchId, seedSource);
+  const posts = buildPosts(rng, plan.posts, users, companies, seedBatchId, seedSource);
 
   await db.collection('users').insertMany(users, { ordered: false });
   await db.collection('companies').insertMany(companies, { ordered: false });
@@ -630,11 +683,11 @@ const insertSeedData = async (
   await db.collection('posts').insertMany(posts, { ordered: false });
 
   await db.collection('seed_batches').updateOne(
-    { batchId: seedBatchId },
+    { seedSource, batchId: seedBatchId },
     {
       $set: {
         batchId: seedBatchId,
-        seedSource: SEED_SOURCE,
+        seedSource,
         preset: plan === PRESETS.large ? 'large' : plan === PRESETS.medium ? 'medium' : 'small',
         profiles: plan.profiles,
         posts: plan.posts,
@@ -647,10 +700,19 @@ const insertSeedData = async (
   );
 };
 
-const run = async (): Promise<void> => {
-  const cli = parseCliOptions();
+const resolveDefaults = (options: RunSeedDemoDataOptions = {}): SeedScriptDefaults => ({
+  preset: options.preset || 'large',
+  clearAllSeeded: options.clearAllSeeded ?? true,
+  seedSource: ensureSeedSource(options.seedSource || DEFAULT_SEED_SOURCE),
+  batchIdPrefix: sanitizeBatchId(options.batchIdPrefix || 'demo') || 'demo',
+  resetCommand: options.resetCommand || 'npm run seed:demo:reset'
+});
+
+export const runSeedDemoData = async (options: RunSeedDemoDataOptions = {}): Promise<void> => {
+  const defaults = resolveDefaults(options);
+  const cli = parseCliOptions(defaults);
   const plan = PRESETS[cli.preset];
-  const batchId = sanitizeBatchId(cli.batchId || `demo-${cli.preset}-${Date.now()}`);
+  const batchId = cli.batchId || buildDefaultBatchId(defaults.batchIdPrefix, cli.preset);
 
   ensureSeedingAllowed();
 
@@ -662,33 +724,36 @@ const run = async (): Promise<void> => {
     const db = getDB();
 
     if (cli.resetOnly) {
-      await clearExistingSeedData(db, cli.batchId ? sanitizeBatchId(cli.batchId) : undefined);
-      console.log(`✅ Seed reset complete${cli.batchId ? ` for batch ${sanitizeBatchId(cli.batchId)}` : ''}.`);
+      await clearExistingSeedData(db, cli.seedSource, cli.batchId);
+      console.log(`✅ Seed reset complete for source "${cli.seedSource}"${cli.batchId ? ` and batch "${cli.batchId}"` : ''}.`);
       return;
     }
 
     if (cli.clearAllSeeded) {
-      await clearExistingSeedData(db);
-      console.log('🧹 Cleared existing seed-demo-data records.');
+      await clearExistingSeedData(db, cli.seedSource);
+      console.log(`🧹 Cleared existing records for seed source "${cli.seedSource}".`);
     }
 
-    console.log(`🌱 Seeding preset "${cli.preset}" with ${plan.profiles} profiles and ${plan.posts} posts...`);
-    await insertSeedData(db, plan, batchId);
+    console.log(`🌱 Seeding source "${cli.seedSource}" (preset "${cli.preset}") with ${plan.profiles} profiles and ${plan.posts} posts...`);
+    await insertSeedData(db, plan, batchId, cli.seedSource);
 
     console.log('✅ Seed completed successfully.');
+    console.log(`   Source: ${cli.seedSource}`);
     console.log(`   Batch: ${batchId}`);
     console.log(`   Profiles: ${plan.profiles}`);
     console.log(`   Posts: ${plan.posts}`);
     console.log('');
-    console.log('Tip: reset seed data with:');
-    console.log('  npm run seed:demo:reset');
-    console.log(`  npm run seed:demo:reset -- --batch ${batchId}`);
+    console.log('Tip: reset this seed source with:');
+    console.log(`  ${defaults.resetCommand} -- --source ${cli.seedSource}`);
+    console.log(`  ${defaults.resetCommand} -- --source ${cli.seedSource} --batch ${batchId}`);
   } finally {
     await closeDB();
   }
 };
 
-run().catch((error) => {
-  console.error('❌ Seed failed:', error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  runSeedDemoData().catch((error) => {
+    console.error('❌ Seed failed:', error);
+    process.exitCode = 1;
+  });
+}

@@ -13,7 +13,11 @@
     "build": "tsc",
     "test": "jest",
     "test:unit": "jest --config jest.unit.config.js",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "seed:demo": "ts-node src/scripts/seed-demo-data.ts",
+    "seed:demo:reset": "ts-node src/scripts/seed-demo-data.ts --reset",
+    "seed:large": "ts-node src/scripts/seed-large-data.ts",
+    "seed:large:reset": "ts-node src/scripts/seed-large-data.ts --reset"
   },
   "keywords": [],
   "author": "",
