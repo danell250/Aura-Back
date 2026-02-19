@@ -349,6 +349,21 @@ export const privacyController = {
         });
       }
 
+      if (ownerType === 'company') {
+        const isCompanyOwner = String((profileOwner as any)?.ownerId || '') === authenticatedUserId;
+        const companyMembership = await db.collection('company_members').findOne(
+          { companyId: profileOwnerId, userId: authenticatedUserId },
+          { projection: { _id: 1 } }
+        );
+
+        if (isCompanyOwner || companyMembership) {
+          return res.json({
+            success: true,
+            message: 'Skipped profile view tracking for internal company view'
+          });
+        }
+      }
+
       if (ownerType === 'user' && profileOwnerId === authenticatedUserId) {
         return res.json({
           success: true,

@@ -329,6 +329,16 @@ exports.privacyController = {
                     error: 'Profile owner not found'
                 });
             }
+            if (ownerType === 'company') {
+                const isCompanyOwner = String((profileOwner === null || profileOwner === void 0 ? void 0 : profileOwner.ownerId) || '') === authenticatedUserId;
+                const companyMembership = yield db.collection('company_members').findOne({ companyId: profileOwnerId, userId: authenticatedUserId }, { projection: { _id: 1 } });
+                if (isCompanyOwner || companyMembership) {
+                    return res.json({
+                        success: true,
+                        message: 'Skipped profile view tracking for internal company view'
+                    });
+                }
+            }
             if (ownerType === 'user' && profileOwnerId === authenticatedUserId) {
                 return res.json({
                     success: true,
