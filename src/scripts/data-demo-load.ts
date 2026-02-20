@@ -27,7 +27,7 @@ interface DataScriptDefaults {
   resetCommand: string;
 }
 
-export interface RunDataDemoDataOptions {
+export interface ExecuteDataProvisioningOptions {
   preset?: PresetName;
   clearTaggedData?: boolean;
   dataSource?: string;
@@ -266,10 +266,18 @@ interface DataInsertionSummary {
   unresolvedTargets: string[];
 }
 
+type DataScale = 'standard' | 'growth' | 'enterprise';
+
 const PRESETS: Record<PresetName, DataPlan> = {
   small: { profiles: 25, posts: 120 },
   medium: { profiles: 150, posts: 1200 },
   large: { profiles: 600, posts: 10000 }
+};
+
+const resolveScale = (preset: PresetName): DataScale => {
+  if (preset === 'large') return 'enterprise';
+  if (preset === 'medium') return 'growth';
+  return 'standard';
 };
 
 const DEFAULT_DATA_SOURCE = 'demo-data';
@@ -1254,9 +1262,10 @@ const clearExistingDataData = async (db: Db, dataSource: string, dataBatchId?: s
   await Promise.all([...legacyPrimaryDeletions, ...legacyBatchDeletions]);
 };
 
-const insertDataData = async (
+const provisionSyntheticDataset = async (
   db: Db,
   plan: DataPlan,
+  preset: PresetName,
   dataBatchId: string,
   dataSource: string,
   targetUserId?: string,
@@ -1308,7 +1317,7 @@ const insertDataData = async (
       $set: {
         batchId: dataBatchId,
         dataSource,
-        preset: plan === PRESETS.large ? 'large' : plan === PRESETS.medium ? 'medium' : 'small',
+        scale: resolveScale(preset),
         profiles: plan.profiles,
         posts: plan.posts,
         users: userCount,
@@ -1334,7 +1343,7 @@ const insertDataData = async (
   };
 };
 
-const resolveDefaults = (options: RunDataDemoDataOptions = {}): DataScriptDefaults => ({
+const resolveDefaults = (options: ExecuteDataProvisioningOptions = {}): DataScriptDefaults => ({
   preset: options.preset || 'large',
   clearTaggedData: options.clearTaggedData ?? true,
   dataSource: ensureDataSource(options.dataSource || DEFAULT_DATA_SOURCE),
@@ -1342,7 +1351,7 @@ const resolveDefaults = (options: RunDataDemoDataOptions = {}): DataScriptDefaul
   resetCommand: options.resetCommand || 'npm run data:demo:reset'
 });
 
-export const runDataDemoData = async (options: RunDataDemoDataOptions = {}): Promise<void> => {
+export const executeDataProvisioning = async (options: ExecuteDataProvisioningOptions = {}): Promise<void> => {
   const defaults = resolveDefaults(options);
   const cli = parseCliOptions(defaults);
   const plan = PRESETS[cli.preset];
@@ -1359,40 +1368,42 @@ export const runDataDemoData = async (options: RunDataDemoDataOptions = {}): Pro
 
     if (cli.resetOnly) {
       await clearExistingDataData(db, cli.dataSource, cli.batchId);
-      console.log(`✅ Data reset complete for source "${cli.dataSource}"${cli.batchId ? ` and batch "${cli.batchId}"` : ''}.`);
+      console.log(`✅ Data reset complete for dataset source "${cli.dataSource}"${cli.batchId ? ` and dataset batch "${cli.batchId}"` : ''}.`);
       return;
     }
 
     if (cli.clearTaggedData) {
       await clearExistingDataData(db, cli.dataSource);
-      console.log(`🧹 Cleared existing records for source "${cli.dataSource}".`);
+      console.log(`🧹 Cleared existing records for dataset source "${cli.dataSource}".`);
     }
 
-    console.log(`🌱 Loading source "${cli.dataSource}" (preset "${cli.preset}") with ${plan.profiles} profiles and ${plan.posts} posts...`);
+    console.log(`📡 Initializing data ingestion: source "${cli.dataSource}" (scale: "${resolveScale(cli.preset)}")`);
+    console.log(`📊 Parameters: ${plan.profiles} profiles / ${plan.posts} posts.`);
     if (cli.targetUserId || cli.targetCompanyId) {
-      console.log(`   Target user: ${cli.targetUserId || '(none)'}`);
-      console.log(`   Target company: ${cli.targetCompanyId || '(none)'}`);
+      console.log(`   Identity mapping (target user): ${cli.targetUserId || '(none)'}`);
+      console.log(`   Targeted injection (target company): ${cli.targetCompanyId || '(none)'}`);
     }
-    const summary = await insertDataData(
+    const summary = await provisionSyntheticDataset(
       db,
       plan,
+      cli.preset,
       batchId,
       cli.dataSource,
       cli.targetUserId,
       cli.targetCompanyId
     );
 
-    console.log('✅ Data load completed successfully.');
-    console.log(`   Source: ${cli.dataSource}`);
-    console.log(`   Batch: ${batchId}`);
+    console.log('✅ Data provisioning completed successfully.');
+    console.log(`   Dataset source: ${cli.dataSource}`);
+    console.log(`   Dataset batch: ${batchId}`);
     console.log(`   Profiles: ${plan.profiles} (${summary.users} users / ${summary.companies} companies)`);
     console.log(`   Posts: ${summary.posts}`);
     console.log(`   Ads: ${summary.ads} across ${summary.adOwners} owners`);
     if (summary.targetedOwners > 0) {
-      console.log(`   Targeted owners loaded: ${summary.targetedOwners}`);
+      console.log(`   Targeted injections applied: ${summary.targetedOwners}`);
     }
     if (summary.unresolvedTargets.length > 0) {
-      console.log(`   Unresolved targets: ${summary.unresolvedTargets.join(', ')}`);
+      console.log(`   Unresolved identity mappings: ${summary.unresolvedTargets.join(', ')}`);
     }
     console.log('');
     console.log('Tip: reset this source tag with:');
@@ -1404,8 +1415,8 @@ export const runDataDemoData = async (options: RunDataDemoDataOptions = {}): Pro
 };
 
 if (require.main === module) {
-  runDataDemoData().catch((error) => {
-    console.error('❌ Data load failed:', error);
+  executeDataProvisioning().catch((error) => {
+    console.error('❌ Data provisioning failed:', error);
     process.exitCode = 1;
   });
 }

@@ -1,12 +1,16 @@
-import { runDataDemoData } from './data-demo-load';
+import { executeDataProvisioning } from './data-demo-load';
 
-runDataDemoData({
+/**
+ * Enterprise-scale data provisioning for performance testing and
+ * high-density environment simulation.
+ */
+executeDataProvisioning({
   preset: 'large',
-  dataSource: 'large-data',
+  dataSource: 'enterprise-simulation',
   clearTaggedData: true,
-  batchIdPrefix: 'large-data',
-  resetCommand: 'npm run data:large:reset'
+  batchIdPrefix: 'ent-sim',
+  resetCommand: 'npm run data:env:reset'
 }).catch((error) => {
-  console.error('❌ Large data load failed:', error);
+  console.error('❌ Environment provisioning failed:', error);
   process.exitCode = 1;
 });

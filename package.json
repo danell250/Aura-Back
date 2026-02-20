@@ -17,7 +17,9 @@
     "data:demo": "ts-node src/scripts/data-demo-load.ts",
     "data:demo:reset": "ts-node src/scripts/data-demo-load.ts --reset",
     "data:large": "ts-node src/scripts/data-large-load.ts",
-    "data:large:reset": "ts-node src/scripts/data-large-load.ts --reset"
+    "data:large:reset": "ts-node src/scripts/data-large-load.ts --reset",
+    "data:env": "ts-node src/scripts/data-large-load.ts",
+    "data:env:reset": "ts-node src/scripts/data-large-load.ts --reset"
   },
   "keywords": [],
   "author": "",
