@@ -19,7 +19,9 @@
     "data:large": "ts-node src/scripts/data-large-load.ts",
     "data:large:reset": "ts-node src/scripts/data-large-load.ts --reset",
     "data:env": "ts-node src/scripts/data-large-load.ts",
-    "data:env:reset": "ts-node src/scripts/data-large-load.ts --reset"
+    "data:env:reset": "ts-node src/scripts/data-large-load.ts --reset",
+    "data:cleanup:mongo": "ts-node src/scripts/purge-simulation-data.ts",
+    "data:cleanup:mongo:apply": "ts-node src/scripts/purge-simulation-data.ts --apply"
   },
   "keywords": [],
   "author": "",
