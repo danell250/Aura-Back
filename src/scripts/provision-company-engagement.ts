@@ -947,27 +947,21 @@ const runProvisioning = async (options: CliOptions): Promise<ProvisionSummary> =
     options.subscribers,
     options.dryRun
   );
-  const postEngagementProvision = await provisionPostsAndEngagement(
-    db,
-    company,
-    participantPool.userPool,
-    participantPool.userPoolIds,
-    options
-  );
+ 
   const adProvision = await provisionAdsAndAnalytics(db, company, options);
   const subscriptionProvision = await ensureCompanyAdSubscription(db, company.id, adProvision.activeAdsCount, options);
 
   const summary: ProvisionSummary = {
     participantsCreated: participantPool.participantsCreated,
     subscribersAdded: subscriberProvision.subscribersAdded,
-    postsCreated: postEngagementProvision.postsCreated,
-    likesApplied: postEngagementProvision.likesApplied,
-    commentsInserted: postEngagementProvision.commentsInserted,
-    adsCreated: adProvision.adsCreated,
-    analyticsCreated: adProvision.analyticsCreated,
-    analyticsDailyUpserts: adProvision.analyticsDailyUpserts,
-    companySubscriptionCreated: subscriptionProvision.companySubscriptionCreated,
-    companySubscriptionUpdated: subscriptionProvision.companySubscriptionUpdated
+    postsCreated: 0,
+    likesApplied: 0,
+    commentsInserted: 0,
+    adsCreated: 0,
+    analyticsCreated: 0,
+    analyticsDailyUpserts: 0,
+    companySubscriptionCreated: false,
+    companySubscriptionUpdated: false
   };
 
   await persistBatchTracking(db, options, company.id, summary);
