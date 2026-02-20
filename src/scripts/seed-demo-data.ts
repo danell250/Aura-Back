@@ -15,6 +15,8 @@ interface CliOptions {
   clearAllSeeded: boolean;
   seedSource: string;
   batchId?: string;
+  targetUserId?: string;
+  targetCompanyId?: string;
 }
 
 interface SeedScriptDefaults {
@@ -171,6 +173,99 @@ interface SeedPostDoc {
   seedBatchId: string;
 }
 
+interface SeedAdOwner {
+  id: string;
+  type: OwnerType;
+  name: string;
+  handle: string;
+  avatar: string;
+  avatarType: 'image' | 'video';
+  email?: string;
+  activeGlow: string;
+  isTargeted: boolean;
+}
+
+interface SeedAdDoc {
+  id: string;
+  ownerId: string;
+  ownerType: OwnerType;
+  ownerName: string;
+  ownerAvatar: string;
+  ownerAvatarType: 'image' | 'video';
+  ownerEmail?: string;
+  ownerActiveGlow: string;
+  headline: string;
+  description: string;
+  mediaUrl: string;
+  mediaType: 'image';
+  ctaText: string;
+  ctaLink: string;
+  ctaPositionX: number;
+  ctaPositionY: number;
+  campaignWhy: 'safe_clicks_conversions' | 'lead_capture_no_exit' | 'email_growth' | 'book_more_calls' | 'gate_high_intent_downloads';
+  leadCapture: {
+    type: 'none' | 'email_capture';
+    title?: string;
+    description?: string;
+    submitLabel?: string;
+    successMessage?: string;
+    includeEmail?: boolean;
+  };
+  placement: 'feed' | 'sidebar' | 'story' | 'search';
+  isSponsored: boolean;
+  status: 'active' | 'paused' | 'expired';
+  expiryDate: number;
+  timestamp: number;
+  reactions: Record<string, number>;
+  reactionUsers: Record<string, string[]>;
+  hashtags: string[];
+  seedSource: string;
+  seedBatchId: string;
+}
+
+interface SeedAdAnalyticsDoc {
+  adId: string;
+  ownerId: string;
+  ownerType: OwnerType;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  reach: number;
+  engagement: number;
+  conversions: number;
+  spend: number;
+  lastUpdated: number;
+  seedSource: string;
+  seedBatchId: string;
+}
+
+interface SeedAdAnalyticsDailyDoc {
+  adId: string;
+  ownerId: string;
+  ownerType: OwnerType;
+  dateKey: string;
+  impressions: number;
+  clicks: number;
+  engagement: number;
+  conversions: number;
+  spend: number;
+  uniqueReach: number;
+  updatedAt: number;
+  createdAt: number;
+  seedSource: string;
+  seedBatchId: string;
+}
+
+interface SeedInsertionSummary {
+  users: number;
+  companies: number;
+  posts: number;
+  ads: number;
+  adOwners: number;
+  targetedOwners: number;
+  unresolvedTargets: string[];
+}
+
 const PRESETS: Record<PresetName, SeedPlan> = {
   small: { profiles: 25, posts: 120 },
   medium: { profiles: 150, posts: 1200 },
@@ -231,6 +326,33 @@ const OUTCOMES = [
 
 const COMPANY_WORDS = ['Signal', 'Orbit', 'Summit', 'North', 'Catalyst', 'Vertex', 'Pulse', 'Anchor', 'Studio', 'Labs'];
 
+const AD_HEADLINES = [
+  'Launch a campaign that converts without burning spend.',
+  'Scale qualified pipeline with creator-native demand.',
+  'Turn audience attention into measurable growth.',
+  'Book higher-intent calls from your next campaign sprint.',
+  'Run clean, high-signal campaigns with live performance insight.'
+];
+
+const AD_DESCRIPTIONS = [
+  'Built for operators who need reliable performance, not vanity metrics. This campaign stack focuses on clear outcomes and rapid iteration.',
+  'We combine creative clarity, strong positioning, and precise calls-to-action so your team can scale without guesswork.',
+  'Use this campaign to drive qualified traffic, stronger conversion quality, and better visibility into what actually works.',
+  'A practical campaign setup for founders and growth teams who need fast feedback loops and measurable ROI.',
+  'Designed for modern teams: compact creative, precise targeting logic, and execution that compounds every week.'
+];
+
+const AD_CTA_TEXTS = ['View Case Study', 'Book a Demo', 'Get the Playbook', 'Start Now', 'See Strategy'];
+const AD_CAMPAIGN_WHYS: SeedAdDoc['campaignWhy'][] = [
+  'safe_clicks_conversions',
+  'lead_capture_no_exit',
+  'email_growth',
+  'book_more_calls',
+  'gate_high_intent_downloads'
+];
+const AD_PLACEMENTS: SeedAdDoc['placement'][] = ['feed', 'sidebar', 'story', 'search'];
+const AD_ANALYTICS_DAYS = 14;
+
 const nowIso = (): string => new Date().toISOString();
 
 const sanitizeBatchId = (value: string): string => value
@@ -266,6 +388,12 @@ const buildDefaultBatchId = (prefix: string, preset: PresetName): string => {
   return sanitizeBatchId(`${safePrefix}-${preset}-${Date.now()}`) || `seed-${Date.now()}`;
 };
 
+const normalizeIdentityId = (value?: string): string | undefined => {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 128) : undefined;
+};
+
 const parseCliOptions = (defaults: SeedScriptDefaults): CliOptions => {
   const args = process.argv.slice(2);
   const readArgValue = (flag: string): string | undefined => {
@@ -286,13 +414,17 @@ const parseCliOptions = (defaults: SeedScriptDefaults): CliOptions => {
     ? false
     : (clearFlag ? true : (noClear ? false : defaults.clearAllSeeded));
   const seedSource = ensureSeedSource((readArgValue('--source') || defaults.seedSource).trim());
+  const targetUserId = normalizeIdentityId(readArgValue('--target-user') || readArgValue('--user-id'));
+  const targetCompanyId = normalizeIdentityId(readArgValue('--target-company') || readArgValue('--company-id'));
 
   return {
     preset,
     resetOnly,
     clearAllSeeded,
     seedSource,
-    batchId: batchId && batchId.trim().length > 0 ? ensureBatchId(batchId.trim()) : undefined
+    batchId: batchId && batchId.trim().length > 0 ? ensureBatchId(batchId.trim()) : undefined,
+    targetUserId,
+    targetCompanyId
   };
 };
 
@@ -645,11 +777,364 @@ const buildPosts = (
   return posts;
 };
 
+const normalizeHandle = (rawValue: unknown, fallbackName: string, fallbackId: string): string => {
+  const candidate = typeof rawValue === 'string' ? rawValue.trim() : '';
+  if (candidate.length > 0) {
+    return candidate.startsWith('@') ? candidate : `@${candidate}`;
+  }
+  const slugBase = slugify(fallbackName) || sanitizeBatchId(fallbackId) || 'aura';
+  return `@${slugBase.slice(0, 28)}`;
+};
+
+const toSeedAdOwnerFromUser = (user: SeedUserDoc, isTargeted: boolean): SeedAdOwner => ({
+  id: user.id,
+  type: 'user',
+  name: user.name,
+  handle: normalizeHandle(user.handle, user.name, user.id),
+  avatar: user.avatar,
+  avatarType: user.avatarType,
+  email: user.email,
+  activeGlow: user.activeGlow,
+  isTargeted
+});
+
+const toSeedAdOwnerFromCompany = (company: SeedCompanyDoc, isTargeted: boolean): SeedAdOwner => ({
+  id: company.id,
+  type: 'company',
+  name: company.name,
+  handle: normalizeHandle(company.handle, company.name, company.id),
+  avatar: company.avatar,
+  avatarType: company.avatarType,
+  activeGlow: 'none',
+  isTargeted
+});
+
+const loadExistingAdOwner = async (
+  db: Db,
+  ownerType: OwnerType,
+  ownerId: string
+): Promise<SeedAdOwner | null> => {
+  const collection = ownerType === 'company' ? 'companies' : 'users';
+  const doc = await db.collection(collection).findOne({ id: ownerId });
+  if (!doc) return null;
+
+  const name = ownerType === 'company'
+    ? String(doc?.name || ownerId)
+    : String(doc?.name || `${doc?.firstName || ''} ${doc?.lastName || ''}`.trim() || ownerId);
+
+  return {
+    id: String(doc?.id || ownerId),
+    type: ownerType,
+    name,
+    handle: normalizeHandle(doc?.handle, name, ownerId),
+    avatar: typeof doc?.avatar === 'string' ? doc.avatar : `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name + ownerId)}`,
+    avatarType: doc?.avatarType === 'video' ? 'video' : 'image',
+    email: typeof doc?.email === 'string' ? doc.email : undefined,
+    activeGlow: typeof doc?.activeGlow === 'string' ? doc.activeGlow : 'none',
+    isTargeted: true
+  };
+};
+
+const mergeAdOwners = (owners: SeedAdOwner[]): SeedAdOwner[] => {
+  const byKey = new Map<string, SeedAdOwner>();
+  owners.forEach((owner) => {
+    const key = `${owner.type}:${owner.id}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, owner);
+      return;
+    }
+    if (owner.isTargeted && !existing.isTargeted) {
+      byKey.set(key, owner);
+    }
+  });
+  return Array.from(byKey.values());
+};
+
+const resolveAdOwners = async (
+  db: Db,
+  rng: () => number,
+  users: SeedUserDoc[],
+  companies: SeedCompanyDoc[],
+  targetUserId?: string,
+  targetCompanyId?: string
+): Promise<{ owners: SeedAdOwner[]; unresolvedTargets: string[] }> => {
+  const sampledUsers = pickManyUnique(
+    rng,
+    users,
+    Math.min(users.length, Math.max(4, Math.round(users.length * 0.12)))
+  );
+  const sampledCompanies = pickManyUnique(
+    rng,
+    companies,
+    Math.min(companies.length, Math.max(2, Math.round(companies.length * 0.22)))
+  );
+
+  const owners: SeedAdOwner[] = [
+    ...sampledUsers.map((user) => toSeedAdOwnerFromUser(user, false)),
+    ...sampledCompanies.map((company) => toSeedAdOwnerFromCompany(company, false))
+  ];
+  const unresolvedTargets: string[] = [];
+
+  if (targetUserId) {
+    const seededUser = users.find((user) => user.id === targetUserId);
+    if (seededUser) {
+      owners.push(toSeedAdOwnerFromUser(seededUser, true));
+    } else {
+      const owner = await loadExistingAdOwner(db, 'user', targetUserId);
+      if (owner) owners.push(owner);
+      else unresolvedTargets.push(`user:${targetUserId}`);
+    }
+  }
+
+  if (targetCompanyId) {
+    const seededCompany = companies.find((company) => company.id === targetCompanyId);
+    if (seededCompany) {
+      owners.push(toSeedAdOwnerFromCompany(seededCompany, true));
+    } else {
+      const owner = await loadExistingAdOwner(db, 'company', targetCompanyId);
+      if (owner) owners.push(owner);
+      else unresolvedTargets.push(`company:${targetCompanyId}`);
+    }
+  }
+
+  return {
+    owners: mergeAdOwners(owners),
+    unresolvedTargets
+  };
+};
+
+interface SeedAdTotals {
+  impressions: number;
+  clicks: number;
+  engagement: number;
+  conversions: number;
+  spend: number;
+  reach: number;
+}
+
+const pickSeedAdStatus = (rng: () => number): SeedAdDoc['status'] => {
+  const statusRoll = rng();
+  if (statusRoll < 0.72) return 'active';
+  if (statusRoll < 0.9) return 'paused';
+  return 'expired';
+};
+
+const buildSeedAdReactions = (rng: () => number): Record<string, number> => {
+  const reactions: Record<string, number> = {};
+  pickManyUnique(rng, REACTION_EMOJIS, randomInt(rng, 1, 3)).forEach((emoji) => {
+    reactions[emoji] = randomInt(rng, 0, 44);
+  });
+  return reactions;
+};
+
+const buildAdDailyAnalytics = (
+  rng: () => number,
+  adId: string,
+  owner: SeedAdOwner,
+  status: SeedAdDoc['status'],
+  now: number,
+  seedSource: string,
+  seedBatchId: string
+): { daily: SeedAdAnalyticsDailyDoc[]; totals: SeedAdTotals } => {
+  const daily: SeedAdAnalyticsDailyDoc[] = [];
+  const totals: SeedAdTotals = {
+    impressions: 0,
+    clicks: 0,
+    engagement: 0,
+    conversions: 0,
+    spend: 0,
+    reach: 0
+  };
+
+  for (let dayOffset = AD_ANALYTICS_DAYS - 1; dayOffset >= 0; dayOffset -= 1) {
+    const day = new Date(now - dayOffset * ONE_DAY_MS);
+    day.setUTCHours(0, 0, 0, 0);
+    const dateKey = day.toISOString().slice(0, 10);
+    const recencyBoost = 0.62 + ((AD_ANALYTICS_DAYS - dayOffset) / AD_ANALYTICS_DAYS) * 0.78;
+    const ownerBoost = owner.isTargeted ? 1.8 : 1;
+    const statusBoost = status === 'active' ? 1 : (status === 'paused' ? 0.42 : 0.16);
+    const baseImpressions = randomInt(rng, 20, 1100);
+    const impressions = Math.max(0, Math.round(baseImpressions * recencyBoost * ownerBoost * statusBoost));
+    const clicks = Math.min(impressions, Math.round(impressions * (0.006 + rng() * 0.06)));
+    const engagement = Math.max(clicks, Math.round(impressions * (0.012 + rng() * 0.07)));
+    const conversions = Math.min(clicks, Math.round(clicks * (0.05 + rng() * 0.3)));
+    const uniqueReach = Math.min(impressions, Math.round(impressions * (0.55 + rng() * 0.35)));
+    const spend = Number((impressions * (0.0035 + rng() * 0.018)).toFixed(2));
+    const updatedAt = day.getTime() + randomInt(rng, 10, 23) * 60 * 60 * 1000;
+
+    daily.push({
+      adId,
+      ownerId: owner.id,
+      ownerType: owner.type,
+      dateKey,
+      impressions,
+      clicks,
+      engagement,
+      conversions,
+      spend,
+      uniqueReach,
+      updatedAt,
+      createdAt: day.getTime(),
+      seedSource,
+      seedBatchId
+    });
+
+    totals.impressions += impressions;
+    totals.clicks += clicks;
+    totals.engagement += engagement;
+    totals.conversions += conversions;
+    totals.spend += spend;
+    totals.reach += uniqueReach;
+  }
+
+  return { daily, totals };
+};
+
+const buildSeedAdDocument = (
+  rng: () => number,
+  adId: string,
+  owner: SeedAdOwner,
+  now: number,
+  seedSource: string,
+  seedBatchId: string
+): SeedAdDoc => {
+  const status = pickSeedAdStatus(rng);
+  const createdAt = createTimestamp(rng, 55);
+  const expiryDate = status === 'expired'
+    ? createdAt + randomInt(rng, 5, 30) * ONE_DAY_MS
+    : now + randomInt(rng, 7, 75) * ONE_DAY_MS;
+  const campaignWhy = pickOne(rng, AD_CAMPAIGN_WHYS);
+  const campaignToken = crypto.createHash('sha1').update(adId).digest('hex').slice(0, 10);
+  const leadCapture = rng() < 0.26
+    ? {
+      type: 'email_capture' as const,
+      title: 'Get campaign brief',
+      description: 'Drop your email and we will send the full execution brief.',
+      submitLabel: 'Send brief',
+      successMessage: 'Brief sent. Check your inbox.',
+      includeEmail: true
+    }
+    : { type: 'none' as const };
+
+  return {
+    id: adId,
+    ownerId: owner.id,
+    ownerType: owner.type,
+    ownerName: owner.name,
+    ownerAvatar: owner.avatar,
+    ownerAvatarType: owner.avatarType,
+    ownerEmail: owner.email,
+    ownerActiveGlow: owner.activeGlow || 'none',
+    headline: pickOne(rng, AD_HEADLINES),
+    description: `${pickOne(rng, AD_DESCRIPTIONS)}\n\nBy ${owner.name}.`,
+    mediaUrl: `https://picsum.photos/seed/${encodeURIComponent(`${adId}-media`)}/1280/720`,
+    mediaType: 'image',
+    ctaText: pickOne(rng, AD_CTA_TEXTS),
+    ctaLink: `https://www.aura.net.za/campaigns/${owner.type}/${campaignToken}`,
+    ctaPositionX: randomInt(rng, 24, 76),
+    ctaPositionY: randomInt(rng, 68, 90),
+    campaignWhy,
+    leadCapture,
+    placement: pickOne(rng, AD_PLACEMENTS),
+    isSponsored: true,
+    status,
+    expiryDate,
+    timestamp: createdAt,
+    reactions: buildSeedAdReactions(rng),
+    reactionUsers: {},
+    hashtags: pickManyUnique(rng, TOPIC_TAGS, randomInt(rng, 2, 4)),
+    seedSource,
+    seedBatchId
+  };
+};
+
+const buildSeedAdAnalyticsDocument = (
+  rng: () => number,
+  adId: string,
+  owner: SeedAdOwner,
+  now: number,
+  totals: SeedAdTotals,
+  seedSource: string,
+  seedBatchId: string
+): SeedAdAnalyticsDoc => {
+  const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
+  return {
+    adId,
+    ownerId: owner.id,
+    ownerType: owner.type,
+    impressions: totals.impressions,
+    clicks: totals.clicks,
+    ctr,
+    reach: Math.min(totals.reach, totals.impressions),
+    engagement: totals.engagement,
+    conversions: totals.conversions,
+    spend: Number(totals.spend.toFixed(2)),
+    lastUpdated: now - randomInt(rng, 0, 3) * ONE_DAY_MS,
+    seedSource,
+    seedBatchId
+  };
+};
+
+const buildAdsAndAnalytics = (
+  rng: () => number,
+  owners: SeedAdOwner[],
+  seedBatchId: string,
+  seedSource: string
+): {
+  ads: SeedAdDoc[];
+  adAnalytics: SeedAdAnalyticsDoc[];
+  adAnalyticsDaily: SeedAdAnalyticsDailyDoc[];
+} => {
+  const ads: SeedAdDoc[] = [];
+  const adAnalytics: SeedAdAnalyticsDoc[] = [];
+  const adAnalyticsDaily: SeedAdAnalyticsDailyDoc[] = [];
+  const now = Date.now();
+  let adIndex = 1;
+
+  owners.forEach((owner) => {
+    const adCount = owner.isTargeted ? randomInt(rng, 6, 9) : randomInt(rng, 1, 3);
+    for (let i = 0; i < adCount; i += 1) {
+      const adId = `${seedBatchId}-ad-${String(adIndex).padStart(5, '0')}`;
+      adIndex += 1;
+
+      const ad = buildSeedAdDocument(rng, adId, owner, now, seedSource, seedBatchId);
+      const { daily, totals } = buildAdDailyAnalytics(
+        rng,
+        adId,
+        owner,
+        ad.status,
+        now,
+        seedSource,
+        seedBatchId
+      );
+      const aggregate = buildSeedAdAnalyticsDocument(
+        rng,
+        adId,
+        owner,
+        now,
+        totals,
+        seedSource,
+        seedBatchId
+      );
+
+      ads.push(ad);
+      adAnalytics.push(aggregate);
+      adAnalyticsDaily.push(...daily);
+    }
+  });
+
+  return { ads, adAnalytics, adAnalyticsDaily };
+};
+
 const clearExistingSeedData = async (db: Db, seedSource: string, seedBatchId?: string): Promise<void> => {
   const query = seedBatchId
     ? { seedSource, seedBatchId }
     : { seedSource };
   await Promise.all([
+    db.collection('adAnalyticsDaily').deleteMany(query),
+    db.collection('adAnalytics').deleteMany(query),
+    db.collection('ads').deleteMany(query),
     db.collection('posts').deleteMany(query),
     db.collection('comments').deleteMany(query),
     db.collection('company_members').deleteMany(query),
@@ -663,8 +1148,10 @@ const insertSeedData = async (
   db: Db,
   plan: SeedPlan,
   seedBatchId: string,
-  seedSource: string
-): Promise<void> => {
+  seedSource: string,
+  targetUserId?: string,
+  targetCompanyId?: string
+): Promise<SeedInsertionSummary> => {
   const batchSlug = sanitizeBatchId(seedBatchId).replace(/[^a-z0-9]/g, '').slice(-6) || 'seed';
   const seedNumber = seedFromString(seedBatchId);
   const rng = createRng(seedNumber);
@@ -676,11 +1163,34 @@ const insertSeedData = async (
   buildRelationships(rng, users, companies);
   const companyMembers = buildCompanyMembers(companies, seedBatchId, seedSource);
   const posts = buildPosts(rng, plan.posts, users, companies, seedBatchId, seedSource);
+  const { owners: adOwners, unresolvedTargets } = await resolveAdOwners(
+    db,
+    rng,
+    users,
+    companies,
+    targetUserId,
+    targetCompanyId
+  );
+  const { ads, adAnalytics, adAnalyticsDaily } = buildAdsAndAnalytics(
+    rng,
+    adOwners,
+    seedBatchId,
+    seedSource
+  );
 
   await db.collection('users').insertMany(users, { ordered: false });
   await db.collection('companies').insertMany(companies, { ordered: false });
   await db.collection('company_members').insertMany(companyMembers, { ordered: false });
   await db.collection('posts').insertMany(posts, { ordered: false });
+  if (ads.length > 0) {
+    await db.collection('ads').insertMany(ads, { ordered: false });
+  }
+  if (adAnalytics.length > 0) {
+    await db.collection('adAnalytics').insertMany(adAnalytics, { ordered: false });
+  }
+  if (adAnalyticsDaily.length > 0) {
+    await db.collection('adAnalyticsDaily').insertMany(adAnalyticsDaily, { ordered: false });
+  }
 
   await db.collection('seed_batches').updateOne(
     { seedSource, batchId: seedBatchId },
@@ -693,11 +1203,25 @@ const insertSeedData = async (
         posts: plan.posts,
         users: userCount,
         companies: companyCount,
+        ads: ads.length,
+        adOwners: adOwners.length,
+        targetedOwners: adOwners.filter((owner) => owner.isTargeted).length,
+        unresolvedTargets,
         createdAt: new Date()
       }
     },
     { upsert: true }
   );
+
+  return {
+    users: userCount,
+    companies: companyCount,
+    posts: plan.posts,
+    ads: ads.length,
+    adOwners: adOwners.length,
+    targetedOwners: adOwners.filter((owner) => owner.isTargeted).length,
+    unresolvedTargets
+  };
 };
 
 const resolveDefaults = (options: RunSeedDemoDataOptions = {}): SeedScriptDefaults => ({
@@ -735,13 +1259,31 @@ export const runSeedDemoData = async (options: RunSeedDemoDataOptions = {}): Pro
     }
 
     console.log(`🌱 Seeding source "${cli.seedSource}" (preset "${cli.preset}") with ${plan.profiles} profiles and ${plan.posts} posts...`);
-    await insertSeedData(db, plan, batchId, cli.seedSource);
+    if (cli.targetUserId || cli.targetCompanyId) {
+      console.log(`   Target user: ${cli.targetUserId || '(none)'}`);
+      console.log(`   Target company: ${cli.targetCompanyId || '(none)'}`);
+    }
+    const summary = await insertSeedData(
+      db,
+      plan,
+      batchId,
+      cli.seedSource,
+      cli.targetUserId,
+      cli.targetCompanyId
+    );
 
     console.log('✅ Seed completed successfully.');
     console.log(`   Source: ${cli.seedSource}`);
     console.log(`   Batch: ${batchId}`);
-    console.log(`   Profiles: ${plan.profiles}`);
-    console.log(`   Posts: ${plan.posts}`);
+    console.log(`   Profiles: ${plan.profiles} (${summary.users} users / ${summary.companies} companies)`);
+    console.log(`   Posts: ${summary.posts}`);
+    console.log(`   Ads: ${summary.ads} across ${summary.adOwners} owners`);
+    if (summary.targetedOwners > 0) {
+      console.log(`   Targeted owners seeded: ${summary.targetedOwners}`);
+    }
+    if (summary.unresolvedTargets.length > 0) {
+      console.log(`   Unresolved targets: ${summary.unresolvedTargets.join(', ')}`);
+    }
     console.log('');
     console.log('Tip: reset this seed source with:');
     console.log(`  ${defaults.resetCommand} -- --source ${cli.seedSource}`);
