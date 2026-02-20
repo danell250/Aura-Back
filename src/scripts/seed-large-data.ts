@@ -1,12 +1,12 @@
-import { runSeedDemoData } from './seed-demo-data';
+import { runDataDemoData } from './seed-demo-data';
 
-runSeedDemoData({
+runDataDemoData({
   preset: 'large',
-  seedSource: 'seed-large-data',
-  clearAllSeeded: true,
-  batchIdPrefix: 'large-seed',
+  dataSource: 'large-data',
+  clearTaggedData: true,
+  batchIdPrefix: 'large-data',
   resetCommand: 'npm run seed:large:reset'
 }).catch((error) => {
-  console.error('❌ Large seed failed:', error);
+  console.error('❌ Large data load failed:', error);
   process.exitCode = 1;
 });

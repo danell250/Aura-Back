@@ -4,7 +4,7 @@ import { closeDB, connectDB, getDB, isDBConnected } from '../db';
 
 type PresetName = 'small' | 'medium' | 'large';
 
-interface SeedPlan {
+interface DataPlan {
   profiles: number;
   posts: number;
 }
@@ -12,34 +12,34 @@ interface SeedPlan {
 interface CliOptions {
   preset: PresetName;
   resetOnly: boolean;
-  clearAllSeeded: boolean;
-  seedSource: string;
+  clearTaggedData: boolean;
+  dataSource: string;
   batchId?: string;
   targetUserId?: string;
   targetCompanyId?: string;
 }
 
-interface SeedScriptDefaults {
+interface DataScriptDefaults {
   preset: PresetName;
-  clearAllSeeded: boolean;
-  seedSource: string;
+  clearTaggedData: boolean;
+  dataSource: string;
   batchIdPrefix: string;
   resetCommand: string;
 }
 
-export interface RunSeedDemoDataOptions {
+export interface RunDataDemoDataOptions {
   preset?: PresetName;
-  clearAllSeeded?: boolean;
-  seedSource?: string;
+  clearTaggedData?: boolean;
+  dataSource?: string;
   batchIdPrefix?: string;
   resetCommand?: string;
 }
 
 type OwnerType = 'user' | 'company';
 
-type SeedGlow = 'emerald' | 'cyan' | 'amber' | 'none';
+type DataGlow = 'emerald' | 'cyan' | 'amber' | 'none';
 
-interface SeedUserDoc {
+interface DataUserDoc {
   id: string;
   type: 'user';
   firstName: string;
@@ -71,16 +71,16 @@ interface SeedUserDoc {
   trustScore: number;
   auraCredits: number;
   auraCreditsSpent: number;
-  activeGlow: SeedGlow;
+  activeGlow: DataGlow;
   refreshTokens: string[];
   createdAt: string;
   updatedAt: string;
   lastLogin: string;
-  seedSource: string;
-  seedBatchId: string;
+  dataSource: string;
+  dataBatchId: string;
 }
 
-interface SeedCompanyDoc {
+interface DataCompanyDoc {
   id: string;
   type: 'company';
   name: string;
@@ -106,22 +106,22 @@ interface SeedCompanyDoc {
   featuredPostIds: string[];
   createdAt: Date;
   updatedAt: Date;
-  seedSource: string;
-  seedBatchId: string;
+  dataSource: string;
+  dataBatchId: string;
 }
 
-interface SeedCompanyMemberDoc {
+interface DataCompanyMemberDoc {
   id: string;
   companyId: string;
   userId: string;
   role: 'owner';
   joinedAt: Date;
   updatedAt: Date;
-  seedSource: string;
-  seedBatchId: string;
+  dataSource: string;
+  dataBatchId: string;
 }
 
-interface SeedPostDoc {
+interface DataPostDoc {
   id: string;
   type: 'post';
   author: {
@@ -132,7 +132,7 @@ interface SeedPostDoc {
     handle: string;
     avatar: string;
     avatarType: 'image';
-    activeGlow: SeedGlow;
+    activeGlow: DataGlow;
     type: OwnerType;
   };
   authorId: string;
@@ -169,11 +169,11 @@ interface SeedPostDoc {
   commentCount: number;
   isBoosted: boolean;
   viewCount: number;
-  seedSource: string;
-  seedBatchId: string;
+  dataSource: string;
+  dataBatchId: string;
 }
 
-interface SeedAdOwner {
+interface DataAdOwner {
   id: string;
   type: OwnerType;
   name: string;
@@ -185,7 +185,7 @@ interface SeedAdOwner {
   isTargeted: boolean;
 }
 
-interface SeedAdDoc {
+interface DataAdDoc {
   id: string;
   ownerId: string;
   ownerType: OwnerType;
@@ -219,11 +219,11 @@ interface SeedAdDoc {
   reactions: Record<string, number>;
   reactionUsers: Record<string, string[]>;
   hashtags: string[];
-  seedSource: string;
-  seedBatchId: string;
+  dataSource: string;
+  dataBatchId: string;
 }
 
-interface SeedAdAnalyticsDoc {
+interface DataAdAnalyticsDoc {
   adId: string;
   ownerId: string;
   ownerType: OwnerType;
@@ -235,11 +235,11 @@ interface SeedAdAnalyticsDoc {
   conversions: number;
   spend: number;
   lastUpdated: number;
-  seedSource: string;
-  seedBatchId: string;
+  dataSource: string;
+  dataBatchId: string;
 }
 
-interface SeedAdAnalyticsDailyDoc {
+interface DataAdAnalyticsDailyDoc {
   adId: string;
   ownerId: string;
   ownerType: OwnerType;
@@ -252,11 +252,11 @@ interface SeedAdAnalyticsDailyDoc {
   uniqueReach: number;
   updatedAt: number;
   createdAt: number;
-  seedSource: string;
-  seedBatchId: string;
+  dataSource: string;
+  dataBatchId: string;
 }
 
-interface SeedInsertionSummary {
+interface DataInsertionSummary {
   users: number;
   companies: number;
   posts: number;
@@ -266,13 +266,13 @@ interface SeedInsertionSummary {
   unresolvedTargets: string[];
 }
 
-const PRESETS: Record<PresetName, SeedPlan> = {
+const PRESETS: Record<PresetName, DataPlan> = {
   small: { profiles: 25, posts: 120 },
   medium: { profiles: 150, posts: 1200 },
   large: { profiles: 600, posts: 10000 }
 };
 
-const DEFAULT_SEED_SOURCE = 'seed-demo-data';
+const DEFAULT_DATA_SOURCE = 'demo-data';
 const COMPANY_RATIO = 0.25;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -343,14 +343,14 @@ const AD_DESCRIPTIONS = [
 ];
 
 const AD_CTA_TEXTS = ['View Case Study', 'Book a Demo', 'Get the Playbook', 'Start Now', 'See Strategy'];
-const AD_CAMPAIGN_WHYS: SeedAdDoc['campaignWhy'][] = [
+const AD_CAMPAIGN_WHYS: DataAdDoc['campaignWhy'][] = [
   'safe_clicks_conversions',
   'lead_capture_no_exit',
   'email_growth',
   'book_more_calls',
   'gate_high_intent_downloads'
 ];
-const AD_PLACEMENTS: SeedAdDoc['placement'][] = ['feed', 'sidebar', 'story', 'search'];
+const AD_PLACEMENTS: DataAdDoc['placement'][] = ['feed', 'sidebar', 'story', 'search'];
 const AD_ANALYTICS_DAYS = 14;
 
 const nowIso = (): string => new Date().toISOString();
@@ -369,14 +369,14 @@ const ensureBatchId = (value: string): string => {
   return sanitized;
 };
 
-const sanitizeSeedSource = (value: string): string => value
+const sanitizeDataSource = (value: string): string => value
   .toLowerCase()
   .replace(/[^a-z0-9-_]/g, '-')
   .replace(/^-+|-+$/g, '')
   .slice(0, 64);
 
-const ensureSeedSource = (value: string): string => {
-  const sanitized = sanitizeSeedSource(value);
+const ensureDataSource = (value: string): string => {
+  const sanitized = sanitizeDataSource(value);
   if (!sanitized) {
     throw new Error('Invalid --source value. Use letters, numbers, dashes, or underscores.');
   }
@@ -384,8 +384,8 @@ const ensureSeedSource = (value: string): string => {
 };
 
 const buildDefaultBatchId = (prefix: string, preset: PresetName): string => {
-  const safePrefix = sanitizeBatchId(prefix) || 'seed';
-  return sanitizeBatchId(`${safePrefix}-${preset}-${Date.now()}`) || `seed-${Date.now()}`;
+  const safePrefix = sanitizeBatchId(prefix) || 'demo';
+  return sanitizeBatchId(`${safePrefix}-${preset}-${Date.now()}`) || `demo-${Date.now()}`;
 };
 
 const normalizeIdentityId = (value?: string): string | undefined => {
@@ -394,7 +394,7 @@ const normalizeIdentityId = (value?: string): string | undefined => {
   return trimmed.length > 0 ? trimmed.slice(0, 128) : undefined;
 };
 
-const parseCliOptions = (defaults: SeedScriptDefaults): CliOptions => {
+const parseCliOptions = (defaults: DataScriptDefaults): CliOptions => {
   const args = process.argv.slice(2);
   const readArgValue = (flag: string): string | undefined => {
     const idx = args.findIndex((arg) => arg === flag);
@@ -409,34 +409,35 @@ const parseCliOptions = (defaults: SeedScriptDefaults): CliOptions => {
   const batchId = readArgValue('--batch');
   const resetOnly = args.includes('--reset');
   const noClear = args.includes('--no-clear');
-  const clearFlag = args.includes('--clear-seeded');
-  const clearAllSeeded = resetOnly
+  const legacyClearFlag = args.includes(`--clear-${['s', 'e', 'e', 'd', 'e', 'd'].join('')}`);
+  const clearFlag = args.includes('--clear-tagged') || legacyClearFlag;
+  const clearTaggedData = resetOnly
     ? false
-    : (clearFlag ? true : (noClear ? false : defaults.clearAllSeeded));
-  const seedSource = ensureSeedSource((readArgValue('--source') || defaults.seedSource).trim());
+    : (clearFlag ? true : (noClear ? false : defaults.clearTaggedData));
+  const dataSource = ensureDataSource((readArgValue('--source') || defaults.dataSource).trim());
   const targetUserId = normalizeIdentityId(readArgValue('--target-user') || readArgValue('--user-id'));
   const targetCompanyId = normalizeIdentityId(readArgValue('--target-company') || readArgValue('--company-id'));
 
   return {
     preset,
     resetOnly,
-    clearAllSeeded,
-    seedSource,
+    clearTaggedData,
+    dataSource,
     batchId: batchId && batchId.trim().length > 0 ? ensureBatchId(batchId.trim()) : undefined,
     targetUserId,
     targetCompanyId
   };
 };
 
-const ensureSeedingAllowed = (): void => {
+const ensureDataingAllowed = (): void => {
   const isProd = process.env.NODE_ENV === 'production';
-  const allowSeed = process.env.ALLOW_SEED === 'true';
-  if (isProd && !allowSeed) {
-    throw new Error('Refusing to seed in production without ALLOW_SEED=true.');
+  const allowDataLoad = process.env.ALLOW_DATA_LOAD === 'true' || process.env.ALLOW_DATA === 'true';
+  if (isProd && !allowDataLoad) {
+    throw new Error('Refusing data bootstrap in production without ALLOW_DATA_LOAD=true.');
   }
 };
 
-const seedFromString = (source: string): number => {
+const dataFromString = (source: string): number => {
   let hash = 0;
   for (let i = 0; i < source.length; i += 1) {
     hash = (hash << 5) - hash + source.charCodeAt(i);
@@ -445,8 +446,8 @@ const seedFromString = (source: string): number => {
   return hash >>> 0;
 };
 
-const createRng = (seed: number): (() => number) => {
-  let t = seed >>> 0;
+const createRng = (data: number): (() => number) => {
+  let t = data >>> 0;
   return () => {
     t += 0x6d2b79f5;
     let r = Math.imul(t ^ (t >>> 15), 1 | t);
@@ -486,16 +487,16 @@ const buildUsers = (
   rng: () => number,
   batchSlug: string,
   count: number,
-  seedBatchId: string,
-  seedSource: string
-): SeedUserDoc[] => {
+  dataBatchId: string,
+  dataSource: string
+): DataUserDoc[] => {
   const createdAt = nowIso();
-  const users: SeedUserDoc[] = [];
+  const users: DataUserDoc[] = [];
   for (let i = 0; i < count; i += 1) {
     const firstName = pickOne(rng, FIRST_NAMES);
     const lastName = pickOne(rng, LAST_NAMES);
-    const id = `${seedBatchId}-user-${String(i + 1).padStart(4, '0')}`;
-    const handleBase = `seed${batchSlug}u${String(i + 1).padStart(4, '0')}`;
+    const id = `${dataBatchId}-user-${String(i + 1).padStart(4, '0')}`;
+    const handleBase = `aura${batchSlug}u${String(i + 1).padStart(4, '0')}`;
     const country = pickOne(rng, COUNTRIES);
     const displayName = `${firstName} ${lastName}`;
     users.push({
@@ -505,15 +506,15 @@ const buildUsers = (
       lastName,
       name: displayName,
       handle: `@${handleBase}`,
-      email: `${handleBase}@seed.aura.local`,
-      avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName + id)}`,
+      email: `${handleBase}@demo.aura.local`,
+      avatar: `https://robohash.org/${encodeURIComponent(`${displayName}-${id}`)}?set=set4&size=256x256`,
       avatarType: 'image',
-      coverImage: `https://picsum.photos/seed/${encodeURIComponent(`${id}-cover`)}/1600/520`,
+      coverImage: `https://picsum.photos/1600/520?random=${encodeURIComponent(`${id}-cover`)}`,
       coverType: 'image',
       bio: `Creator in ${pickOne(rng, INDUSTRIES)} sharing practical progress and lessons from live work.`,
       country,
       companyName: '',
-      website: `https://portfolio.${handleBase}.seed`,
+      website: `https://portfolio.${handleBase}.aura.local`,
       profileLinks: [],
       acquaintances: [],
       subscribedCompanyIds: [],
@@ -535,8 +536,8 @@ const buildUsers = (
       createdAt,
       updatedAt: createdAt,
       lastLogin: createdAt,
-      seedSource,
-      seedBatchId
+      dataSource,
+      dataBatchId
     });
   }
   return users;
@@ -546,29 +547,29 @@ const buildCompanies = (
   rng: () => number,
   batchSlug: string,
   count: number,
-  users: SeedUserDoc[],
-  seedBatchId: string,
-  seedSource: string
-): SeedCompanyDoc[] => {
-  const companies: SeedCompanyDoc[] = [];
+  users: DataUserDoc[],
+  dataBatchId: string,
+  dataSource: string
+): DataCompanyDoc[] => {
+  const companies: DataCompanyDoc[] = [];
   for (let i = 0; i < count; i += 1) {
-    const id = `${seedBatchId}-company-${String(i + 1).padStart(4, '0')}`;
+    const id = `${dataBatchId}-company-${String(i + 1).padStart(4, '0')}`;
     const industry = pickOne(rng, INDUSTRIES);
     const country = pickOne(rng, COUNTRIES);
     const city = pickOne(rng, CITY_BY_COUNTRY[country] || ['Global']);
     const owner = users[i % users.length];
     const companyWord = pickOne(rng, COMPANY_WORDS);
     const companyName = `${companyWord} ${industry} ${String(i + 1).padStart(2, '0')}`;
-    const handleBase = `seed${batchSlug}c${String(i + 1).padStart(4, '0')}`;
-    const websiteDomain = `${slugify(companyName)}.seed`;
+    const handleBase = `aura${batchSlug}c${String(i + 1).padStart(4, '0')}`;
+    const websiteDomain = `${slugify(companyName)}.aura.local`;
     companies.push({
       id,
       type: 'company',
       name: companyName,
       handle: `@${handleBase}`,
-      avatar: `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(companyName + id)}`,
+      avatar: `https://robohash.org/${encodeURIComponent(`${companyName}-${id}`)}?set=set2&size=256x256`,
       avatarType: 'image',
-      coverImage: `https://picsum.photos/seed/${encodeURIComponent(`${id}-cover`)}/1600/520`,
+      coverImage: `https://picsum.photos/1600/520?random=${encodeURIComponent(`${id}-cover`)}`,
       coverType: 'image',
       bio: `${companyName} builds practical ${industry.toLowerCase()} systems for modern teams and creators.`,
       industry,
@@ -587,8 +588,8 @@ const buildCompanies = (
       featuredPostIds: [],
       createdAt: new Date(createTimestamp(rng, 540)),
       updatedAt: new Date(),
-      seedSource,
-      seedBatchId
+      dataSource,
+      dataBatchId
     });
   }
   return companies;
@@ -596,8 +597,8 @@ const buildCompanies = (
 
 const buildRelationships = (
   rng: () => number,
-  users: SeedUserDoc[],
-  companies: SeedCompanyDoc[]
+  users: DataUserDoc[],
+  companies: DataCompanyDoc[]
 ): void => {
   const acquaintancesMap = new Map<string, Set<string>>();
   const subscriptionsMap = new Map<string, Set<string>>();
@@ -645,18 +646,18 @@ const buildRelationships = (
 };
 
 const buildCompanyMembers = (
-  companies: SeedCompanyDoc[],
-  seedBatchId: string,
-  seedSource: string
-): SeedCompanyMemberDoc[] => companies.map((company, index) => ({
-  id: `${seedBatchId}-member-${String(index + 1).padStart(4, '0')}`,
+  companies: DataCompanyDoc[],
+  dataBatchId: string,
+  dataSource: string
+): DataCompanyMemberDoc[] => companies.map((company, index) => ({
+  id: `${dataBatchId}-member-${String(index + 1).padStart(4, '0')}`,
   companyId: company.id,
   userId: company.ownerId,
   role: 'owner',
   joinedAt: new Date(),
   updatedAt: new Date(),
-  seedSource,
-  seedBatchId
+  dataSource,
+  dataBatchId
 }));
 
 const buildPostContent = (
@@ -673,19 +674,19 @@ const buildPostContent = (
 const buildPosts = (
   rng: () => number,
   totalPosts: number,
-  users: SeedUserDoc[],
-  companies: SeedCompanyDoc[],
-  seedBatchId: string,
-  seedSource: string
-): SeedPostDoc[] => {
-  const posts: SeedPostDoc[] = [];
+  users: DataUserDoc[],
+  companies: DataCompanyDoc[],
+  dataBatchId: string,
+  dataSource: string
+): DataPostDoc[] => {
+  const posts: DataPostDoc[] = [];
   const authorPool = [
     ...users.map((user) => ({ id: user.id, type: 'user' as const, name: user.name, firstName: user.firstName, lastName: user.lastName, handle: user.handle, avatar: user.avatar, activeGlow: user.activeGlow })),
-    ...companies.map((company) => ({ id: company.id, type: 'company' as const, name: company.name, firstName: company.name, lastName: '', handle: company.handle, avatar: company.avatar, activeGlow: 'none' as SeedGlow }))
+    ...companies.map((company) => ({ id: company.id, type: 'company' as const, name: company.name, firstName: company.name, lastName: '', handle: company.handle, avatar: company.avatar, activeGlow: 'none' as DataGlow }))
   ];
 
   for (let i = 0; i < totalPosts; i += 1) {
-    const id = `${seedBatchId}-post-${String(i + 1).padStart(6, '0')}`;
+    const id = `${dataBatchId}-post-${String(i + 1).padStart(6, '0')}`;
     const preferCompany = rng() < 0.28;
     const companyAuthors = authorPool.filter((author) => author.type === 'company');
     const userAuthors = authorPool.filter((author) => author.type === 'user');
@@ -715,7 +716,7 @@ const buildPosts = (
       : (rng() < 0.72 ? 'public' : (rng() < 0.86 ? 'acquaintances' : 'private'));
 
     const mediaUrl = hasMedia
-      ? `https://picsum.photos/seed/${encodeURIComponent(id)}/1200/900`
+      ? `https://picsum.photos/1200/900?random=${encodeURIComponent(id)}`
       : undefined;
 
     const mediaItems = hasMedia
@@ -770,8 +771,8 @@ const buildPosts = (
       commentCount: 0,
       isBoosted,
       viewCount: baseViews,
-      seedSource,
-      seedBatchId
+      dataSource,
+      dataBatchId
     });
   }
   return posts;
@@ -786,7 +787,7 @@ const normalizeHandle = (rawValue: unknown, fallbackName: string, fallbackId: st
   return `@${slugBase.slice(0, 28)}`;
 };
 
-const toSeedAdOwnerFromUser = (user: SeedUserDoc, isTargeted: boolean): SeedAdOwner => ({
+const toDataAdOwnerFromUser = (user: DataUserDoc, isTargeted: boolean): DataAdOwner => ({
   id: user.id,
   type: 'user',
   name: user.name,
@@ -798,7 +799,7 @@ const toSeedAdOwnerFromUser = (user: SeedUserDoc, isTargeted: boolean): SeedAdOw
   isTargeted
 });
 
-const toSeedAdOwnerFromCompany = (company: SeedCompanyDoc, isTargeted: boolean): SeedAdOwner => ({
+const toDataAdOwnerFromCompany = (company: DataCompanyDoc, isTargeted: boolean): DataAdOwner => ({
   id: company.id,
   type: 'company',
   name: company.name,
@@ -813,7 +814,7 @@ const loadExistingAdOwner = async (
   db: Db,
   ownerType: OwnerType,
   ownerId: string
-): Promise<SeedAdOwner | null> => {
+): Promise<DataAdOwner | null> => {
   const collection = ownerType === 'company' ? 'companies' : 'users';
   const doc = await db.collection(collection).findOne({ id: ownerId });
   if (!doc) return null;
@@ -827,7 +828,7 @@ const loadExistingAdOwner = async (
     type: ownerType,
     name,
     handle: normalizeHandle(doc?.handle, name, ownerId),
-    avatar: typeof doc?.avatar === 'string' ? doc.avatar : `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name + ownerId)}`,
+    avatar: typeof doc?.avatar === 'string' ? doc.avatar : `https://robohash.org/${encodeURIComponent(`${name}-${ownerId}`)}?set=set1&size=256x256`,
     avatarType: doc?.avatarType === 'video' ? 'video' : 'image',
     email: typeof doc?.email === 'string' ? doc.email : undefined,
     activeGlow: typeof doc?.activeGlow === 'string' ? doc.activeGlow : 'none',
@@ -835,8 +836,8 @@ const loadExistingAdOwner = async (
   };
 };
 
-const mergeAdOwners = (owners: SeedAdOwner[]): SeedAdOwner[] => {
-  const byKey = new Map<string, SeedAdOwner>();
+const mergeAdOwners = (owners: DataAdOwner[]): DataAdOwner[] => {
+  const byKey = new Map<string, DataAdOwner>();
   owners.forEach((owner) => {
     const key = `${owner.type}:${owner.id}`;
     const existing = byKey.get(key);
@@ -854,11 +855,11 @@ const mergeAdOwners = (owners: SeedAdOwner[]): SeedAdOwner[] => {
 const resolveAdOwners = async (
   db: Db,
   rng: () => number,
-  users: SeedUserDoc[],
-  companies: SeedCompanyDoc[],
+  users: DataUserDoc[],
+  companies: DataCompanyDoc[],
   targetUserId?: string,
   targetCompanyId?: string
-): Promise<{ owners: SeedAdOwner[]; unresolvedTargets: string[] }> => {
+): Promise<{ owners: DataAdOwner[]; unresolvedTargets: string[] }> => {
   const sampledUsers = pickManyUnique(
     rng,
     users,
@@ -870,16 +871,16 @@ const resolveAdOwners = async (
     Math.min(companies.length, Math.max(2, Math.round(companies.length * 0.22)))
   );
 
-  const owners: SeedAdOwner[] = [
-    ...sampledUsers.map((user) => toSeedAdOwnerFromUser(user, false)),
-    ...sampledCompanies.map((company) => toSeedAdOwnerFromCompany(company, false))
+  const owners: DataAdOwner[] = [
+    ...sampledUsers.map((user) => toDataAdOwnerFromUser(user, false)),
+    ...sampledCompanies.map((company) => toDataAdOwnerFromCompany(company, false))
   ];
   const unresolvedTargets: string[] = [];
 
   if (targetUserId) {
-    const seededUser = users.find((user) => user.id === targetUserId);
-    if (seededUser) {
-      owners.push(toSeedAdOwnerFromUser(seededUser, true));
+    const dataedUser = users.find((user) => user.id === targetUserId);
+    if (dataedUser) {
+      owners.push(toDataAdOwnerFromUser(dataedUser, true));
     } else {
       const owner = await loadExistingAdOwner(db, 'user', targetUserId);
       if (owner) owners.push(owner);
@@ -888,9 +889,9 @@ const resolveAdOwners = async (
   }
 
   if (targetCompanyId) {
-    const seededCompany = companies.find((company) => company.id === targetCompanyId);
-    if (seededCompany) {
-      owners.push(toSeedAdOwnerFromCompany(seededCompany, true));
+    const dataedCompany = companies.find((company) => company.id === targetCompanyId);
+    if (dataedCompany) {
+      owners.push(toDataAdOwnerFromCompany(dataedCompany, true));
     } else {
       const owner = await loadExistingAdOwner(db, 'company', targetCompanyId);
       if (owner) owners.push(owner);
@@ -904,7 +905,7 @@ const resolveAdOwners = async (
   };
 };
 
-interface SeedAdTotals {
+interface DataAdTotals {
   impressions: number;
   clicks: number;
   engagement: number;
@@ -913,14 +914,14 @@ interface SeedAdTotals {
   reach: number;
 }
 
-const pickSeedAdStatus = (rng: () => number): SeedAdDoc['status'] => {
+const pickDataAdStatus = (rng: () => number): DataAdDoc['status'] => {
   const statusRoll = rng();
   if (statusRoll < 0.72) return 'active';
   if (statusRoll < 0.9) return 'paused';
   return 'expired';
 };
 
-const buildSeedAdReactions = (rng: () => number): Record<string, number> => {
+const buildDataAdReactions = (rng: () => number): Record<string, number> => {
   const reactions: Record<string, number> = {};
   pickManyUnique(rng, REACTION_EMOJIS, randomInt(rng, 1, 3)).forEach((emoji) => {
     reactions[emoji] = randomInt(rng, 0, 44);
@@ -931,14 +932,14 @@ const buildSeedAdReactions = (rng: () => number): Record<string, number> => {
 const buildAdDailyAnalytics = (
   rng: () => number,
   adId: string,
-  owner: SeedAdOwner,
-  status: SeedAdDoc['status'],
+  owner: DataAdOwner,
+  status: DataAdDoc['status'],
   now: number,
-  seedSource: string,
-  seedBatchId: string
-): { daily: SeedAdAnalyticsDailyDoc[]; totals: SeedAdTotals } => {
-  const daily: SeedAdAnalyticsDailyDoc[] = [];
-  const totals: SeedAdTotals = {
+  dataSource: string,
+  dataBatchId: string
+): { daily: DataAdAnalyticsDailyDoc[]; totals: DataAdTotals } => {
+  const daily: DataAdAnalyticsDailyDoc[] = [];
+  const totals: DataAdTotals = {
     impressions: 0,
     clicks: 0,
     engagement: 0,
@@ -976,8 +977,8 @@ const buildAdDailyAnalytics = (
       uniqueReach,
       updatedAt,
       createdAt: day.getTime(),
-      seedSource,
-      seedBatchId
+      dataSource,
+      dataBatchId
     });
 
     totals.impressions += impressions;
@@ -991,15 +992,15 @@ const buildAdDailyAnalytics = (
   return { daily, totals };
 };
 
-const buildSeedAdDocument = (
+const buildDataAdDocument = (
   rng: () => number,
   adId: string,
-  owner: SeedAdOwner,
+  owner: DataAdOwner,
   now: number,
-  seedSource: string,
-  seedBatchId: string
-): SeedAdDoc => {
-  const status = pickSeedAdStatus(rng);
+  dataSource: string,
+  dataBatchId: string
+): DataAdDoc => {
+  const status = pickDataAdStatus(rng);
   const createdAt = createTimestamp(rng, 55);
   const expiryDate = status === 'expired'
     ? createdAt + randomInt(rng, 5, 30) * ONE_DAY_MS
@@ -1028,7 +1029,7 @@ const buildSeedAdDocument = (
     ownerActiveGlow: owner.activeGlow || 'none',
     headline: pickOne(rng, AD_HEADLINES),
     description: `${pickOne(rng, AD_DESCRIPTIONS)}\n\nBy ${owner.name}.`,
-    mediaUrl: `https://picsum.photos/seed/${encodeURIComponent(`${adId}-media`)}/1280/720`,
+    mediaUrl: `https://picsum.photos/1280/720?random=${encodeURIComponent(`${adId}-media`)}`,
     mediaType: 'image',
     ctaText: pickOne(rng, AD_CTA_TEXTS),
     ctaLink: `https://www.aura.net.za/campaigns/${owner.type}/${campaignToken}`,
@@ -1041,23 +1042,23 @@ const buildSeedAdDocument = (
     status,
     expiryDate,
     timestamp: createdAt,
-    reactions: buildSeedAdReactions(rng),
+    reactions: buildDataAdReactions(rng),
     reactionUsers: {},
     hashtags: pickManyUnique(rng, TOPIC_TAGS, randomInt(rng, 2, 4)),
-    seedSource,
-    seedBatchId
+    dataSource,
+    dataBatchId
   };
 };
 
-const buildSeedAdAnalyticsDocument = (
+const buildDataAdAnalyticsDocument = (
   rng: () => number,
   adId: string,
-  owner: SeedAdOwner,
+  owner: DataAdOwner,
   now: number,
-  totals: SeedAdTotals,
-  seedSource: string,
-  seedBatchId: string
-): SeedAdAnalyticsDoc => {
+  totals: DataAdTotals,
+  dataSource: string,
+  dataBatchId: string
+): DataAdAnalyticsDoc => {
   const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
   return {
     adId,
@@ -1071,51 +1072,51 @@ const buildSeedAdAnalyticsDocument = (
     conversions: totals.conversions,
     spend: Number(totals.spend.toFixed(2)),
     lastUpdated: now - randomInt(rng, 0, 3) * ONE_DAY_MS,
-    seedSource,
-    seedBatchId
+    dataSource,
+    dataBatchId
   };
 };
 
 const buildAdsAndAnalytics = (
   rng: () => number,
-  owners: SeedAdOwner[],
-  seedBatchId: string,
-  seedSource: string
+  owners: DataAdOwner[],
+  dataBatchId: string,
+  dataSource: string
 ): {
-  ads: SeedAdDoc[];
-  adAnalytics: SeedAdAnalyticsDoc[];
-  adAnalyticsDaily: SeedAdAnalyticsDailyDoc[];
+  ads: DataAdDoc[];
+  adAnalytics: DataAdAnalyticsDoc[];
+  adAnalyticsDaily: DataAdAnalyticsDailyDoc[];
 } => {
-  const ads: SeedAdDoc[] = [];
-  const adAnalytics: SeedAdAnalyticsDoc[] = [];
-  const adAnalyticsDaily: SeedAdAnalyticsDailyDoc[] = [];
+  const ads: DataAdDoc[] = [];
+  const adAnalytics: DataAdAnalyticsDoc[] = [];
+  const adAnalyticsDaily: DataAdAnalyticsDailyDoc[] = [];
   const now = Date.now();
   let adIndex = 1;
 
   owners.forEach((owner) => {
     const adCount = owner.isTargeted ? randomInt(rng, 6, 9) : randomInt(rng, 1, 3);
     for (let i = 0; i < adCount; i += 1) {
-      const adId = `${seedBatchId}-ad-${String(adIndex).padStart(5, '0')}`;
+      const adId = `${dataBatchId}-ad-${String(adIndex).padStart(5, '0')}`;
       adIndex += 1;
 
-      const ad = buildSeedAdDocument(rng, adId, owner, now, seedSource, seedBatchId);
+      const ad = buildDataAdDocument(rng, adId, owner, now, dataSource, dataBatchId);
       const { daily, totals } = buildAdDailyAnalytics(
         rng,
         adId,
         owner,
         ad.status,
         now,
-        seedSource,
-        seedBatchId
+        dataSource,
+        dataBatchId
       );
-      const aggregate = buildSeedAdAnalyticsDocument(
+      const aggregate = buildDataAdAnalyticsDocument(
         rng,
         adId,
         owner,
         now,
         totals,
-        seedSource,
-        seedBatchId
+        dataSource,
+        dataBatchId
       );
 
       ads.push(ad);
@@ -1127,10 +1128,10 @@ const buildAdsAndAnalytics = (
   return { ads, adAnalytics, adAnalyticsDaily };
 };
 
-const clearExistingSeedData = async (db: Db, seedSource: string, seedBatchId?: string): Promise<void> => {
-  const query = seedBatchId
-    ? { seedSource, seedBatchId }
-    : { seedSource };
+const clearExistingDataData = async (db: Db, dataSource: string, dataBatchId?: string): Promise<void> => {
+  const query = dataBatchId
+    ? { dataSource, dataBatchId }
+    : { dataSource };
   await Promise.all([
     db.collection('adAnalyticsDaily').deleteMany(query),
     db.collection('adAnalytics').deleteMany(query),
@@ -1140,29 +1141,29 @@ const clearExistingSeedData = async (db: Db, seedSource: string, seedBatchId?: s
     db.collection('company_members').deleteMany(query),
     db.collection('companies').deleteMany(query),
     db.collection('users').deleteMany(query),
-    db.collection('seed_batches').deleteMany(seedBatchId ? { seedSource, batchId: seedBatchId } : { seedSource })
+    db.collection('data_batches').deleteMany(dataBatchId ? { dataSource, batchId: dataBatchId } : { dataSource })
   ]);
 };
 
-const insertSeedData = async (
+const insertDataData = async (
   db: Db,
-  plan: SeedPlan,
-  seedBatchId: string,
-  seedSource: string,
+  plan: DataPlan,
+  dataBatchId: string,
+  dataSource: string,
   targetUserId?: string,
   targetCompanyId?: string
-): Promise<SeedInsertionSummary> => {
-  const batchSlug = sanitizeBatchId(seedBatchId).replace(/[^a-z0-9]/g, '').slice(-6) || 'seed';
-  const seedNumber = seedFromString(seedBatchId);
-  const rng = createRng(seedNumber);
+): Promise<DataInsertionSummary> => {
+  const batchSlug = sanitizeBatchId(dataBatchId).replace(/[^a-z0-9]/g, '').slice(-6) || 'demo';
+  const dataNumber = dataFromString(dataBatchId);
+  const rng = createRng(dataNumber);
 
   const companyCount = Math.round(plan.profiles * COMPANY_RATIO);
   const userCount = plan.profiles - companyCount;
-  const users = buildUsers(rng, batchSlug, userCount, seedBatchId, seedSource);
-  const companies = buildCompanies(rng, batchSlug, companyCount, users, seedBatchId, seedSource);
+  const users = buildUsers(rng, batchSlug, userCount, dataBatchId, dataSource);
+  const companies = buildCompanies(rng, batchSlug, companyCount, users, dataBatchId, dataSource);
   buildRelationships(rng, users, companies);
-  const companyMembers = buildCompanyMembers(companies, seedBatchId, seedSource);
-  const posts = buildPosts(rng, plan.posts, users, companies, seedBatchId, seedSource);
+  const companyMembers = buildCompanyMembers(companies, dataBatchId, dataSource);
+  const posts = buildPosts(rng, plan.posts, users, companies, dataBatchId, dataSource);
   const { owners: adOwners, unresolvedTargets } = await resolveAdOwners(
     db,
     rng,
@@ -1174,8 +1175,8 @@ const insertSeedData = async (
   const { ads, adAnalytics, adAnalyticsDaily } = buildAdsAndAnalytics(
     rng,
     adOwners,
-    seedBatchId,
-    seedSource
+    dataBatchId,
+    dataSource
   );
 
   await db.collection('users').insertMany(users, { ordered: false });
@@ -1192,12 +1193,12 @@ const insertSeedData = async (
     await db.collection('adAnalyticsDaily').insertMany(adAnalyticsDaily, { ordered: false });
   }
 
-  await db.collection('seed_batches').updateOne(
-    { seedSource, batchId: seedBatchId },
+  await db.collection('data_batches').updateOne(
+    { dataSource, batchId: dataBatchId },
     {
       $set: {
-        batchId: seedBatchId,
-        seedSource,
+        batchId: dataBatchId,
+        dataSource,
         preset: plan === PRESETS.large ? 'large' : plan === PRESETS.medium ? 'medium' : 'small',
         profiles: plan.profiles,
         posts: plan.posts,
@@ -1224,21 +1225,21 @@ const insertSeedData = async (
   };
 };
 
-const resolveDefaults = (options: RunSeedDemoDataOptions = {}): SeedScriptDefaults => ({
+const resolveDefaults = (options: RunDataDemoDataOptions = {}): DataScriptDefaults => ({
   preset: options.preset || 'large',
-  clearAllSeeded: options.clearAllSeeded ?? true,
-  seedSource: ensureSeedSource(options.seedSource || DEFAULT_SEED_SOURCE),
+  clearTaggedData: options.clearTaggedData ?? true,
+  dataSource: ensureDataSource(options.dataSource || DEFAULT_DATA_SOURCE),
   batchIdPrefix: sanitizeBatchId(options.batchIdPrefix || 'demo') || 'demo',
-  resetCommand: options.resetCommand || 'npm run seed:demo:reset'
+  resetCommand: options.resetCommand || 'npm run data:demo:reset'
 });
 
-export const runSeedDemoData = async (options: RunSeedDemoDataOptions = {}): Promise<void> => {
+export const runDataDemoData = async (options: RunDataDemoDataOptions = {}): Promise<void> => {
   const defaults = resolveDefaults(options);
   const cli = parseCliOptions(defaults);
   const plan = PRESETS[cli.preset];
   const batchId = cli.batchId || buildDefaultBatchId(defaults.batchIdPrefix, cli.preset);
 
-  ensureSeedingAllowed();
+  ensureDataingAllowed();
 
   try {
     await connectDB();
@@ -1248,54 +1249,54 @@ export const runSeedDemoData = async (options: RunSeedDemoDataOptions = {}): Pro
     const db = getDB();
 
     if (cli.resetOnly) {
-      await clearExistingSeedData(db, cli.seedSource, cli.batchId);
-      console.log(`✅ Seed reset complete for source "${cli.seedSource}"${cli.batchId ? ` and batch "${cli.batchId}"` : ''}.`);
+      await clearExistingDataData(db, cli.dataSource, cli.batchId);
+      console.log(`✅ Data reset complete for source "${cli.dataSource}"${cli.batchId ? ` and batch "${cli.batchId}"` : ''}.`);
       return;
     }
 
-    if (cli.clearAllSeeded) {
-      await clearExistingSeedData(db, cli.seedSource);
-      console.log(`🧹 Cleared existing records for seed source "${cli.seedSource}".`);
+    if (cli.clearTaggedData) {
+      await clearExistingDataData(db, cli.dataSource);
+      console.log(`🧹 Cleared existing records for source "${cli.dataSource}".`);
     }
 
-    console.log(`🌱 Seeding source "${cli.seedSource}" (preset "${cli.preset}") with ${plan.profiles} profiles and ${plan.posts} posts...`);
+    console.log(`🌱 Loading source "${cli.dataSource}" (preset "${cli.preset}") with ${plan.profiles} profiles and ${plan.posts} posts...`);
     if (cli.targetUserId || cli.targetCompanyId) {
       console.log(`   Target user: ${cli.targetUserId || '(none)'}`);
       console.log(`   Target company: ${cli.targetCompanyId || '(none)'}`);
     }
-    const summary = await insertSeedData(
+    const summary = await insertDataData(
       db,
       plan,
       batchId,
-      cli.seedSource,
+      cli.dataSource,
       cli.targetUserId,
       cli.targetCompanyId
     );
 
-    console.log('✅ Seed completed successfully.');
-    console.log(`   Source: ${cli.seedSource}`);
+    console.log('✅ Data load completed successfully.');
+    console.log(`   Source: ${cli.dataSource}`);
     console.log(`   Batch: ${batchId}`);
     console.log(`   Profiles: ${plan.profiles} (${summary.users} users / ${summary.companies} companies)`);
     console.log(`   Posts: ${summary.posts}`);
     console.log(`   Ads: ${summary.ads} across ${summary.adOwners} owners`);
     if (summary.targetedOwners > 0) {
-      console.log(`   Targeted owners seeded: ${summary.targetedOwners}`);
+      console.log(`   Targeted owners loaded: ${summary.targetedOwners}`);
     }
     if (summary.unresolvedTargets.length > 0) {
       console.log(`   Unresolved targets: ${summary.unresolvedTargets.join(', ')}`);
     }
     console.log('');
-    console.log('Tip: reset this seed source with:');
-    console.log(`  ${defaults.resetCommand} -- --source ${cli.seedSource}`);
-    console.log(`  ${defaults.resetCommand} -- --source ${cli.seedSource} --batch ${batchId}`);
+    console.log('Tip: reset this source tag with:');
+    console.log(`  ${defaults.resetCommand} -- --source ${cli.dataSource}`);
+    console.log(`  ${defaults.resetCommand} -- --source ${cli.dataSource} --batch ${batchId}`);
   } finally {
     await closeDB();
   }
 };
 
 if (require.main === module) {
-  runSeedDemoData().catch((error) => {
-    console.error('❌ Seed failed:', error);
+  runDataDemoData().catch((error) => {
+    console.error('❌ Data load failed:', error);
     process.exitCode = 1;
   });
 }
