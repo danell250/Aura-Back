@@ -520,6 +520,33 @@ const pickManyUnique = <T,>(rng: () => number, source: T[], count: number): T[] 
 };
 
 const slugify = (input: string): string => input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const normalizeHandleText = (input: string): string => input.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+const createUniqueHandleBase = (
+  preferredName: string,
+  fallbackToken: string,
+  usedHandles: Set<string>
+): string => {
+  const base = normalizeHandleText(preferredName).slice(0, 24)
+    || normalizeHandleText(fallbackToken).slice(0, 24)
+    || 'aura';
+
+  if (!usedHandles.has(base)) {
+    usedHandles.add(base);
+    return base;
+  }
+
+  let suffix = 2;
+  while (true) {
+    const suffixText = String(suffix);
+    const candidate = `${base.slice(0, Math.max(1, 24 - suffixText.length))}${suffixText}`;
+    if (!usedHandles.has(candidate)) {
+      usedHandles.add(candidate);
+      return candidate;
+    }
+    suffix += 1;
+  }
+};
 
 const createTimestamp = (rng: () => number, daysBack: number): number => {
   const offset = randomInt(rng, 0, daysBack * ONE_DAY_MS);
@@ -528,10 +555,10 @@ const createTimestamp = (rng: () => number, daysBack: number): number => {
 
 const buildUsers = (
   rng: () => number,
-  batchSlug: string,
   count: number,
   dataBatchId: string,
-  dataSource: string
+  dataSource: string,
+  usedHandles: Set<string>
 ): DataUserDoc[] => {
   const createdAt = nowIso();
   const users: DataUserDoc[] = [];
@@ -539,9 +566,9 @@ const buildUsers = (
     const firstName = pickOne(rng, FIRST_NAMES);
     const lastName = pickOne(rng, LAST_NAMES);
     const id = `${dataBatchId}-user-${String(i + 1).padStart(4, '0')}`;
-    const handleBase = `aura${batchSlug}u${String(i + 1).padStart(4, '0')}`;
     const country = pickOne(rng, COUNTRIES);
     const displayName = `${firstName} ${lastName}`;
+    const handleBase = createUniqueHandleBase(displayName, id, usedHandles);
     users.push({
       id,
       type: 'user',
@@ -588,11 +615,11 @@ const buildUsers = (
 
 const buildCompanies = (
   rng: () => number,
-  batchSlug: string,
   count: number,
   users: DataUserDoc[],
   dataBatchId: string,
-  dataSource: string
+  dataSource: string,
+  usedHandles: Set<string>
 ): DataCompanyDoc[] => {
   const companies: DataCompanyDoc[] = [];
   for (let i = 0; i < count; i += 1) {
@@ -603,7 +630,7 @@ const buildCompanies = (
     const owner = users[i % users.length];
     const companyWord = pickOne(rng, COMPANY_WORDS);
     const companyName = `${companyWord} ${industry} ${String(i + 1).padStart(2, '0')}`;
-    const handleBase = `aura${batchSlug}c${String(i + 1).padStart(4, '0')}`;
+    const handleBase = createUniqueHandleBase(companyName, id, usedHandles);
     const websiteDomain = `${slugify(companyName)}.aura.local`;
     companies.push({
       id,
@@ -1235,14 +1262,14 @@ const insertDataData = async (
   targetUserId?: string,
   targetCompanyId?: string
 ): Promise<DataInsertionSummary> => {
-  const batchSlug = sanitizeBatchId(dataBatchId).replace(/[^a-z0-9]/g, '').slice(-6) || 'demo';
   const dataNumber = dataFromString(dataBatchId);
   const rng = createRng(dataNumber);
+  const usedHandles = new Set<string>();
 
   const companyCount = Math.round(plan.profiles * COMPANY_RATIO);
   const userCount = plan.profiles - companyCount;
-  const users = buildUsers(rng, batchSlug, userCount, dataBatchId, dataSource);
-  const companies = buildCompanies(rng, batchSlug, companyCount, users, dataBatchId, dataSource);
+  const users = buildUsers(rng, userCount, dataBatchId, dataSource, usedHandles);
+  const companies = buildCompanies(rng, companyCount, users, dataBatchId, dataSource, usedHandles);
   buildRelationships(rng, users, companies);
   const companyMembers = buildCompanyMembers(companies, dataBatchId, dataSource);
   const posts = buildPosts(rng, plan.posts, users, companies, dataBatchId, dataSource);

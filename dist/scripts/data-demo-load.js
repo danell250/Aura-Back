@@ -231,20 +231,40 @@ const pickManyUnique = (rng, source, count) => {
     return cloned.slice(0, count);
 };
 const slugify = (input) => input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const normalizeHandleText = (input) => input.toLowerCase().replace(/[^a-z0-9]+/g, '');
+const createUniqueHandleBase = (preferredName, fallbackToken, usedHandles) => {
+    const base = normalizeHandleText(preferredName).slice(0, 24)
+        || normalizeHandleText(fallbackToken).slice(0, 24)
+        || 'aura';
+    if (!usedHandles.has(base)) {
+        usedHandles.add(base);
+        return base;
+    }
+    let suffix = 2;
+    while (true) {
+        const suffixText = String(suffix);
+        const candidate = `${base.slice(0, Math.max(1, 24 - suffixText.length))}${suffixText}`;
+        if (!usedHandles.has(candidate)) {
+            usedHandles.add(candidate);
+            return candidate;
+        }
+        suffix += 1;
+    }
+};
 const createTimestamp = (rng, daysBack) => {
     const offset = randomInt(rng, 0, daysBack * ONE_DAY_MS);
     return Date.now() - offset;
 };
-const buildUsers = (rng, batchSlug, count, dataBatchId, dataSource) => {
+const buildUsers = (rng, count, dataBatchId, dataSource, usedHandles) => {
     const createdAt = nowIso();
     const users = [];
     for (let i = 0; i < count; i += 1) {
         const firstName = pickOne(rng, FIRST_NAMES);
         const lastName = pickOne(rng, LAST_NAMES);
         const id = `${dataBatchId}-user-${String(i + 1).padStart(4, '0')}`;
-        const handleBase = `aura${batchSlug}u${String(i + 1).padStart(4, '0')}`;
         const country = pickOne(rng, COUNTRIES);
         const displayName = `${firstName} ${lastName}`;
+        const handleBase = createUniqueHandleBase(displayName, id, usedHandles);
         users.push({
             id,
             type: 'user',
@@ -288,7 +308,7 @@ const buildUsers = (rng, batchSlug, count, dataBatchId, dataSource) => {
     }
     return users;
 };
-const buildCompanies = (rng, batchSlug, count, users, dataBatchId, dataSource) => {
+const buildCompanies = (rng, count, users, dataBatchId, dataSource, usedHandles) => {
     const companies = [];
     for (let i = 0; i < count; i += 1) {
         const id = `${dataBatchId}-company-${String(i + 1).padStart(4, '0')}`;
@@ -298,7 +318,7 @@ const buildCompanies = (rng, batchSlug, count, users, dataBatchId, dataSource) =
         const owner = users[i % users.length];
         const companyWord = pickOne(rng, COMPANY_WORDS);
         const companyName = `${companyWord} ${industry} ${String(i + 1).padStart(2, '0')}`;
-        const handleBase = `aura${batchSlug}c${String(i + 1).padStart(4, '0')}`;
+        const handleBase = createUniqueHandleBase(companyName, id, usedHandles);
         const websiteDomain = `${slugify(companyName)}.aura.local`;
         companies.push({
             id,
@@ -788,13 +808,13 @@ const clearExistingDataData = (db, dataSource, dataBatchId) => __awaiter(void 0,
     yield Promise.all([...legacyPrimaryDeletions, ...legacyBatchDeletions]);
 });
 const insertDataData = (db, plan, dataBatchId, dataSource, targetUserId, targetCompanyId) => __awaiter(void 0, void 0, void 0, function* () {
-    const batchSlug = sanitizeBatchId(dataBatchId).replace(/[^a-z0-9]/g, '').slice(-6) || 'demo';
     const dataNumber = dataFromString(dataBatchId);
     const rng = createRng(dataNumber);
+    const usedHandles = new Set();
     const companyCount = Math.round(plan.profiles * COMPANY_RATIO);
     const userCount = plan.profiles - companyCount;
-    const users = buildUsers(rng, batchSlug, userCount, dataBatchId, dataSource);
-    const companies = buildCompanies(rng, batchSlug, companyCount, users, dataBatchId, dataSource);
+    const users = buildUsers(rng, userCount, dataBatchId, dataSource, usedHandles);
+    const companies = buildCompanies(rng, companyCount, users, dataBatchId, dataSource, usedHandles);
     buildRelationships(rng, users, companies);
     const companyMembers = buildCompanyMembers(companies, dataBatchId, dataSource);
     const posts = buildPosts(rng, plan.posts, users, companies, dataBatchId, dataSource);
