@@ -173,7 +173,7 @@ const parseCliOptions = (): CliOptions => {
     source,
     batchId,
     dryRun: args.includes('--dry-run'),
-    subscribers: parseNumber(parseFlagValue(args, '--subscribers'), 140, 10, 1000),
+    subscribers: parseNumber(parseFlagValue(args, '--subscribers'), 140, 10, 20000),
     posts: parseNumber(parseFlagValue(args, '--posts'), 10, 1, 100),
     likesPerPost: parseNumber(parseFlagValue(args, '--likes-per-post'), 30, 1, 500),
     commentsPerPost: parseNumber(parseFlagValue(args, '--comments-per-post'), 8, 0, 100),
