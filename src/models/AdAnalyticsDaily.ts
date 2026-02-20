@@ -13,7 +13,7 @@ export interface IAdAnalyticsDaily {
   updatedAt: number;
 }
 
-let adAnalyticsDailyCollection: Collection<IAdAnalyticsDaily>;
+
 
 export const initializeAdAnalyticsDailyCollection = async (db: Db) => {
   adAnalyticsDailyCollection = db.collection<IAdAnalyticsDaily>('adAnalyticsDaily');
