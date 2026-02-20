@@ -16,6 +16,7 @@ const crypto_1 = __importDefault(require("crypto"));
 const db_1 = require("../db");
 const adPlans_1 = require("../constants/adPlans");
 const DEFAULT_SOURCE = 'company-engagement-provisioning';
+const ZERO_POSTS_COMPANY_ID = 'comp-1a661645b99b9589';
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const COMMENT_TEXTS = [
     'Great campaign direction. This is clear and practical.',
@@ -85,17 +86,21 @@ const parseCliOptions = () => {
     if (!companyIdRaw) {
         throw new Error('Missing required --company-id value.');
     }
+    const companyId = companyIdRaw.slice(0, 128);
+    const forceZeroPosts = companyId === ZERO_POSTS_COMPANY_ID;
+    const requestedPosts = parseNumber(parseFlagValue(args, '--posts'), 10, 0, 100);
+    const resolvedPosts = forceZeroPosts ? 0 : requestedPosts;
     const source = sanitizeToken(parseFlagValue(args, '--source') || DEFAULT_SOURCE) || DEFAULT_SOURCE;
     const batchId = sanitizeToken(parseFlagValue(args, '--batch') || `${source}-${Date.now()}`) || `${source}-${Date.now()}`;
     return {
-        companyId: companyIdRaw.slice(0, 128),
+        companyId,
         source,
         batchId,
         dryRun: args.includes('--dry-run'),
         subscribers: parseNumber(parseFlagValue(args, '--subscribers'), 140, 10, 20000),
-        posts: parseNumber(parseFlagValue(args, '--posts'), 10, 1, 100),
-        likesPerPost: parseNumber(parseFlagValue(args, '--likes-per-post'), 30, 1, 500),
-        commentsPerPost: parseNumber(parseFlagValue(args, '--comments-per-post'), 8, 0, 100),
+        posts: resolvedPosts,
+        likesPerPost: resolvedPosts === 0 ? 0 : parseNumber(parseFlagValue(args, '--likes-per-post'), 30, 1, 500),
+        commentsPerPost: resolvedPosts === 0 ? 0 : parseNumber(parseFlagValue(args, '--comments-per-post'), 8, 0, 100),
         ads: parseNumber(parseFlagValue(args, '--ads'), 8, 1, 100),
         lookbackDays: parseNumber(parseFlagValue(args, '--lookback-days'), 120, 7, 1000)
     };
@@ -409,6 +414,32 @@ const prepareParticipantPool = (db, companyId, options) => __awaiter(void 0, voi
         participantsCreated: simulationParticipants.length
     };
 });
+const clearProvisionedCompanyPostsForSource = (db, companyId, source, dryRun) => __awaiter(void 0, void 0, void 0, function* () {
+    if (dryRun)
+        return;
+    yield Promise.all([
+        db.collection('posts').createIndex({ ownerId: 1, ownerType: 1, dataSource: 1 }),
+        db.collection('comments').createIndex({ postId: 1 })
+    ]);
+    const postFilter = {
+        ownerId: companyId,
+        ownerType: 'company',
+        dataSource: source
+    };
+    const existingPosts = yield db.collection('posts')
+        .find(postFilter)
+        .project({ id: 1 })
+        .toArray();
+    if (existingPosts.length === 0)
+        return;
+    const postIds = existingPosts
+        .map((post) => (typeof post.id === 'string' ? post.id : String(post.id || '')))
+        .filter((id) => id.length > 0);
+    if (postIds.length > 0) {
+        yield db.collection('comments').deleteMany({ postId: { $in: postIds } });
+    }
+    yield db.collection('posts').deleteMany(postFilter);
+});
 const provisionCompanySubscribers = (db, company, userPoolIds, desiredAdditions, dryRun) => __awaiter(void 0, void 0, void 0, function* () {
     const existingSubscribers = uniqueIds(company.subscribers);
     const subscriberCandidates = userPoolIds.filter((id) => !existingSubscribers.includes(id));
@@ -467,11 +498,19 @@ const buildTargetPosts = (db, company, options) => __awaiter(void 0, void 0, voi
     };
 });
 const applyPostReactions = (db, targetPosts, userPoolIds, options) => __awaiter(void 0, void 0, void 0, function* () {
+    if (options.likesPerPost <= 0 || targetPosts.length === 0) {
+        return { likesApplied: 0 };
+    }
     let likesApplied = 0;
     const postReactionUpdates = [];
     targetPosts.forEach((post) => {
         var _a, _b;
-        const baseLikes = randomInt(Math.max(1, Math.floor(options.likesPerPost * 0.7)), Math.max(2, Math.ceil(options.likesPerPost * 1.3)));
+        const minLikes = Math.max(0, Math.floor(options.likesPerPost * 0.7));
+        const maxLikes = Math.max(minLikes, Math.ceil(options.likesPerPost * 1.3));
+        const baseLikes = randomInt(minLikes, maxLikes);
+        if (baseLikes <= 0) {
+            return;
+        }
         const likerIds = pickManyUnique(userPoolIds, baseLikes);
         const currentHeart = Array.isArray((_a = post.reactionUsers) === null || _a === void 0 ? void 0 : _a['❤️']) ? (_b = post.reactionUsers) === null || _b === void 0 ? void 0 : _b['❤️'] : [];
         const mergedHeart = uniqueIds([...currentHeart, ...likerIds]);
@@ -701,17 +740,20 @@ const runProvisioning = (options) => __awaiter(void 0, void 0, void 0, function*
         throw new Error(`Company "${options.companyId}" was not found.`);
     }
     const company = buildCompanyLite(companyDoc, options.companyId);
+    if (options.posts === 0) {
+        yield clearProvisionedCompanyPostsForSource(db, company.id, options.source, options.dryRun);
+    }
     const participantPool = yield prepareParticipantPool(db, company.id, options);
     const subscriberProvision = yield provisionCompanySubscribers(db, company, participantPool.userPoolIds, options.subscribers, options.dryRun);
-    const postEngagementProvision = yield provisionPostsAndEngagement(db, company, participantPool.userPool, participantPool.userPoolIds, options);
+    const postEngagement = yield provisionPostsAndEngagement(db, company, participantPool.userPool, participantPool.userPoolIds, options);
     const adProvision = yield provisionAdsAndAnalytics(db, company, options);
     const subscriptionProvision = yield ensureCompanyAdSubscription(db, company.id, adProvision.activeAdsCount, options);
     const summary = {
         participantsCreated: participantPool.participantsCreated,
         subscribersAdded: subscriberProvision.subscribersAdded,
-        postsCreated: postEngagementProvision.postsCreated,
-        likesApplied: postEngagementProvision.likesApplied,
-        commentsInserted: postEngagementProvision.commentsInserted,
+        postsCreated: postEngagement.postsCreated,
+        likesApplied: postEngagement.likesApplied,
+        commentsInserted: postEngagement.commentsInserted,
         adsCreated: adProvision.adsCreated,
         analyticsCreated: adProvision.analyticsCreated,
         analyticsDailyUpserts: adProvision.analyticsDailyUpserts,
@@ -725,6 +767,12 @@ const main = () => __awaiter(void 0, void 0, void 0, function* () {
     const options = parseCliOptions();
     console.log(options.dryRun ? '🔎 Previewing company engagement provisioning...' : '🚀 Provisioning company engagement...');
     console.log(`Company: ${options.companyId}`);
+    if (options.companyId === ZERO_POSTS_COMPANY_ID) {
+        console.log('Posts target: 0 (enforced for Aura Social company).');
+    }
+    else {
+        console.log(`Posts target: ${options.posts}`);
+    }
     console.log(`Source: ${options.source}`);
     console.log(`Batch: ${options.batchId}`);
     try {
