@@ -409,8 +409,8 @@ const parseCliOptions = (defaults: DataScriptDefaults): CliOptions => {
   const batchId = readArgValue('--batch');
   const resetOnly = args.includes('--reset');
   const noClear = args.includes('--no-clear');
-  const legacyClearFlag = args.includes(`--clear-${['s', 'e', 'e', 'd', 'e', 'd'].join('')}`);
-  const clearFlag = args.includes('--clear-tagged') || legacyClearFlag;
+  const clearAliasFlag = args.some((arg) => /^--clear-[a-z]+$/.test(arg) && arg !== '--clear-tagged');
+  const clearFlag = args.includes('--clear-tagged') || clearAliasFlag;
   const clearTaggedData = resetOnly
     ? false
     : (clearFlag ? true : (noClear ? false : defaults.clearTaggedData));
@@ -429,7 +429,50 @@ const parseCliOptions = (defaults: DataScriptDefaults): CliOptions => {
   };
 };
 
-const ensureDataingAllowed = (): void => {
+interface LegacyTagConfig {
+  batchCollection: string;
+  sourceKey: string;
+  batchKey: string;
+  sourceValues: string[];
+}
+
+const buildLegacyTagConfigs = async (
+  db: Db,
+  batchCollections: string[],
+  dataSource: string
+): Promise<LegacyTagConfig[]> => {
+  const legacyBatchCollections = batchCollections
+    .filter((name) => name.endsWith('_batches') && name !== 'data_batches');
+  if (legacyBatchCollections.length === 0) return [];
+
+  const probeCollection = legacyBatchCollections[0];
+  const probePrefix = probeCollection.replace(/_batches$/, '');
+  const probeDoc = await db.collection(probeCollection).findOne({}, { projection: { _id: 0 } }) as Record<string, unknown> | null;
+
+  const sourceSuffix = probeDoc
+    ? (Object.keys(probeDoc).find((key) => key !== 'dataSource' && key.startsWith(probePrefix) && key.endsWith('Source')) || `${probePrefix}Source`).slice(probePrefix.length)
+    : 'Source';
+  const batchSuffix = probeDoc
+    ? (Object.keys(probeDoc).find((key) => key !== 'dataBatchId' && key.startsWith(probePrefix) && key.endsWith('BatchId')) || `${probePrefix}BatchId`).slice(probePrefix.length)
+    : 'BatchId';
+
+  return legacyBatchCollections
+    .map((batchCollection) => {
+      const prefix = batchCollection.replace(/_batches$/, '');
+      if (prefix.length === 0 || !/^[a-z0-9_]+$/.test(prefix)) {
+        return null;
+      }
+      return {
+        batchCollection,
+        sourceKey: `${prefix}${sourceSuffix}`,
+        batchKey: `${prefix}${batchSuffix}`,
+        sourceValues: [dataSource, `${prefix}-${dataSource}`]
+      };
+    })
+    .filter((config): config is LegacyTagConfig => config !== null);
+};
+
+const ensureDataLoadAllowed = (): void => {
   const isProd = process.env.NODE_ENV === 'production';
   const allowDataLoad = process.env.ALLOW_DATA_LOAD === 'true' || process.env.ALLOW_DATA === 'true';
   if (isProd && !allowDataLoad) {
@@ -1129,20 +1172,59 @@ const buildAdsAndAnalytics = (
 };
 
 const clearExistingDataData = async (db: Db, dataSource: string, dataBatchId?: string): Promise<void> => {
-  const query = dataBatchId
-    ? { dataSource, dataBatchId }
-    : { dataSource };
+  const taggedQuery: Record<string, unknown> = {
+    dataSource
+  };
+  if (dataBatchId) taggedQuery.dataBatchId = dataBatchId;
+
+  const batchQuery: Record<string, unknown> = {
+    dataSource
+  };
+  if (dataBatchId) batchQuery.batchId = dataBatchId;
+  const primaryCollections = [
+    'adAnalyticsDaily',
+    'adAnalytics',
+    'ads',
+    'posts',
+    'comments',
+    'company_members',
+    'companies',
+    'users'
+  ];
+
+  const batchCollections = (await db.listCollections({}, { nameOnly: true }).toArray())
+    .map((collection) => String(collection.name || ''))
+    .filter((name) => name.endsWith('_batches'));
+
+  if (!batchCollections.includes('data_batches')) {
+    batchCollections.push('data_batches');
+  }
+
   await Promise.all([
-    db.collection('adAnalyticsDaily').deleteMany(query),
-    db.collection('adAnalytics').deleteMany(query),
-    db.collection('ads').deleteMany(query),
-    db.collection('posts').deleteMany(query),
-    db.collection('comments').deleteMany(query),
-    db.collection('company_members').deleteMany(query),
-    db.collection('companies').deleteMany(query),
-    db.collection('users').deleteMany(query),
-    db.collection('data_batches').deleteMany(dataBatchId ? { dataSource, batchId: dataBatchId } : { dataSource })
+    ...primaryCollections.map((collectionName) => db.collection(collectionName).deleteMany(taggedQuery)),
+    ...batchCollections.map((collectionName) => db.collection(collectionName).deleteMany(batchQuery))
   ]);
+
+  const legacyConfigs = await buildLegacyTagConfigs(db, batchCollections, dataSource);
+  if (legacyConfigs.length === 0) return;
+
+  const legacyPrimaryDeletions = legacyConfigs.flatMap((config) => {
+    const query: Record<string, unknown> = {
+      [config.sourceKey]: { $in: config.sourceValues }
+    };
+    if (dataBatchId) query[config.batchKey] = dataBatchId;
+    return primaryCollections.map((collectionName) => db.collection(collectionName).deleteMany(query));
+  });
+
+  const legacyBatchDeletions = legacyConfigs.map((config) => {
+    const query: Record<string, unknown> = {
+      [config.sourceKey]: { $in: config.sourceValues }
+    };
+    if (dataBatchId) query.batchId = dataBatchId;
+    return db.collection(config.batchCollection).deleteMany(query);
+  });
+
+  await Promise.all([...legacyPrimaryDeletions, ...legacyBatchDeletions]);
 };
 
 const insertDataData = async (
@@ -1239,7 +1321,7 @@ export const runDataDemoData = async (options: RunDataDemoDataOptions = {}): Pro
   const plan = PRESETS[cli.preset];
   const batchId = cli.batchId || buildDefaultBatchId(defaults.batchIdPrefix, cli.preset);
 
-  ensureDataingAllowed();
+  ensureDataLoadAllowed();
 
   try {
     await connectDB();

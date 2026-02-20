@@ -14,10 +14,10 @@
     "test": "jest",
     "test:unit": "jest --config jest.unit.config.js",
     "test:watch": "jest --watch",
-    "seed:demo": "ts-node src/scripts/seed-demo-data.ts",
-    "seed:demo:reset": "ts-node src/scripts/seed-demo-data.ts --reset",
-    "seed:large": "ts-node src/scripts/seed-large-data.ts",
-    "seed:large:reset": "ts-node src/scripts/seed-large-data.ts --reset"
+    "data:demo": "ts-node src/scripts/data-demo-load.ts",
+    "data:demo:reset": "ts-node src/scripts/data-demo-load.ts --reset",
+    "data:large": "ts-node src/scripts/data-large-load.ts",
+    "data:large:reset": "ts-node src/scripts/data-large-load.ts --reset"
   },
   "keywords": [],
   "author": "",

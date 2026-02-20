@@ -699,7 +699,7 @@ app.use((_req, res) => {
   });
 });
 
-async function seedDummyPostsIfEmpty() {
+async function loadDemoPostsIfEmpty() {
   try {
     if (!isDBConnected()) return;
     const db = getDB();
@@ -710,7 +710,7 @@ async function seedDummyPostsIfEmpty() {
 
     const authors = [
       {
-        id: 'seed-editorial',
+        id: 'demo-editorial',
         firstName: 'Aura',
         lastName: 'Editorial',
         name: 'Aura© Editorial Desk',
@@ -723,7 +723,7 @@ async function seedDummyPostsIfEmpty() {
         activeGlow: 'emerald'
       },
       {
-        id: 'seed-founder',
+        id: 'demo-founder',
         firstName: 'Nova',
         lastName: 'Reyes',
         name: 'Nova Reyes',
@@ -736,7 +736,7 @@ async function seedDummyPostsIfEmpty() {
         activeGlow: 'none'
       },
       {
-        id: 'seed-leadership',
+        id: 'demo-leadership',
         firstName: 'Elena',
         lastName: 'Kho',
         name: 'Elena Kho',
@@ -749,7 +749,7 @@ async function seedDummyPostsIfEmpty() {
         activeGlow: 'amber'
       },
       {
-        id: 'seed-agency',
+        id: 'demo-agency',
         firstName: 'Signal',
         lastName: 'Studio',
         name: 'Signal Studio',
@@ -767,7 +767,7 @@ async function seedDummyPostsIfEmpty() {
 
     const posts = [
       {
-        id: 'seed-news-1',
+        id: 'demo-news-1',
         author: editorial,
         content:
           'News: Independent creators just overtook legacy agencies on total campaign volume for the first time this quarter. Brands are reallocating up to 32% of paid media into creator-led storytelling.\n\nKey shifts:\n• Briefs are shorter, but context is deeper\n• Performance is measured in conversations, not just clicks\n• Creative approval cycles dropped from 21 days to 4\n\n#News #CreatorEconomy #Marketing',
@@ -787,7 +787,7 @@ async function seedDummyPostsIfEmpty() {
         taggedUserIds: []
       },
       {
-        id: 'seed-news-2',
+        id: 'demo-news-2',
         author: editorial,
         content:
           'Market Update: Short-form business explainers are now the fastest growing category on Aura©, outpacing lifestyle and entertainment in week-over-week growth.\n\nIf you can teach clearly for 60 seconds, you can open an entirely new acquisition channel.\n\n#News #Business #Education',
@@ -807,7 +807,7 @@ async function seedDummyPostsIfEmpty() {
         taggedUserIds: []
       },
       {
-        id: 'seed-founder-1',
+        id: 'demo-founder-1',
         author: founder,
         content:
           'Entrepreneurship: I turned a freelance editing habit into a productized “creator ops” studio doing $45k/m with a 3-person remote team.\n\nSimple playbook:\n1) Pick one painful workflow creators avoid\n2) Productize it into a clear package with a fixed scope\n3) Layer in async check-ins instead of endless calls\n4) Let your own content be the top-of-funnel\n\nIt is easier to scale a boring, repeatable service than a clever idea.\n\n#Entrepreneurship #CreatorOps #Playbook',
@@ -824,7 +824,7 @@ async function seedDummyPostsIfEmpty() {
         taggedUserIds: []
       },
       {
-        id: 'seed-founder-2',
+        id: 'demo-founder-2',
         author: founder,
         content:
           'Thread: 7 systems that took my content business from “posting randomly” to “running a proper company”.\n\n1) Monday: “pipeline” review instead of inbox review\n2) A single Notion board shared with all collaborators\n3) One analytics dashboard per offer, not per platform\n4) Weekly “kill meeting” to end weak experiments\n5) 90-minute deep work block reserved for writing\n6) Quarterly price review for every product\n7) Written operating principles so new hires onboard themselves\n\n#Entrepreneur #Systems #Execution',
@@ -841,7 +841,7 @@ async function seedDummyPostsIfEmpty() {
         taggedUserIds: []
       },
       {
-        id: 'seed-leadership-1',
+        id: 'demo-leadership-1',
         author: leadership,
         content:
           'Leadership note: Your team does not need more dashboards, they need more clarity.\n\nAsk this in your next standup:\n\n“What are we definitely not doing this week?”\n\nRemoving noise is the highest form of leadership inside a high-signal organization.\n\n#Leadership #Focus #Teams',
@@ -858,7 +858,7 @@ async function seedDummyPostsIfEmpty() {
         taggedUserIds: []
       },
       {
-        id: 'seed-leadership-2',
+        id: 'demo-leadership-2',
         author: leadership,
         content:
           'The strongest leaders in 2026 will behave like great editors, not great managers.\n\nThey will:\n• Cut confusing projects\n• Trim bloated meetings\n• Rewrite vague goals into sharp sentences\n• Protect deep work like a scarce resource\n\nEdit the environment and your people will surprise you.\n\n#Leadership #Culture #Editing',
@@ -875,7 +875,7 @@ async function seedDummyPostsIfEmpty() {
         taggedUserIds: []
       },
       {
-        id: 'seed-ad-business-1',
+        id: 'demo-ad-business-1',
         author: agency,
         content:
           'Ad: Launching a B2B podcast but worried it will become an expensive hobby?\n\nSignal Studio builds end-to-end “revenue podcasts” for SaaS and professional services.\n\nWhat we handle:\n• Strategy and show positioning\n• Guest pipeline and outreach\n• Recording, editing and clipping\n• Distribution across Aura©, LinkedIn and email\n• Revenue attribution dashboard\n\nReply “PODCAST” below and we will DM you a full case study.\n\n#B2B #Podcasting #LeadGen',
@@ -895,7 +895,7 @@ async function seedDummyPostsIfEmpty() {
         taggedUserIds: []
       },
       {
-        id: 'seed-ad-business-2',
+        id: 'demo-ad-business-2',
         author: agency,
         content:
           'Ad: Running paid social for your business but stuck on creative?\n\nOur “Done-For-You Creative Sprint” gives you:\n• 12 ready-to-run ad concepts\n• 36 hooks tested against your audience\n• 1 brand-safe script library your team can reuse\n\nMost clients see their first winning creative within 21 days.\n\nDM “SPRINT” for the full breakdown.\n\n#Ads #BusinessGrowth #Creative',
@@ -914,13 +914,13 @@ async function seedDummyPostsIfEmpty() {
     ];
 
     await db.collection('posts').insertMany(posts);
-    console.log(`✅ Seeded ${posts.length} dummy posts into MongoDB`);
+    console.log(`✅ Loaded ${posts.length} dummy posts into MongoDB`);
   } catch (error) {
-    console.error('⚠️ Failed to seed dummy posts:', error);
+    console.error('⚠️ Failed to bootstrap dummy posts:', error);
   }
 }
 
-async function seedDummyAdsIfEmpty() {
+async function loadDemoAdsIfEmpty() {
   try {
     if (!isDBConnected()) return;
     const db = getDB();
@@ -931,8 +931,8 @@ async function seedDummyAdsIfEmpty() {
 
     const ads = [
       {
-        id: 'seed-ad-b2b-podcast',
-        ownerId: 'business-seed-1',
+        id: 'demo-ad-b2b-podcast',
+        ownerId: 'business-demo-1',
         ownerName: 'Signal Studio',
         ownerAvatar: 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?q=80&w=256&auto=format&fit=crop',
         ownerAvatarType: 'image',
@@ -957,8 +957,8 @@ async function seedDummyAdsIfEmpty() {
         hashtags: ['#B2B', '#Podcast', '#LeadGen']
       },
       {
-        id: 'seed-ad-saas-demos',
-        ownerId: 'business-seed-2',
+        id: 'demo-ad-saas-demos',
+        ownerId: 'business-demo-2',
         ownerName: 'Pipeline Cloud',
         ownerAvatar: 'https://images.unsplash.com/photo-1520607162513-77705c0f0d4a?q=80&w=256&auto=format&fit=crop',
         ownerAvatarType: 'image',
@@ -983,8 +983,8 @@ async function seedDummyAdsIfEmpty() {
         hashtags: ['#SaaS', '#DemandGen', '#Revenue']
       },
       {
-        id: 'seed-ad-founder-coaching',
-        ownerId: 'business-seed-3',
+        id: 'demo-ad-founder-coaching',
+        ownerId: 'business-demo-3',
         ownerName: 'Nova Reyes',
         ownerAvatar: 'https://images.unsplash.com/photo-1544723795-3fb6469f5b39?q=80&w=256&auto=format&fit=crop',
         ownerAvatarType: 'image',
@@ -1011,9 +1011,9 @@ async function seedDummyAdsIfEmpty() {
     ];
 
     await db.collection('ads').insertMany(ads);
-    console.log(`✅ Seeded ${ads.length} dummy ads into MongoDB`);
+    console.log(`✅ Loaded ${ads.length} dummy ads into MongoDB`);
   } catch (error) {
-    console.error('⚠️ Failed to seed dummy ads:', error);
+    console.error('⚠️ Failed to bootstrap dummy ads:', error);
   }
 }
 
@@ -1479,13 +1479,13 @@ async function startServer() {
         startReportScheduleWorker();
         console.log('📬 Scheduled report worker started');
 
-        const shouldSeedDemoData =
+        const shouldLoadDemoData =
           process.env.NODE_ENV !== 'production' &&
-          process.env.DISABLE_DEMO_SEEDING !== 'true';
+          process.env.DISABLE_DEMO_BOOTSTRAP !== 'true';
 
-        if (shouldSeedDemoData) {
-          await seedDummyPostsIfEmpty();
-          await seedDummyAdsIfEmpty();
+        if (shouldLoadDemoData) {
+          await loadDemoPostsIfEmpty();
+          await loadDemoAdsIfEmpty();
         }
 
         // Run legacy company migration
