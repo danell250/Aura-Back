@@ -19,6 +19,7 @@ const db_1 = require("../db");
 const axios_1 = __importDefault(require("axios"));
 const securityLogger_1 = require("../utils/securityLogger");
 const identityUtils_1 = require("../utils/identityUtils");
+const companyAccess_1 = require("../utils/companyAccess");
 function verifyPayPalWebhookSignature(req) {
     return __awaiter(this, void 0, void 0, function* () {
         const webhookId = process.env.PAYPAL_WEBHOOK_ID;
@@ -161,10 +162,14 @@ exports.adSubscriptionsController = {
                 .find(query)
                 .sort({ createdAt: -1 })
                 .toArray();
-            console.log('[AdSubscriptions] Found subscriptions:', subscriptions.length);
+            const subscriptionList = [...subscriptions];
+            if ((0, companyAccess_1.hasFullCompanyAccess)(actor.type, actor.id)) {
+                subscriptionList.unshift((0, companyAccess_1.buildFullAccessAdSubscription)(actor.id, Date.now()));
+            }
+            console.log('[AdSubscriptions] Found subscriptions:', subscriptionList.length);
             res.json({
                 success: true,
-                data: subscriptions
+                data: subscriptionList
             });
         }
         catch (error) {
@@ -795,6 +800,9 @@ exports.adSubscriptionsController = {
             yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany(expireQuery, {
                 $set: { status: 'expired', updatedAt: now }
             });
+            if ((0, companyAccess_1.hasFullCompanyAccess)(actor.type, actor.id)) {
+                updated.unshift((0, companyAccess_1.buildFullAccessAdSubscription)(actor.id, now));
+            }
             res.json({
                 success: true,
                 data: updated

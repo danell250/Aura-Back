@@ -92,7 +92,7 @@ const parseCliOptions = () => {
         source,
         batchId,
         dryRun: args.includes('--dry-run'),
-        subscribers: parseNumber(parseFlagValue(args, '--subscribers'), 140, 10, 1000),
+        subscribers: parseNumber(parseFlagValue(args, '--subscribers'), 140, 10, 20000),
         posts: parseNumber(parseFlagValue(args, '--posts'), 10, 1, 100),
         likesPerPost: parseNumber(parseFlagValue(args, '--likes-per-post'), 30, 1, 500),
         commentsPerPost: parseNumber(parseFlagValue(args, '--comments-per-post'), 8, 0, 100),
@@ -176,7 +176,8 @@ const buildParticipantUsers = (count, source, batchId) => {
     for (let i = 0; i < count; i += 1) {
         const firstName = pickOne(firstNames);
         const lastName = pickOne(lastNames);
-        const id = `${batchId}-participant-${String(i + 1).padStart(4, '0')}`;
+        // Keep participant IDs stable and lexicographically sortable across runs.
+        const id = `${batchId}-participant-${String(i + 1).padStart(5, '0')}`;
         const name = `${firstName} ${lastName}`;
         const handleCore = `${firstName}${lastName}${String(i + 1)}`.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 22);
         created.push({

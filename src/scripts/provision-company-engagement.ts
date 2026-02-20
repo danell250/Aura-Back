@@ -264,7 +264,8 @@ const buildParticipantUsers = (count: number, source: string, batchId: string): 
   for (let i = 0; i < count; i += 1) {
     const firstName = pickOne(firstNames);
     const lastName = pickOne(lastNames);
-    const id = `${batchId}-participant-${String(i + 1).padStart(4, '0')}`;
+    // Keep participant IDs stable and lexicographically sortable across runs.
+    const id = `${batchId}-participant-${String(i + 1).padStart(5, '0')}`;
     const name = `${firstName} ${lastName}`;
     const handleCore = `${firstName}${lastName}${String(i + 1)}`.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 22);
     created.push({

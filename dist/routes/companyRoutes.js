@@ -21,6 +21,7 @@ const postsController_1 = require("../controllers/postsController");
 const socketHub_1 = require("../realtime/socketHub");
 const crypto_1 = __importDefault(require("crypto"));
 const userUtils_1 = require("../utils/userUtils");
+const companyAccess_1 = require("../utils/companyAccess");
 // Helper to generate unique handle for company
 const generateCompanyHandle = (name) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
@@ -154,6 +155,11 @@ const sanitizeCompanyEntity = (company) => {
     }
     if (typeof sanitized.isPrivate !== 'boolean') {
         sanitized.isPrivate = false;
+    }
+    const baseCredits = typeof sanitized.auraCredits === 'number' ? sanitized.auraCredits : 0;
+    sanitized.auraCredits = (0, companyAccess_1.getFullCompanyCreditBalance)(typeof sanitized.id === 'string' ? sanitized.id : '', baseCredits);
+    if (typeof sanitized.auraCreditsSpent !== 'number') {
+        sanitized.auraCreditsSpent = 0;
     }
     return sanitized;
 };
@@ -320,7 +326,9 @@ router.get('/:companyId/dashboard', authMiddleware_1.requireAuth, (req, res) => 
         return res.json({
             success: true,
             data: snapshot || fallbackData,
-            planLevel: mapAnalyticsPlanLevel(activeSub === null || activeSub === void 0 ? void 0 : activeSub.packageId)
+            planLevel: mapAnalyticsPlanLevel((0, companyAccess_1.hasFullCompanyAccess)('company', companyId)
+                ? 'pkg-enterprise'
+                : activeSub === null || activeSub === void 0 ? void 0 : activeSub.packageId)
         });
     }
     catch (error) {

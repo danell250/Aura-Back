@@ -8,6 +8,7 @@ import { AD_PLANS } from '../constants/adPlans';
 import { MediaItem, MediaItemMetrics } from '../types';
 import { resolveIdentityActor } from '../utils/identityUtils';
 import { normalizeTaggedIdentityIds, resolveMentionedIdentityIds } from '../utils/mentionUtils';
+import { getFullCompanyCreditBalance } from '../utils/companyAccess';
 
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
@@ -557,10 +558,15 @@ export const getAuthorInsightsSnapshot = async (
     });
   }
 
+  const rawCreditBalance = owner?.auraCredits ?? 0;
+  const creditBalance = authorType === 'company'
+    ? getFullCompanyCreditBalance(authorId, rawCreditBalance)
+    : rawCreditBalance;
+
   return {
     totals,
     credits: {
-      balance: owner?.auraCredits ?? 0,
+      balance: creditBalance,
       spent: owner?.auraCreditsSpent ?? 0
     },
     profileViews: profileViewIds,

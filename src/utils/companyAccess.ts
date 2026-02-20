@@ -1,4 +1,3 @@
-const DEFAULT_FULL_ACCESS_COMPANY_ID = 'comp-1a661645b99b9589';
 const BILLING_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 const parsePositiveInteger = (rawValue: string | undefined, fallback: number): number => {
@@ -8,7 +7,8 @@ const parsePositiveInteger = (rawValue: string | undefined, fallback: number): n
   return rounded > 0 ? rounded : fallback;
 };
 
-export const FULL_ACCESS_COMPANY_ID = (process.env.AURA_FULL_ACCESS_COMPANY_ID || DEFAULT_FULL_ACCESS_COMPANY_ID).trim();
+const FULL_ACCESS_COMPANY_ID = (process.env.AURA_FULL_ACCESS_COMPANY_ID || '').trim();
+let hasWarnedMissingCompanyId = false;
 export const FULL_ACCESS_COMPANY_CREDIT_BALANCE = parsePositiveInteger(
   process.env.AURA_FULL_ACCESS_COMPANY_CREDIT_BALANCE,
   1_000_000_000
@@ -24,7 +24,16 @@ export const FULL_ACCESS_COMPANY_IMPRESSION_LIMIT = parsePositiveInteger(
 
 export const hasFullCompanyAccess = (ownerType: unknown, ownerId: unknown): boolean => {
   if (ownerType !== 'company' || typeof ownerId !== 'string') return false;
-  return ownerId.trim() === FULL_ACCESS_COMPANY_ID;
+  const normalizedOwnerId = ownerId.trim();
+  if (!normalizedOwnerId) return false;
+  if (!FULL_ACCESS_COMPANY_ID) {
+    if (!hasWarnedMissingCompanyId && process.env.NODE_ENV !== 'test') {
+      console.warn('[CompanyAccess] AURA_FULL_ACCESS_COMPANY_ID is not configured. Full-access override is disabled.');
+      hasWarnedMissingCompanyId = true;
+    }
+    return false;
+  }
+  return normalizedOwnerId === FULL_ACCESS_COMPANY_ID;
 };
 
 export const getFullCompanyCreditBalance = (companyId: string, fallback = 0): number => {

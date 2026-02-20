@@ -18,6 +18,7 @@ const hashtagUtils_1 = require("../utils/hashtagUtils");
 const identityUtils_1 = require("../utils/identityUtils");
 const adPlans_1 = require("../constants/adPlans");
 const adSubscriptionsController_1 = require("./adSubscriptionsController");
+const companyAccess_1 = require("../utils/companyAccess");
 const crypto_1 = __importDefault(require("crypto"));
 const AD_UPDATE_ALLOWLIST = new Set([
     'headline',
@@ -630,6 +631,7 @@ exports.adsController = {
             }
             const effectiveOwnerId = actor.id;
             const effectiveOwnerType = actor.type;
+            const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(effectiveOwnerType, effectiveOwnerId);
             let reservedSubscriptionId = null;
             let subscription = null;
             const now = Date.now();
@@ -659,87 +661,85 @@ exports.adsController = {
                 // Ensure period is current before checking limits
                 subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
             }
-            // If no active subscription, allow creation only if they have credits? 
-            // OR strictly enforce plan.
-            // Based on "pkg-starter" being $39, we should require a subscription.
-            if (!subscription) {
+            if (!subscription && !hasComplimentaryAccess) {
                 return res.status(403).json({
                     success: false,
                     error: 'No active ad plan',
                     message: 'No active ad plan found. Please purchase a plan to create ads.'
                 });
             }
-            // Check active ads limit
-            const plan = adPlans_1.AD_PLANS[subscription.packageId];
-            const activeAdsLimit = plan ? plan.activeAdsLimit : 0;
-            if (activeAdsLimit > 0) {
-                const activeAdsCount = yield db.collection('ads').countDocuments({
-                    ownerId: effectiveOwnerId,
-                    ownerType: effectiveOwnerType,
-                    status: 'active'
-                });
-                if (activeAdsCount >= activeAdsLimit) {
+            if (!hasComplimentaryAccess && subscription) {
+                const plan = adPlans_1.AD_PLANS[subscription.packageId];
+                const activeAdsLimit = plan ? plan.activeAdsLimit : 0;
+                if (activeAdsLimit > 0) {
+                    const activeAdsCount = yield db.collection('ads').countDocuments({
+                        ownerId: effectiveOwnerId,
+                        ownerType: effectiveOwnerType,
+                        status: 'active'
+                    });
+                    if (activeAdsCount >= activeAdsLimit) {
+                        return res.status(403).json({
+                            success: false,
+                            code: 'ACTIVE_AD_LIMIT_REACHED',
+                            error: 'Active ad limit reached',
+                            message: `You have reached your limit of ${activeAdsLimit} active ads for your current plan. Please deactivate an existing ad or upgrade your plan.`,
+                            limit: activeAdsLimit,
+                            current: activeAdsCount
+                        });
+                    }
+                }
+                if (subscription.impressionsUsed >= subscription.impressionLimit) {
                     return res.status(403).json({
                         success: false,
-                        code: 'ACTIVE_AD_LIMIT_REACHED',
-                        error: 'Active ad limit reached',
-                        message: `You have reached your limit of ${activeAdsLimit} active ads for your current plan. Please deactivate an existing ad or upgrade your plan.`,
-                        limit: activeAdsLimit,
-                        current: activeAdsCount
+                        error: `Monthly impression limit reached (${subscription.impressionLimit}). Upgrade or wait for renewal.`,
+                        limit: subscription.impressionLimit,
+                        current: subscription.impressionsUsed
                     });
                 }
+                if (subscription.adsUsed >= subscription.adLimit) {
+                    return res.status(403).json({
+                        success: false,
+                        code: 'AD_LIMIT_REACHED',
+                        error: 'Ad placement limit reached for this billing cycle',
+                        message: `You have used ${subscription.adsUsed} of ${subscription.adLimit} ad placements for this billing cycle.`,
+                        currentUsage: subscription.adsUsed,
+                        limit: subscription.adLimit,
+                        resetDate: subscription.periodEnd ? new Date(subscription.periodEnd).toISOString() : undefined
+                    });
+                }
+                const reserveFilter = {
+                    _id: subscription._id,
+                    status: 'active',
+                    adsUsed: { $lt: subscription.adLimit },
+                    $or: [
+                        { endDate: { $exists: false } },
+                        { endDate: { $gt: now } }
+                    ]
+                };
+                if (subscription.periodEnd) {
+                    reserveFilter.periodEnd = subscription.periodEnd;
+                }
+                const reserved = yield db.collection('adSubscriptions').findOneAndUpdate(reserveFilter, {
+                    $inc: { adsUsed: 1 },
+                    $set: { updatedAt: Date.now() }
+                }, { returnDocument: 'after' });
+                const reservedDoc = reserved && typeof reserved === 'object' && 'value' in reserved
+                    ? reserved.value
+                    : reserved;
+                if (!reservedDoc) {
+                    return res.status(403).json({
+                        success: false,
+                        code: 'AD_LIMIT_REACHED',
+                        error: 'Ad placement limit reached for this billing cycle',
+                        message: 'No ad slots are currently available. Please wait for renewal or upgrade your plan.'
+                    });
+                }
+                reservedSubscriptionId = subscription.id;
+                subscription = reservedDoc;
             }
-            // Check impression limit
-            if (subscription.impressionsUsed >= subscription.impressionLimit) {
-                return res.status(403).json({
-                    success: false,
-                    error: `Monthly impression limit reached (${subscription.impressionLimit}). Upgrade or wait for renewal.`,
-                    limit: subscription.impressionLimit,
-                    current: subscription.impressionsUsed
-                });
+            if (hasComplimentaryAccess) {
+                subscription = (0, companyAccess_1.buildFullAccessAdSubscription)(effectiveOwnerId, now);
             }
-            if (subscription.adsUsed >= subscription.adLimit) {
-                return res.status(403).json({
-                    success: false,
-                    code: 'AD_LIMIT_REACHED',
-                    error: 'Ad placement limit reached for this billing cycle',
-                    message: `You have used ${subscription.adsUsed} of ${subscription.adLimit} ad placements for this billing cycle.`,
-                    currentUsage: subscription.adsUsed,
-                    limit: subscription.adLimit,
-                    resetDate: subscription.periodEnd ? new Date(subscription.periodEnd).toISOString() : undefined
-                });
-            }
-            // Reserve one ad slot atomically so concurrent requests cannot bypass quota.
-            const reserveFilter = {
-                _id: subscription._id,
-                status: 'active',
-                adsUsed: { $lt: subscription.adLimit },
-                $or: [
-                    { endDate: { $exists: false } },
-                    { endDate: { $gt: now } }
-                ]
-            };
-            // Ensure we are still in the same billing window that was validated above.
-            if (subscription.periodEnd) {
-                reserveFilter.periodEnd = subscription.periodEnd;
-            }
-            const reserved = yield db.collection('adSubscriptions').findOneAndUpdate(reserveFilter, {
-                $inc: { adsUsed: 1 },
-                $set: { updatedAt: Date.now() }
-            }, { returnDocument: 'after' });
-            const reservedDoc = reserved && typeof reserved === 'object' && 'value' in reserved
-                ? reserved.value
-                : reserved;
-            if (!reservedDoc) {
-                return res.status(403).json({
-                    success: false,
-                    code: 'AD_LIMIT_REACHED',
-                    error: 'Ad placement limit reached for this billing cycle',
-                    message: 'No ad slots are currently available. Please wait for renewal or upgrade your plan.'
-                });
-            }
-            reservedSubscriptionId = subscription.id;
-            subscription = reservedDoc;
             const ownerCollection = effectiveOwnerType === 'company' ? 'companies' : 'users';
             const ownerRecord = yield db.collection(ownerCollection).findOne({ id: effectiveOwnerId });
             const ownerName = typeof (ownerRecord === null || ownerRecord === void 0 ? void 0 : ownerRecord.name) === 'string' && ownerRecord.name.trim()
@@ -1108,8 +1108,9 @@ exports.adsController = {
                     return res.status(403).json({ success: false, error: 'Forbidden' });
                 }
             }
+            const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(ad.ownerType || 'user', ad.ownerId);
             // Enforce limits if activating
-            if (status === 'active' && ad.status !== 'active') {
+            if (status === 'active' && ad.status !== 'active' && !hasComplimentaryAccess) {
                 // Get active subscription
                 const now = Date.now();
                 const effectiveOwnerId = ad.ownerId;
@@ -1232,7 +1233,10 @@ exports.adsController = {
                 subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
             }
             const subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
-            const packageId = subscription ? subscription.packageId : 'pkg-starter';
+            const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(effectiveOwnerType, effectiveOwnerId);
+            const packageId = subscription
+                ? subscription.packageId
+                : (hasComplimentaryAccess ? 'pkg-enterprise' : 'pkg-starter');
             const isBasic = packageId === 'pkg-starter';
             const isPro = packageId === 'pkg-pro';
             const isEnterprise = packageId === 'pkg-enterprise';
@@ -1341,7 +1345,10 @@ exports.adsController = {
                 subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
             }
             const subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
-            const packageId = subscription ? subscription.packageId : 'pkg-starter';
+            const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(effectiveOwnerType, effectiveOwnerId);
+            const packageId = subscription
+                ? subscription.packageId
+                : (hasComplimentaryAccess ? 'pkg-enterprise' : 'pkg-starter');
             const analyticsMap = new Map();
             analyticsDocs.forEach(doc => {
                 analyticsMap.set(doc.adId, doc);
@@ -1445,7 +1452,10 @@ exports.adsController = {
                 subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
             }
             const subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
-            const packageId = subscription ? subscription.packageId : 'pkg-starter';
+            const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(effectiveOwnerType, effectiveOwnerId);
+            const packageId = subscription
+                ? subscription.packageId
+                : (hasComplimentaryAccess ? 'pkg-enterprise' : 'pkg-starter');
             const isBasic = packageId === 'pkg-starter';
             // const isPro = packageId === 'pkg-pro';
             // const isEnterprise = packageId === 'pkg-enterprise';
@@ -1577,48 +1587,50 @@ exports.adsController = {
             // 2. Get Ad Owner's Subscription
             const effectiveOwnerId = ad.ownerId;
             const effectiveOwnerType = ad.ownerType || 'user';
-            const subscriptionQuery = {
-                status: 'active',
-                $or: [
-                    { endDate: { $exists: false } },
-                    { endDate: { $gt: now } }
-                ],
-                $and: [
-                    {
-                        $or: [
-                            { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                            { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-                        ]
-                    }
-                ]
-            };
-            // If looking for user type, also match legacy documents without ownerType
-            if (effectiveOwnerType === 'user') {
-                subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-            }
-            let subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
-            if (!subscription) {
-                return res.status(200).json({ success: true, message: 'No active subscription for ad owner, impression not tracked.' });
-            }
-            // Ensure subscription period is current (resets usage if new month)
-            subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
-            if (!subscription) {
-                return res.status(200).json({ success: true, message: 'Subscription check failed, impression not tracked.' });
-            }
-            const plan = adPlans_1.AD_PLANS[subscription.packageId];
-            if (!plan) {
-                console.warn(`⚠️ Ad plan not found for packageId: ${subscription.packageId}`);
-                return res.status(200).json({ success: true, message: 'Ad plan not found, impression not tracked.' });
-            }
-            // 3. Check Impression Limit (overall)
-            if (subscription.impressionsUsed >= plan.impressionLimit) {
-                return res.status(403).json({
-                    success: false,
-                    code: 'IMPRESSION_LIMIT_REACHED',
-                    error: `Monthly impression limit reached (${plan.impressionLimit}). Upgrade or wait for renewal.`,
-                    limit: plan.impressionLimit,
-                    current: subscription.impressionsUsed
-                });
+            const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(effectiveOwnerType, effectiveOwnerId);
+            let subscription = null;
+            let plan = null;
+            if (!hasComplimentaryAccess) {
+                const subscriptionQuery = {
+                    status: 'active',
+                    $or: [
+                        { endDate: { $exists: false } },
+                        { endDate: { $gt: now } }
+                    ],
+                    $and: [
+                        {
+                            $or: [
+                                { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
+                                { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
+                            ]
+                        }
+                    ]
+                };
+                if (effectiveOwnerType === 'user') {
+                    subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
+                }
+                subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
+                if (!subscription) {
+                    return res.status(200).json({ success: true, message: 'No active subscription for ad owner, impression not tracked.' });
+                }
+                subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
+                if (!subscription) {
+                    return res.status(200).json({ success: true, message: 'Subscription check failed, impression not tracked.' });
+                }
+                plan = adPlans_1.AD_PLANS[subscription.packageId] || null;
+                if (!plan) {
+                    console.warn(`⚠️ Ad plan not found for packageId: ${subscription.packageId}`);
+                    return res.status(200).json({ success: true, message: 'Ad plan not found, impression not tracked.' });
+                }
+                if (subscription.impressionsUsed >= plan.impressionLimit) {
+                    return res.status(403).json({
+                        success: false,
+                        code: 'IMPRESSION_LIMIT_REACHED',
+                        error: `Monthly impression limit reached (${plan.impressionLimit}). Upgrade or wait for renewal.`,
+                        limit: plan.impressionLimit,
+                        current: subscription.impressionsUsed
+                    });
+                }
             }
             // 4. Deduplicate Impressions (per day, per user fingerprint)
             const dedupKey = `${id}-${todayKey}-${userFingerprint}`;
@@ -1641,7 +1653,7 @@ exports.adsController = {
             yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: todayKey }, { $inc: { uniqueReach: 1 } }, { upsert: true });
             // 5. Determine Cost Per Impression (CPI)
             let cpi = 0;
-            if (plan.impressionLimit > 0 && plan.numericPrice) {
+            if (plan && plan.impressionLimit > 0 && plan.numericPrice) {
                 cpi = plan.numericPrice / plan.impressionLimit;
             }
             // 6. Atomically Update Ad Analytics and Subscription Usage
@@ -1657,9 +1669,10 @@ exports.adsController = {
                     ownerType: ad.ownerType || 'user'
                 }
             }, { upsert: true });
-            // Update adSubscription impressionsUsed
-            yield db.collection('adSubscriptions').updateOne({ _id: subscription._id }, // Use _id for direct document update
-            { $inc: { impressionsUsed: 1 }, $set: { updatedAt: now } });
+            if (!hasComplimentaryAccess && (subscription === null || subscription === void 0 ? void 0 : subscription._id)) {
+                yield db.collection('adSubscriptions').updateOne({ _id: subscription._id }, // Use _id for direct document update
+                { $inc: { impressionsUsed: 1 }, $set: { updatedAt: now } });
+            }
             // 7. Update Daily Rollup (for trends and accurate CTR calculation)
             yield db.collection('adDailyRollups').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: todayKey }, {
                 $inc: { impressions: 1 },

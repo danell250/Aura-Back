@@ -3,6 +3,7 @@ import { getDB } from '../db';
 import axios from 'axios';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { resolveIdentityActor } from '../utils/identityUtils';
+import { buildFullAccessAdSubscription, hasFullCompanyAccess } from '../utils/companyAccess';
 
 async function verifyPayPalWebhookSignature(req: Request): Promise<boolean> {
   const webhookId = process.env.PAYPAL_WEBHOOK_ID;
@@ -172,11 +173,16 @@ export const adSubscriptionsController = {
         .sort({ createdAt: -1 })
         .toArray();
 
-      console.log('[AdSubscriptions] Found subscriptions:', subscriptions.length);
+      const subscriptionList: any[] = [...subscriptions];
+      if (hasFullCompanyAccess(actor.type, actor.id)) {
+        subscriptionList.unshift(buildFullAccessAdSubscription(actor.id, Date.now()));
+      }
+
+      console.log('[AdSubscriptions] Found subscriptions:', subscriptionList.length);
 
       res.json({
         success: true,
-        data: subscriptions
+        data: subscriptionList
       });
     } catch (error) {
       console.error('[AdSubscriptions] Error fetching user subscriptions:', error);
@@ -882,6 +888,10 @@ export const adSubscriptionsController = {
           $set: { status: 'expired', updatedAt: now }
         }
       );
+
+      if (hasFullCompanyAccess(actor.type, actor.id)) {
+        updated.unshift(buildFullAccessAdSubscription(actor.id, now));
+      }
 
       res.json({
         success: true,

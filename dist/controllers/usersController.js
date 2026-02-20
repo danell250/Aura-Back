@@ -21,6 +21,7 @@ const trustService_1 = require("../services/trustService");
 const postsController_1 = require("./postsController");
 const securityLogger_1 = require("../utils/securityLogger");
 const socketHub_1 = require("../realtime/socketHub");
+const companyAccess_1 = require("../utils/companyAccess");
 const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
     const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
@@ -704,7 +705,7 @@ exports.usersController = {
             });
             if (company) {
                 // Map company fields to user-like structure for profile view compatibility
-                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'company', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, subscribers: Array.isArray(company.subscribers) ? company.subscribers : [], subscriberCount: typeof company.subscriberCount === 'number'
+                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'company', isVerified: company.isVerified || false, trustScore: 100, auraCredits: (0, companyAccess_1.getFullCompanyCreditBalance)(company.id, typeof company.auraCredits === 'number' ? company.auraCredits : 0), auraCreditsSpent: typeof company.auraCreditsSpent === 'number' ? company.auraCreditsSpent : 0, subscribers: Array.isArray(company.subscribers) ? company.subscribers : [], subscriberCount: typeof company.subscriberCount === 'number'
                         ? company.subscriberCount
                         : (Array.isArray(company.subscribers) ? company.subscribers.length : 0), notifications: [], blockedUsers: [], profileViews: [] });
                 return res.json({
@@ -762,7 +763,7 @@ exports.usersController = {
             });
             if (company) {
                 // Map company fields to user-like structure for profile view compatibility
-                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'company', isVerified: company.isVerified || false, trustScore: 100, auraCredits: 0, subscribers: Array.isArray(company.subscribers) ? company.subscribers : [], subscriberCount: typeof company.subscriberCount === 'number'
+                const profileData = Object.assign(Object.assign({}, company), { type: 'company', name: company.name, companyName: company.name, companyWebsite: company.website, userMode: 'company', isVerified: company.isVerified || false, trustScore: 100, auraCredits: (0, companyAccess_1.getFullCompanyCreditBalance)(company.id, typeof company.auraCredits === 'number' ? company.auraCredits : 0), auraCreditsSpent: typeof company.auraCreditsSpent === 'number' ? company.auraCreditsSpent : 0, subscribers: Array.isArray(company.subscribers) ? company.subscribers : [], subscriberCount: typeof company.subscriberCount === 'number'
                         ? company.subscriberCount
                         : (Array.isArray(company.subscribers) ? company.subscribers.length : 0), notifications: [], blockedUsers: [], profileViews: [] });
                 return res.json({

@@ -7,6 +7,7 @@ import { calculateUserTrust, recalculateAllTrustScores, getSerendipityMatchesFor
 import { emitAuthorInsightsUpdate } from './postsController';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { emitToIdentity } from '../realtime/socketHub';
+import { getFullCompanyCreditBalance } from '../utils/companyAccess';
 
 const generateUniqueHandle = async (firstName: string, lastName: string): Promise<string> => {
   const db = getDB();
@@ -824,7 +825,8 @@ export const usersController = {
           userMode: 'company',
           isVerified: company.isVerified || false,
           trustScore: 100,
-          auraCredits: 0,
+          auraCredits: getFullCompanyCreditBalance(company.id, typeof company.auraCredits === 'number' ? company.auraCredits : 0),
+          auraCreditsSpent: typeof company.auraCreditsSpent === 'number' ? company.auraCreditsSpent : 0,
           subscribers: Array.isArray(company.subscribers) ? company.subscribers : [],
           subscriberCount: typeof company.subscriberCount === 'number'
             ? company.subscriberCount
@@ -910,7 +912,8 @@ export const usersController = {
           userMode: 'company',
           isVerified: company.isVerified || false,
           trustScore: 100, // Default trust score for companies
-          auraCredits: 0,
+          auraCredits: getFullCompanyCreditBalance(company.id, typeof company.auraCredits === 'number' ? company.auraCredits : 0),
+          auraCreditsSpent: typeof company.auraCreditsSpent === 'number' ? company.auraCreditsSpent : 0,
           subscribers: Array.isArray(company.subscribers) ? company.subscribers : [],
           subscriberCount: typeof company.subscriberCount === 'number'
             ? company.subscriberCount

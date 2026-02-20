@@ -8,6 +8,7 @@ import { emitToIdentity } from '../realtime/socketHub';
 import crypto from 'crypto';
 import { Company } from '../types';
 import { transformUser } from '../utils/userUtils';
+import { getFullCompanyCreditBalance, hasFullCompanyAccess } from '../utils/companyAccess';
 
 // Helper to generate unique handle for company
 const generateCompanyHandle = async (name: string): Promise<string> => {
@@ -152,6 +153,12 @@ const sanitizeCompanyEntity = (company: any): any => {
   }
   if (typeof sanitized.isPrivate !== 'boolean') {
     sanitized.isPrivate = false;
+  }
+
+  const baseCredits = typeof sanitized.auraCredits === 'number' ? sanitized.auraCredits : 0;
+  sanitized.auraCredits = getFullCompanyCreditBalance(typeof sanitized.id === 'string' ? sanitized.id : '', baseCredits);
+  if (typeof sanitized.auraCreditsSpent !== 'number') {
+    sanitized.auraCreditsSpent = 0;
   }
 
   return sanitized;
@@ -364,7 +371,11 @@ router.get('/:companyId/dashboard', requireAuth, async (req, res) => {
     return res.json({
       success: true,
       data: snapshot || fallbackData,
-      planLevel: mapAnalyticsPlanLevel(activeSub?.packageId)
+      planLevel: mapAnalyticsPlanLevel(
+        hasFullCompanyAccess('company', companyId)
+          ? 'pkg-enterprise'
+          : activeSub?.packageId
+      )
     });
   } catch (error) {
     console.error('Get company dashboard error:', error);

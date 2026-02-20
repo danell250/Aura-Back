@@ -17,6 +17,7 @@ const s3Upload_1 = require("../utils/s3Upload");
 const userUtils_1 = require("../utils/userUtils");
 const identityUtils_1 = require("../utils/identityUtils");
 const mentionUtils_1 = require("../utils/mentionUtils");
+const companyAccess_1 = require("../utils/companyAccess");
 const POSTS_COLLECTION = 'posts';
 const USERS_COLLECTION = 'users';
 const COMPANIES_COLLECTION = 'companies';
@@ -425,10 +426,14 @@ const getAuthorInsightsSnapshot = (authorId_1, ...args_1) => __awaiter(void 0, [
             };
         });
     }
+    const rawCreditBalance = (_g = owner === null || owner === void 0 ? void 0 : owner.auraCredits) !== null && _g !== void 0 ? _g : 0;
+    const creditBalance = authorType === 'company'
+        ? (0, companyAccess_1.getFullCompanyCreditBalance)(authorId, rawCreditBalance)
+        : rawCreditBalance;
     return {
         totals,
         credits: {
-            balance: (_g = owner === null || owner === void 0 ? void 0 : owner.auraCredits) !== null && _g !== void 0 ? _g : 0,
+            balance: creditBalance,
             spent: (_h = owner === null || owner === void 0 ? void 0 : owner.auraCreditsSpent) !== null && _h !== void 0 ? _h : 0
         },
         profileViews: profileViewIds,
