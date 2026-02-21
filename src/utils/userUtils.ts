@@ -1,4 +1,15 @@
 
+const formatJoinedLabel = (value: unknown): string | null => {
+  if (!value) return null;
+  const parsed = new Date(value as string);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed.toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+};
+
 export const transformUser = (user: any): any => {
   if (!user) return user;
   
@@ -47,11 +58,18 @@ export const transformUser = (user: any): any => {
     delete transformed.subscriberCount;
     // Product rule: verification badge is company-only.
     transformed.isVerified = false;
+    const joinedLabel = formatJoinedLabel(transformed.createdAt);
+    if (joinedLabel) {
+      transformed.joinedLabel = joinedLabel;
+    } else {
+      delete transformed.joinedLabel;
+    }
   } else {
     // Keep company payload clean from personal graph fields.
     delete transformed.acquaintances;
     delete transformed.sentAcquaintanceRequests;
     delete transformed.sentConnectionRequests;
+    delete transformed.joinedLabel;
   }
 
   if (

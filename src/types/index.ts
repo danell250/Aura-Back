@@ -12,6 +12,8 @@ export interface User {
   coverImage?: string; 
   coverType?: 'image' | 'video';
   bio?: string;
+  title?: string;
+  joinedLabel?: string;
   email?: string;
   phone?: string;
   country?: string;
@@ -60,6 +62,7 @@ export interface Company {
   industry: string;
   bio: string;
   website: string;
+  foundedYear?: number;
   featuredPostIds?: string[];
   ownerId: string;
   isVerified: boolean;
@@ -134,6 +137,8 @@ export interface Message {
   replyTo?: string;
   isEdited?: boolean;
   editedAt?: number;
+  reactions?: Record<string, number>;
+  userReactions?: string[];
 }
 
 export interface MediaItemMetrics {

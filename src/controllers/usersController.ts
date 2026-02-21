@@ -123,6 +123,7 @@ const USER_SELF_UPDATE_ALLOWLIST = new Set<string>([
   'name',
   'handle',
   'bio',
+  'title',
   'phone',
   'country',
   'website',
@@ -224,6 +225,7 @@ const PUBLIC_USER_PROFILE_FIELDS = new Set<string>([
   'lastName',
   'name',
   'handle',
+  'title',
   'avatar',
   'avatarType',
   'avatarKey',
@@ -243,6 +245,7 @@ const PUBLIC_USER_PROFILE_FIELDS = new Set<string>([
   'trustScore',
   'activeGlow',
   'userMode',
+  'joinedLabel',
   'type'
 ]);
 
@@ -1094,6 +1097,10 @@ export const usersController = {
 
       if (typeof mutableUpdates.name === 'string') {
         updateData.name = mutableUpdates.name.trim();
+      }
+
+      if (typeof mutableUpdates.title === 'string') {
+        updateData.title = mutableUpdates.title.trim().slice(0, 120);
       }
 
       if (normalizedFirstName !== null || normalizedLastName !== null) {
@@ -2989,21 +2996,11 @@ export const usersController = {
       }
 
       // Initialize profileViews array if it doesn't exist
-      const profileViews = user.profileViews || [];
+      const profileViews = Array.isArray(user.profileViews) ? [...user.profileViews] : [];
+      const shouldAddProfileView = !profileViews.includes(viewerId);
 
-      // Add the viewer ID to the profile views if not already present
-      if (!profileViews.includes(viewerId)) {
+      if (shouldAddProfileView) {
         profileViews.push(viewerId);
-
-        await db.collection('users').updateOne(
-          { id },
-          {
-            $set: {
-              profileViews: profileViews,
-              updatedAt: new Date().toISOString()
-            }
-          }
-        );
       }
 
       // Create a notification for the profile owner
@@ -3022,26 +3019,54 @@ export const usersController = {
         isRead: false
       };
 
-      // Add notification to the profile owner's notification array
-      const updatedNotifications = [newNotification, ...(user.notifications || [])];
+      const now = Date.now();
+      const existingRecentViewNotice = Array.isArray(user.notifications)
+        ? user.notifications.find((notif: any) => {
+            if (notif?.type !== 'profile_view') return false;
+            if (notif?.fromUser?.id !== viewerId) return false;
+            const rawTimestamp = notif?.timestamp;
+            const ts =
+              typeof rawTimestamp === 'number'
+                ? rawTimestamp
+                : new Date(rawTimestamp || 0).getTime();
+            if (!Number.isFinite(ts) || ts <= 0) return false;
+            return now - ts < 60 * 60 * 1000;
+          })
+        : null;
 
-      await db.collection('users').updateOne(
-        { id },
-        {
-          $set: {
-            profileViews: profileViews,
-            notifications: updatedNotifications,
-            updatedAt: new Date().toISOString()
+      const shouldPushNotification = !existingRecentViewNotice;
+      const nextSetPayload: Record<string, unknown> = {
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (shouldAddProfileView) {
+        nextSetPayload.profileViews = profileViews;
+      }
+
+      if (shouldPushNotification) {
+        const updatedNotifications = [newNotification, ...(user.notifications || [])];
+        nextSetPayload.notifications = updatedNotifications;
+      }
+
+      if (Object.keys(nextSetPayload).length > 0) {
+        await db.collection('users').updateOne(
+          { id },
+          {
+            $set: nextSetPayload
           }
-        }
-      );
+        );
+      }
 
-      emitToIdentity('user', id, 'notification:new', {
-        ownerType: 'user',
-        ownerId: id,
-        notification: newNotification
-      });
-      emitAuthorInsightsUpdate(req.app, id, 'user');
+      if (shouldPushNotification) {
+        emitToIdentity('user', id, 'notification:new', {
+          ownerType: 'user',
+          ownerId: id,
+          notification: newNotification
+        });
+      }
+      if (shouldAddProfileView) {
+        emitAuthorInsightsUpdate(req.app, id, 'user');
+      }
 
       res.json({
         success: true,

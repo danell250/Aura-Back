@@ -390,9 +390,10 @@ export const privacyController = {
       }
 
       // Record the profile view (ensure viewer is present at least once)
-      const profileViews = profileOwner.profileViews || [];
-      
-      if (!profileViews.includes(authenticatedUserId)) {
+      const profileViews = Array.isArray(profileOwner.profileViews) ? [...profileOwner.profileViews] : [];
+      const shouldAddProfileView = !profileViews.includes(authenticatedUserId);
+
+      if (shouldAddProfileView) {
         profileViews.push(authenticatedUserId);
         
         await db.collection(ownerCollection).updateOne(
@@ -464,7 +465,9 @@ export const privacyController = {
         ownerId: profileOwnerId,
         notification: newNotification
       });
-      emitAuthorInsightsUpdate(req.app, profileOwnerId, ownerType);
+      if (shouldAddProfileView) {
+        emitAuthorInsightsUpdate(req.app, profileOwnerId, ownerType);
+      }
 
       console.log('Profile view notification created:', {
         profileOwnerId,

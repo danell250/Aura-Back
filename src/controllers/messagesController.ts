@@ -426,6 +426,43 @@ const buildThreadStatePatch = (state: MessageThreadState): Partial<IMessageThrea
 };
 
 export const messagesController = {
+  // GET /api/messages/rtc-config - Return ICE server config without exposing static TURN credentials in frontend env
+  getRtcConfig: async (req: Request, res: Response) => {
+    try {
+      const authenticatedUserId = (req.user as any)?.id;
+      if (!authenticatedUserId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+      }
+
+      const turnUrl = String(process.env.TURN_URL || '').trim();
+      const turnUsername = String(process.env.TURN_USERNAME || '').trim();
+      const turnCredential = String(process.env.TURN_CREDENTIAL || '').trim();
+
+      const iceServers: Array<{ urls: string[]; username?: string; credential?: string }> = [
+        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+      ];
+
+      if (turnUrl && turnUsername && turnCredential) {
+        iceServers.push({
+          urls: [turnUrl],
+          username: turnUsername,
+          credential: turnCredential,
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: { iceServers },
+      });
+    } catch (error) {
+      console.error('Error loading RTC config:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to load RTC config',
+      });
+    }
+  },
+
   // GET /api/messages/call-history - Get call history for the active identity
   getCallHistory: async (req: Request, res: Response) => {
     try {

@@ -618,7 +618,7 @@ router.put('/:companyId/featured-posts', requireAuth, async (req, res) => {
 router.post('/', requireAuth, async (req, res) => {
   try {
     const currentUser = (req as any).user;
-    const { name, industry, bio, website, location, employeeCount, email, handle: providedHandle } = req.body;
+    const { name, industry, bio, website, location, employeeCount, email, foundedYear, handle: providedHandle } = req.body;
     const db = getDB();
 
     const normalizedName = typeof name === 'string' ? name.trim() : '';
@@ -629,6 +629,15 @@ router.post('/', requireAuth, async (req, res) => {
     const normalizedEmployeeCount = Number.isFinite(Number(employeeCount)) && Number(employeeCount) > 0
       ? Math.floor(Number(employeeCount))
       : undefined;
+    const normalizedFoundedYear = foundedYear !== undefined && foundedYear !== null && String(foundedYear).trim() !== ''
+      ? Math.floor(Number(foundedYear))
+      : undefined;
+    if (
+      normalizedFoundedYear !== undefined &&
+      (!Number.isFinite(normalizedFoundedYear) || normalizedFoundedYear < 1800 || normalizedFoundedYear > new Date().getFullYear())
+    ) {
+      return res.status(400).json({ success: false, error: 'Founded year must be between 1800 and current year' });
+    }
 
     const normalizedCompanyEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
     if (normalizedCompanyEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedCompanyEmail)) {
@@ -678,6 +687,7 @@ router.post('/', requireAuth, async (req, res) => {
       website: typeof website === 'string' ? website.trim() : '',
       location: typeof location === 'string' ? location.trim() : '',
       employeeCount: normalizedEmployeeCount,
+      foundedYear: normalizedFoundedYear,
       email: normalizedCompanyEmail || '',
       ownerId: currentUser.id,
       isVerified: typeof website === 'string' && website.trim().length > 0,
@@ -738,6 +748,7 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
       'profileLinks',
       'location',
       'employeeCount',
+      'foundedYear',
       'email',
       'handle',
       'avatar',
@@ -799,6 +810,20 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
       updates.employeeCount = normalizedEmployeeCount;
     }
 
+    if (updates.foundedYear !== undefined) {
+      const normalizedFoundedYear = Number.isFinite(Number(updates.foundedYear))
+        ? Math.floor(Number(updates.foundedYear))
+        : null;
+      if (
+        normalizedFoundedYear === null ||
+        normalizedFoundedYear < 1800 ||
+        normalizedFoundedYear > new Date().getFullYear()
+      ) {
+        return res.status(400).json({ success: false, error: 'Founded year must be between 1800 and current year' });
+      }
+      updates.foundedYear = normalizedFoundedYear;
+    }
+
     if (updates.email !== undefined) {
       const normalizedCompanyEmail = typeof updates.email === 'string' ? updates.email.trim().toLowerCase() : '';
       if (normalizedCompanyEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedCompanyEmail)) {
@@ -831,8 +856,8 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
       updates.coverCrop = normalizedCoverCrop;
     }
 
-    // Auto-verify if website is added
-    if (updates.website) {
+    // Preserve existing verification behavior when a website is supplied.
+    if (typeof updates.website === 'string' && updates.website.trim().length > 0) {
       updates.isVerified = true;
     }
 
