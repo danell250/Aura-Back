@@ -18,6 +18,7 @@ const db_1 = require("../db");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const emailService_1 = require("../services/emailService");
 const identityUtils_1 = require("../utils/identityUtils");
+const adPlanAccess_1 = require("../utils/adPlanAccess");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const router = (0, express_1.Router)();
 const REPORT_SCHEDULES_COLLECTION = 'reportSchedules';
@@ -79,6 +80,11 @@ const getOwnerFromRequest = (req) => __awaiter(void 0, void 0, void 0, function*
     if (!resolved)
         return null;
     return { ownerId: resolved.id, ownerType: resolved.type };
+});
+const resolveOwnerReportEntitlements = (owner) => __awaiter(void 0, void 0, void 0, function* () {
+    const db = (0, db_1.getDB)();
+    const planAccess = yield (0, adPlanAccess_1.resolveOwnerPlanAccess)(db, owner.ownerId, owner.ownerType, Date.now());
+    return { packageId: planAccess.packageId, entitlements: planAccess.entitlements };
 });
 const normalizeEmail = (value) => {
     if (typeof value !== 'string')
@@ -336,6 +342,23 @@ const processDueReportSchedules = () => __awaiter(void 0, void 0, void 0, functi
         if (lockResult.modifiedCount === 0)
             continue;
         try {
+            const planAccess = yield resolveOwnerReportEntitlements({
+                ownerId: schedule.ownerId,
+                ownerType: schedule.ownerType
+            });
+            if (!planAccess.entitlements.canScheduleReports) {
+                yield db.collection(REPORT_SCHEDULES_COLLECTION).updateOne({ id: schedule.id }, {
+                    $set: {
+                        processing: false,
+                        status: 'paused',
+                        lastRunAt: Date.now(),
+                        lastRunStatus: 'failed',
+                        lastError: 'Paused automatically because scheduled reports are not available for the current plan.',
+                        updatedAt: new Date().toISOString()
+                    }
+                });
+                continue;
+            }
             const payload = yield buildScheduledSummaryPayload(schedule);
             const results = yield Promise.all(schedule.recipients.map((recipient) => (0, emailService_1.sendReportPreviewEmail)(recipient, payload)));
             const deliveredCount = results.filter((result) => result.delivered).length;
@@ -394,6 +417,14 @@ router.post('/preview-email', authMiddleware_1.requireAuth, reportPreviewRateLim
         if (!owner) {
             return res.status(403).json({ success: false, error: 'Unauthorized identity context' });
         }
+        const planAccess = yield resolveOwnerReportEntitlements(owner);
+        if (!planAccess.entitlements.canScheduleReports) {
+            return res.status(403).json({
+                success: false,
+                error: 'Report scheduling is not available for this plan',
+                message: 'Scheduled report delivery is available on Universal Signal.'
+            });
+        }
         if (!(0, emailService_1.isEmailDeliveryConfigured)()) {
             return res.status(503).json({
                 success: false,
@@ -431,6 +462,12 @@ router.post('/preview-email', authMiddleware_1.requireAuth, reportPreviewRateLim
         }
         const summary = typeof ((_b = req.body) === null || _b === void 0 ? void 0 : _b.summary) === 'object' && ((_c = req.body) === null || _c === void 0 ? void 0 : _c.summary) ? req.body.summary : {};
         const deliveryMode = ((_d = req.body) === null || _d === void 0 ? void 0 : _d.deliveryMode) === 'pdf_attachment' ? 'pdf_attachment' : 'inline_email';
+        if (deliveryMode === 'pdf_attachment' && !planAccess.entitlements.canExportPdf) {
+            return res.status(403).json({
+                success: false,
+                error: 'PDF report delivery is not available for this plan'
+            });
+        }
         let pdfAttachment;
         const rawAttachment = (_e = req.body) === null || _e === void 0 ? void 0 : _e.pdfAttachment;
         if (rawAttachment && typeof rawAttachment === 'object') {
@@ -489,6 +526,13 @@ router.get('/schedules', authMiddleware_1.requireAuth, (req, res) => __awaiter(v
         if (!owner) {
             return res.status(403).json({ success: false, error: 'Unauthorized identity context' });
         }
+        const planAccess = yield resolveOwnerReportEntitlements(owner);
+        if (!planAccess.entitlements.canScheduleReports) {
+            return res.json({
+                success: true,
+                data: []
+            });
+        }
         const db = (0, db_1.getDB)();
         const docs = yield db.collection(REPORT_SCHEDULES_COLLECTION)
             .find({ ownerId: owner.ownerId, ownerType: owner.ownerType, status: { $ne: 'paused' } })
@@ -515,6 +559,14 @@ router.post('/schedules', authMiddleware_1.requireAuth, (req, res) => __awaiter(
         if (!owner) {
             return res.status(403).json({ success: false, error: 'Unauthorized identity context' });
         }
+        const planAccess = yield resolveOwnerReportEntitlements(owner);
+        if (!planAccess.entitlements.canScheduleReports) {
+            return res.status(403).json({
+                success: false,
+                error: 'Report scheduling is not available for this plan',
+                message: 'Scheduled reports are available on Universal Signal.'
+            });
+        }
         const recipients = normalizeRecipients((_a = req.body) === null || _a === void 0 ? void 0 : _a.recipients);
         if (recipients.length === 0) {
             return res.status(400).json({ success: false, error: 'At least one valid recipient is required' });
@@ -532,6 +584,12 @@ router.post('/schedules', authMiddleware_1.requireAuth, (req, res) => __awaiter(
             ? req.body.scope
             : 'all_signals';
         const deliveryMode = ((_h = req.body) === null || _h === void 0 ? void 0 : _h.deliveryMode) === 'pdf_attachment' ? 'pdf_attachment' : 'inline_email';
+        if (deliveryMode === 'pdf_attachment' && !planAccess.entitlements.canExportPdf) {
+            return res.status(403).json({
+                success: false,
+                error: 'PDF report delivery is not available for this plan'
+            });
+        }
         const weeklyDay = ((_j = req.body) === null || _j === void 0 ? void 0 : _j.weeklyDay) && WEEKDAY_TO_INDEX[req.body.weeklyDay]
             ? req.body.weeklyDay
             : 'Monday';

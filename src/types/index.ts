@@ -192,7 +192,7 @@ export interface Ad {
     downloadLabel?: string;
   };
   status: 'active' | 'paused' | 'expired' | 'draft';
-  placement: 'feed' | 'sidebar' | 'story' | 'search';
+  placement: 'feed' | 'sidebar' | 'story' | 'search' | 'profile' | 'left' | 'right';
   hashtags: string[];
   expiryDate?: number;
   timestamp: number;

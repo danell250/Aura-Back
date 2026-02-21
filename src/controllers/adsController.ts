@@ -2,9 +2,18 @@ import { Request, Response } from 'express';
 import { getDB } from '../db';
 import { getHashtagsFromText, filterByHashtags } from '../utils/hashtagUtils';
 import { resolveIdentityActor } from '../utils/identityUtils';
-import { AD_PLANS } from '../constants/adPlans';
-import { ensureCurrentPeriod } from './adSubscriptionsController';
+import {
+  AD_PLANS,
+  AdPlanId,
+  AdPlanPlacement,
+  getPlanEntitlements
+} from '../constants/adPlans';
 import { buildFullAccessAdSubscription, hasFullCompanyAccess } from '../utils/companyAccess';
+import {
+  AdOwnerType,
+  findActiveSubscriptionForOwner,
+  resolveOwnerPlanAccess
+} from '../utils/adPlanAccess';
 import crypto from 'crypto';
 
 type AdCampaignWhy =
@@ -60,7 +69,9 @@ const AD_UPDATE_ALLOWLIST = new Set<string>([
   'expiryDate'
 ]);
 
-const AD_ALLOWED_PLACEMENTS = new Set<string>(['feed', 'left', 'right', 'sidebar', 'story', 'search']);
+type CanonicalAdPlacement = AdPlanPlacement;
+
+const AD_ALLOWED_PLACEMENTS = new Set<string>(['feed', 'left', 'right', 'sidebar', 'story', 'search', 'profile']);
 const AD_ALLOWED_CAMPAIGN_WHY = new Set<AdCampaignWhy>([
   'safe_clicks_conversions',
   'lead_capture_no_exit',
@@ -84,6 +95,15 @@ const AD_LEAD_EMAIL_REQUIRED_TYPES = new Set<Exclude<AdLeadCaptureType, 'none'>>
   'download_gate'
 ]);
 const SIMPLE_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const normalizePlacementToCanonical = (rawPlacement: unknown): CanonicalAdPlacement => {
+  const placement = typeof rawPlacement === 'string' ? rawPlacement.trim().toLowerCase() : 'feed';
+  if (placement === 'search') return 'search';
+  if (placement === 'profile' || placement === 'left' || placement === 'right' || placement === 'sidebar') {
+    return 'profile';
+  }
+  return 'feed';
+};
 
 const trimOptionalText = (value: unknown, maxLength: number): string | undefined => {
   if (typeof value !== 'string') return undefined;
@@ -703,35 +723,8 @@ export const adsController = {
       let subscription: any | null = null;
       const now = Date.now();
 
-      // Check subscription limits and enforce at ACTION TIME
-      // Fetch active subscription for the owner (user or company)
-      const subscriptionQuery: any = {
-        status: 'active',
-        $or: [
-          { endDate: { $exists: false } },
-          { endDate: { $gt: now } }
-        ],
-        $and: [
-          {
-            $or: [
-              { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-              { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-            ]
-          }
-        ]
-      };
-
-      // If looking for user type, also match legacy documents without ownerType
-      if (effectiveOwnerType === 'user') {
-        (subscriptionQuery.$and[0] as any).$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-      }
-
-      subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
-
-      if (subscription) {
-         // Ensure period is current before checking limits
-         subscription = await ensureCurrentPeriod(db, subscription);
-      }
+      // Check subscription limits and enforce at action time.
+      subscription = await findActiveSubscriptionForOwner(db, effectiveOwnerId, effectiveOwnerType, now);
 
       if (!subscription && !hasComplimentaryAccess) {
          return res.status(403).json({
@@ -741,8 +734,25 @@ export const adsController = {
          });
       }
 
+      const packageId: AdPlanId = hasComplimentaryAccess
+        ? 'pkg-enterprise'
+        : ((typeof subscription?.packageId === 'string' && AD_PLANS[subscription.packageId as AdPlanId])
+          ? (subscription.packageId as AdPlanId)
+          : 'pkg-starter');
+      const planEntitlements = getPlanEntitlements(packageId);
+      const requestedPlacement = normalizePlacementToCanonical(adData.placement);
+
+      if (!planEntitlements.allowedPlacements.includes(requestedPlacement)) {
+        return res.status(403).json({
+          success: false,
+          code: 'PLACEMENT_NOT_ALLOWED',
+          error: 'Placement not allowed for current plan',
+          message: `Your ${AD_PLANS[packageId].name} plan supports ${planEntitlements.allowedPlacements.join(', ')} placement only.`
+        });
+      }
+
       if (!hasComplimentaryAccess && subscription) {
-        const plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS];
+        const plan = AD_PLANS[packageId];
         const activeAdsLimit = plan ? plan.activeAdsLimit : 0;
 
         if (activeAdsLimit > 0) {
@@ -858,7 +868,7 @@ export const adsController = {
         leadCapture: adData.leadCapture && typeof adData.leadCapture === 'object'
           ? (adData.leadCapture as SanitizedLeadCaptureConfig)
           : { type: 'none' as AdLeadCaptureType },
-        placement: adData.placement as string,
+        placement: requestedPlacement,
         expiryDate: adData.expiryDate as number | undefined,
         ownerId: effectiveOwnerId,
         ownerType: effectiveOwnerType,
@@ -1012,6 +1022,17 @@ export const adsController = {
       const ad = await db.collection('ads').findOne({ id });
       if (!ad) {
         return res.status(404).json({ success: false, error: 'Ad not found' });
+      }
+
+      const adOwnerType: AdOwnerType = ad.ownerType === 'company' ? 'company' : 'user';
+      const { packageId, entitlements } = await resolveOwnerPlanAccess(db, ad.ownerId, adOwnerType, Date.now());
+      if (!entitlements.canBoost) {
+        return res.status(403).json({
+          success: false,
+          code: 'BOOST_NOT_ALLOWED',
+          error: 'Boosting is not available for this plan',
+          message: `Boosting is available on Pro Signal and Universal Signal. Upgrade from ${AD_PLANS[packageId].name} to enable boosting.`
+        });
       }
 
       const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
@@ -1172,6 +1193,23 @@ export const adsController = {
         }
       }
 
+      if (typeof updates.placement === 'string') {
+        const normalizedPlacement = normalizePlacementToCanonical(updates.placement);
+        const ownerType = ad.ownerType === 'company' ? 'company' : 'user';
+        const { packageId, entitlements } = await resolveOwnerPlanAccess(db, ad.ownerId, ownerType, Date.now());
+
+        if (!entitlements.allowedPlacements.includes(normalizedPlacement)) {
+          return res.status(403).json({
+            success: false,
+            code: 'PLACEMENT_NOT_ALLOWED',
+            error: 'Placement not allowed for current plan',
+            message: `Your ${AD_PLANS[packageId].name} plan supports ${entitlements.allowedPlacements.join(', ')} placement only.`
+          });
+        }
+
+        updates.placement = normalizedPlacement;
+      }
+
       const result = await db.collection('ads').findOneAndUpdate(
         { id },
         { $set: { ...updates, updatedAt: new Date().toISOString() } },
@@ -1278,33 +1316,13 @@ export const adsController = {
         const effectiveOwnerId = ad.ownerId;
         const effectiveOwnerType = ad.ownerType || 'user';
 
-        const subscriptionQuery: any = {
-          status: 'active',
-          $or: [
-            { endDate: { $exists: false } },
-            { endDate: { $gt: now } }
-          ],
-          $and: [
-            {
-              $or: [
-                { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-              ]
-            }
-          ]
-        };
-
-        // If looking for user type, also match legacy documents without ownerType
-        if (effectiveOwnerType === 'user') {
-          (subscriptionQuery.$and[0] as any).$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-        }
-
-        let subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
-
-        if (subscription) {
-           // Ensure period is current before checking limits
-           subscription = await ensureCurrentPeriod(db, subscription);
-        }
+        const subscription = await findActiveSubscriptionForOwner(
+          db,
+          effectiveOwnerId,
+          effectiveOwnerType,
+          now,
+          { refreshPeriod: true }
+        );
 
         // Enforce active ads limit
         if (subscription) {
@@ -1392,47 +1410,16 @@ export const adsController = {
 
       const analytics = await db.collection('adAnalytics').findOne({ adId: id });
 
-      // Check owner subscription level
-      const now = Date.now();
-      const effectiveOwnerId = ad.ownerId;
-      const effectiveOwnerType = ad.ownerType || 'user';
-
-      const subscriptionQuery: any = {
-        status: 'active',
-        $or: [
-          { endDate: { $exists: false } },
-          { endDate: { $gt: now } }
-        ],
-        $and: [
-          {
-            $or: [
-              { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-              { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-            ]
-          }
-        ]
-      };
-
-      // If looking for user type, also match legacy documents without ownerType
-      if (effectiveOwnerType === 'user') {
-        (subscriptionQuery.$and[0] as any).$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-      }
-
-      const subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
-
-      const hasComplimentaryAccess = hasFullCompanyAccess(effectiveOwnerType, effectiveOwnerId);
-      const packageId = subscription
-        ? subscription.packageId
-        : (hasComplimentaryAccess ? 'pkg-enterprise' : 'pkg-starter');
-      const isBasic = packageId === 'pkg-starter';
-      const isPro = packageId === 'pkg-pro';
-      const isEnterprise = packageId === 'pkg-enterprise';
+      // Check owner plan level and metric access rules.
+      const ownerType = ad.ownerType === 'company' ? 'company' : 'user';
+      const ownerPlanAccess = await resolveOwnerPlanAccess(db, ad.ownerId, ownerType, Date.now());
+      const canViewFullMetrics = ownerPlanAccess.entitlements.metricsTier === 'full';
+      const isEnterprise = ownerPlanAccess.packageId === 'pkg-enterprise';
 
       const impressions = analytics?.impressions ?? 0;
       const clicks = analytics?.clicks ?? 0;
-      const engagement = analytics?.engagement ?? 0;
-      const conversions = analytics?.conversions ?? 0;
-      const spend = analytics?.spend ?? 0;
+      const engagement = canViewFullMetrics ? (analytics?.engagement ?? 0) : 0;
+      const conversions = canViewFullMetrics ? (analytics?.conversions ?? 0) : 0;
       const lastUpdated = analytics?.lastUpdated ?? Date.now();
 
       // Calculate unique reach for the last 7 days
@@ -1452,7 +1439,9 @@ export const adsController = {
         .find({ adId: id, dateKey: { $in: dateKeys } })
         .toArray();
 
-      const reach = dailyReachDocs.reduce((sum, doc) => sum + (doc.uniqueReach || 0), 0);
+      const reach = canViewFullMetrics
+        ? dailyReachDocs.reduce((sum, doc) => sum + (doc.uniqueReach || 0), 0)
+        : 0;
 
       const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
 
@@ -1464,14 +1453,9 @@ export const adsController = {
         reach,
         engagement,
         conversions,
-        spend,
+        spend: 0,
         lastUpdated
       };
-
-      if (!isBasic) {
-        // data.engagement = engagement; // Always include for consistency
-        // data.spend = spend; // Always include for consistency
-      }
 
       if (isEnterprise) {
         data.audience = null; // coming soon
@@ -1525,38 +1509,9 @@ export const adsController = {
         .find({ adId: { $in: adIds } })
         .toArray();
 
-      // Check user/company subscription level
-      const now = Date.now();
-      const effectiveOwnerId = ownerId;
-      const effectiveOwnerType = ownerType;
-
-      const subscriptionQuery: any = {
-        status: 'active',
-        $or: [
-          { endDate: { $exists: false } },
-          { endDate: { $gt: now } }
-        ],
-        $and: [
-          {
-            $or: [
-              { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-              { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-            ]
-          }
-        ]
-      };
-
-      // If looking for user type, also match legacy documents without ownerType
-      if (effectiveOwnerType === 'user') {
-        (subscriptionQuery.$and[0] as any).$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-      }
-
-      const subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
-
-      const hasComplimentaryAccess = hasFullCompanyAccess(effectiveOwnerType, effectiveOwnerId);
-      const packageId = subscription
-        ? subscription.packageId
-        : (hasComplimentaryAccess ? 'pkg-enterprise' : 'pkg-starter');
+      const normalizedOwnerType: AdOwnerType = ownerType === 'company' ? 'company' : 'user';
+      const ownerPlanAccess = await resolveOwnerPlanAccess(db, ownerId, normalizedOwnerType, Date.now());
+      const canViewFullMetrics = ownerPlanAccess.entitlements.metricsTier === 'full';
 
       const analyticsMap = new Map<string, any>();
       analyticsDocs.forEach(doc => {
@@ -1567,10 +1522,9 @@ export const adsController = {
         const analytics = analyticsMap.get(ad.id);
         const impressions = analytics?.impressions ?? 0;
         const clicks = analytics?.clicks ?? 0;
-        const engagement = analytics?.engagement ?? 0;
-        const conversions = analytics?.conversions ?? 0;
-        const spend = analytics?.spend ?? 0;
-        const reach = analytics?.reach ?? impressions;
+        const engagement = canViewFullMetrics ? (analytics?.engagement ?? 0) : 0;
+        const conversions = canViewFullMetrics ? (analytics?.conversions ?? 0) : 0;
+        const reach = canViewFullMetrics ? (analytics?.reach ?? impressions) : 0;
         const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
         const lastUpdated = analytics?.lastUpdated ?? ad.timestamp;
 
@@ -1582,11 +1536,11 @@ export const adsController = {
           clicks,
           ctr,
           engagement,
-          spend,
+          spend: 0,
           reach,
           conversions,
           lastUpdated,
-          roi: spend > 0 ? (engagement + clicks) / spend : 0,
+          roi: 0,
           createdAt: ad.timestamp
         };
       });
@@ -1637,6 +1591,7 @@ export const adsController = {
             totalReach: 0,
             totalEngagement: 0,
             totalSpend: 0,
+            totalConversions: 0,
             averageCTR: 0,
             activeAds: 0,
             performanceScore: 0,
@@ -1645,46 +1600,15 @@ export const adsController = {
         });
       }
 
-      // Check user/company subscription level
       const now = Date.now();
-      const effectiveOwnerId = ownerId;
-      const effectiveOwnerType = ownerType;
-
-      const subscriptionQuery: any = {
-        status: 'active',
-        $or: [
-          { endDate: { $exists: false } },
-          { endDate: { $gt: now } }
-        ],
-        $and: [
-          {
-            $or: [
-              { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-              { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-            ]
-          }
-        ]
-      };
-
-      // If looking for user type, also match legacy documents without ownerType
-      if (effectiveOwnerType === 'user') {
-        (subscriptionQuery.$and[0] as any).$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-      }
-
-      const subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
-
-      const hasComplimentaryAccess = hasFullCompanyAccess(effectiveOwnerType, effectiveOwnerId);
-      const packageId = subscription
-        ? subscription.packageId
-        : (hasComplimentaryAccess ? 'pkg-enterprise' : 'pkg-starter');
-      const isBasic = packageId === 'pkg-starter';
-      // const isPro = packageId === 'pkg-pro';
-      // const isEnterprise = packageId === 'pkg-enterprise';
+      const normalizedOwnerType: AdOwnerType = ownerType === 'company' ? 'company' : 'user';
+      const ownerPlanAccess = await resolveOwnerPlanAccess(db, ownerId, normalizedOwnerType, now);
+      const canViewFullMetrics = ownerPlanAccess.entitlements.metricsTier === 'full';
+      const trendHistoryDays = Math.max(7, ownerPlanAccess.entitlements.analyticsHistoryDays || 7);
 
       let totalImpressions = 0;
       let totalClicks = 0;
       let totalEngagement = 0;
-      let totalSpend = 0;
       let totalConversions = 0;
       let activeAds = 0;
       let totalReach = 0;
@@ -1707,14 +1631,12 @@ export const adsController = {
         if (analytics) {
           totalImpressions += (analytics.impressions ?? 0);
           totalClicks += (analytics.clicks ?? 0);
-          
-          // Include all metrics regardless of plan for now to ensure data visibility
-          // We can enforce strict plan limits later if needed
-          totalEngagement += (analytics.engagement ?? 0);
-          totalSpend += (analytics.spend ?? 0);
-          totalConversions += (analytics.conversions ?? 0);
-          
-          totalReach += (analytics.reach ?? analytics.impressions ?? 0);
+
+          if (canViewFullMetrics) {
+            totalEngagement += (analytics.engagement ?? 0);
+            totalConversions += (analytics.conversions ?? 0);
+            totalReach += (analytics.reach ?? analytics.impressions ?? 0);
+          }
         }
       });
 
@@ -1725,7 +1647,7 @@ export const adsController = {
       const ctrScore = Math.min(100, (averageCTR / 2) * 100); // 2% CTR = 100 score
       let performanceScore = 0;
 
-      if (isBasic) {
+      if (!canViewFullMetrics) {
         // For basic plan, weight: 50% CTR, 50% active/fresh
         performanceScore = Math.round((ctrScore * 0.5) + (Math.min(100, activeAds * 20) * 0.5));
       } else {
@@ -1734,12 +1656,11 @@ export const adsController = {
         performanceScore = Math.round((ctrScore * 0.3) + (engScore * 0.3) + (Math.min(100, activeAds * 20) * 0.4));
       }
 
-      const daysToNextExpiry = subscription?.endDate 
-        ? Math.ceil((subscription.endDate - now) / (1000 * 60 * 60 * 24))
+      const daysToNextExpiry = ownerPlanAccess.subscription?.endDate
+        ? Math.ceil((ownerPlanAccess.subscription.endDate - now) / (1000 * 60 * 60 * 24))
         : null;
 
-      const build7DayTrend = async (ownerId: string, ownerType: string) => {
-        const days = 7;
+      const buildTrendHistory = async (targetOwnerId: string, targetOwnerType: AdOwnerType, days: number) => {
         const start = new Date();
         start.setUTCHours(0, 0, 0, 0);
         start.setUTCDate(start.getUTCDate() - (days - 1));
@@ -1752,7 +1673,7 @@ export const adsController = {
         }
 
         const docs = await db.collection('adAnalyticsDaily')
-          .find({ ownerId, ownerType, dateKey: { $in: keys } })
+          .find({ ownerId: targetOwnerId, ownerType: targetOwnerType, dateKey: { $in: keys } })
           .toArray();
 
         const map = new Map<string, any>();
@@ -1772,22 +1693,22 @@ export const adsController = {
           if (!row) continue;
           row.impressions += doc.impressions || 0;
           row.clicks += doc.clicks || 0;
-          row.engagement += doc.engagement || 0;
-          row.spend += doc.spend || 0;
+          row.engagement += canViewFullMetrics ? (doc.engagement || 0) : 0;
+          row.spend = 0;
         }
 
         return Array.from(map.values());
       };
 
-      const trendData = await build7DayTrend(ownerId, ownerType);
+      const trendData = await buildTrendHistory(ownerId, normalizedOwnerType, trendHistoryDays);
 
       const data: any = {
         totalImpressions,
         totalClicks,
-        totalReach,
-        totalEngagement,
-        totalSpend,
-        totalConversions,
+        totalReach: canViewFullMetrics ? totalReach : 0,
+        totalEngagement: canViewFullMetrics ? totalEngagement : 0,
+        totalSpend: 0,
+        totalConversions: canViewFullMetrics ? totalConversions : 0,
         averageCTR,
         activeAds,
         daysToNextExpiry,
@@ -1824,7 +1745,18 @@ export const adsController = {
         return res.status(200).json({ success: true, message: 'Ad not active, impression not tracked.' });
       }
 
-      // 2. Get Ad Owner's Subscription
+      // 2. Fast duplicate check before any subscription reads.
+      const dedupKey = `${id}-${todayKey}-${userFingerprint}`;
+      const existingDedupe = await db.collection('adEventDedupes').findOne(
+        { key: dedupKey },
+        { projection: { _id: 1 } }
+      );
+
+      if (existingDedupe) {
+        return res.status(200).json({ success: true, message: 'Duplicate impression, not tracked.' });
+      }
+
+      // 3. Get Ad Owner's Subscription
       const effectiveOwnerId = ad.ownerId;
       const effectiveOwnerType = ad.ownerType || 'user';
       const hasComplimentaryAccess = hasFullCompanyAccess(effectiveOwnerType, effectiveOwnerId);
@@ -1833,36 +1765,16 @@ export const adsController = {
       let plan: any | null = null;
 
       if (!hasComplimentaryAccess) {
-        const subscriptionQuery: any = {
-          status: 'active',
-          $or: [
-            { endDate: { $exists: false } },
-            { endDate: { $gt: now } }
-          ],
-          $and: [
-            {
-              $or: [
-                { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-              ]
-            }
-          ]
-        };
-
-        if (effectiveOwnerType === 'user') {
-          (subscriptionQuery.$and[0] as any).$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-        }
-
-        subscription = await db.collection('adSubscriptions').findOne(subscriptionQuery);
+        subscription = await findActiveSubscriptionForOwner(
+          db,
+          effectiveOwnerId,
+          effectiveOwnerType,
+          now,
+          { refreshPeriod: true }
+        );
 
         if (!subscription) {
           return res.status(200).json({ success: true, message: 'No active subscription for ad owner, impression not tracked.' });
-        }
-
-        subscription = await ensureCurrentPeriod(db, subscription);
-
-        if (!subscription) {
-          return res.status(200).json({ success: true, message: 'Subscription check failed, impression not tracked.' });
         }
 
         plan = AD_PLANS[subscription.packageId as keyof typeof AD_PLANS] || null;
@@ -1882,25 +1794,28 @@ export const adsController = {
         }
       }
 
-      // 4. Deduplicate Impressions (per day, per user fingerprint)
-      const dedupKey = `${id}-${todayKey}-${userFingerprint}`;
-      const existingDedupe = await db.collection('adEventDedupes').findOne({ key: dedupKey });
+      // 4. Record dedupe key atomically to avoid duplicate writes in races.
+      const dedupeReserve = await db.collection('adEventDedupes').updateOne(
+        { key: dedupKey },
+        {
+          $setOnInsert: {
+            key: dedupKey,
+            adId: id,
+            ownerId: ad.ownerId,
+            ownerType: ad.ownerType || 'user',
+            eventType: 'impression',
+            dateKey: todayKey,
+            fingerprint: userFingerprint,
+            timestamp: now,
+            expiresAt: new Date(now + 24 * 60 * 60 * 1000) // Expires in 24 hours
+          }
+        },
+        { upsert: true }
+      );
 
-      if (existingDedupe) {
+      if (dedupeReserve.upsertedCount === 0) {
         return res.status(200).json({ success: true, message: 'Duplicate impression, not tracked.' });
       }
-
-      // Record deduplication key
-      await db.collection('adEventDedupes').insertOne({
-        key: dedupKey,
-        adId: id,
-        ownerId: ad.ownerId,
-        ownerType: ad.ownerType || 'user',
-        dateKey: todayKey,
-        fingerprint: userFingerprint,
-        timestamp: now,
-        expiresAt: new Date(now + 24 * 60 * 60 * 1000) // Expires in 24 hours
-      });
 
       // Increment uniqueReach in adAnalyticsDaily
       await db.collection('adAnalyticsDaily').updateOne(

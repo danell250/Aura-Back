@@ -17,8 +17,8 @@ const db_1 = require("../db");
 const hashtagUtils_1 = require("../utils/hashtagUtils");
 const identityUtils_1 = require("../utils/identityUtils");
 const adPlans_1 = require("../constants/adPlans");
-const adSubscriptionsController_1 = require("./adSubscriptionsController");
 const companyAccess_1 = require("../utils/companyAccess");
+const adPlanAccess_1 = require("../utils/adPlanAccess");
 const crypto_1 = __importDefault(require("crypto"));
 const AD_UPDATE_ALLOWLIST = new Set([
     'headline',
@@ -34,7 +34,7 @@ const AD_UPDATE_ALLOWLIST = new Set([
     'placement',
     'expiryDate'
 ]);
-const AD_ALLOWED_PLACEMENTS = new Set(['feed', 'left', 'right', 'sidebar', 'story', 'search']);
+const AD_ALLOWED_PLACEMENTS = new Set(['feed', 'left', 'right', 'sidebar', 'story', 'search', 'profile']);
 const AD_ALLOWED_CAMPAIGN_WHY = new Set([
     'safe_clicks_conversions',
     'lead_capture_no_exit',
@@ -58,6 +58,15 @@ const AD_LEAD_EMAIL_REQUIRED_TYPES = new Set([
     'download_gate'
 ]);
 const SIMPLE_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const normalizePlacementToCanonical = (rawPlacement) => {
+    const placement = typeof rawPlacement === 'string' ? rawPlacement.trim().toLowerCase() : 'feed';
+    if (placement === 'search')
+        return 'search';
+    if (placement === 'profile' || placement === 'left' || placement === 'right' || placement === 'sidebar') {
+        return 'profile';
+    }
+    return 'feed';
+};
 const trimOptionalText = (value, maxLength) => {
     if (typeof value !== 'string')
         return undefined;
@@ -635,32 +644,8 @@ exports.adsController = {
             let reservedSubscriptionId = null;
             let subscription = null;
             const now = Date.now();
-            // Check subscription limits and enforce at ACTION TIME
-            // Fetch active subscription for the owner (user or company)
-            const subscriptionQuery = {
-                status: 'active',
-                $or: [
-                    { endDate: { $exists: false } },
-                    { endDate: { $gt: now } }
-                ],
-                $and: [
-                    {
-                        $or: [
-                            { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                            { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-                        ]
-                    }
-                ]
-            };
-            // If looking for user type, also match legacy documents without ownerType
-            if (effectiveOwnerType === 'user') {
-                subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-            }
-            subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
-            if (subscription) {
-                // Ensure period is current before checking limits
-                subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
-            }
+            // Check subscription limits and enforce at action time.
+            subscription = yield (0, adPlanAccess_1.findActiveSubscriptionForOwner)(db, effectiveOwnerId, effectiveOwnerType, now);
             if (!subscription && !hasComplimentaryAccess) {
                 return res.status(403).json({
                     success: false,
@@ -668,8 +653,23 @@ exports.adsController = {
                     message: 'No active ad plan found. Please purchase a plan to create ads.'
                 });
             }
+            const packageId = hasComplimentaryAccess
+                ? 'pkg-enterprise'
+                : ((typeof (subscription === null || subscription === void 0 ? void 0 : subscription.packageId) === 'string' && adPlans_1.AD_PLANS[subscription.packageId])
+                    ? subscription.packageId
+                    : 'pkg-starter');
+            const planEntitlements = (0, adPlans_1.getPlanEntitlements)(packageId);
+            const requestedPlacement = normalizePlacementToCanonical(adData.placement);
+            if (!planEntitlements.allowedPlacements.includes(requestedPlacement)) {
+                return res.status(403).json({
+                    success: false,
+                    code: 'PLACEMENT_NOT_ALLOWED',
+                    error: 'Placement not allowed for current plan',
+                    message: `Your ${adPlans_1.AD_PLANS[packageId].name} plan supports ${planEntitlements.allowedPlacements.join(', ')} placement only.`
+                });
+            }
             if (!hasComplimentaryAccess && subscription) {
-                const plan = adPlans_1.AD_PLANS[subscription.packageId];
+                const plan = adPlans_1.AD_PLANS[packageId];
                 const activeAdsLimit = plan ? plan.activeAdsLimit : 0;
                 if (activeAdsLimit > 0) {
                     const activeAdsCount = yield db.collection('ads').countDocuments({
@@ -768,7 +768,7 @@ exports.adsController = {
                 leadCapture: adData.leadCapture && typeof adData.leadCapture === 'object'
                     ? adData.leadCapture
                     : { type: 'none' },
-                placement: adData.placement,
+                placement: requestedPlacement,
                 expiryDate: adData.expiryDate,
                 ownerId: effectiveOwnerId,
                 ownerType: effectiveOwnerType,
@@ -911,6 +911,16 @@ exports.adsController = {
             if (!ad) {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
             }
+            const adOwnerType = ad.ownerType === 'company' ? 'company' : 'user';
+            const { packageId, entitlements } = yield (0, adPlanAccess_1.resolveOwnerPlanAccess)(db, ad.ownerId, adOwnerType, Date.now());
+            if (!entitlements.canBoost) {
+                return res.status(403).json({
+                    success: false,
+                    code: 'BOOST_NOT_ALLOWED',
+                    error: 'Boosting is not available for this plan',
+                    message: `Boosting is available on Pro Signal and Universal Signal. Upgrade from ${adPlans_1.AD_PLANS[packageId].name} to enable boosting.`
+                });
+            }
             const parsedCredits = typeof credits === 'string' ? Number(credits) : credits;
             const creditsToSpend = typeof parsedCredits === 'number' && Number.isFinite(parsedCredits) && parsedCredits > 0
                 ? Math.max(1, Math.round(parsedCredits))
@@ -1031,6 +1041,20 @@ exports.adsController = {
                     return res.status(403).json({ success: false, error: 'Forbidden' });
                 }
             }
+            if (typeof updates.placement === 'string') {
+                const normalizedPlacement = normalizePlacementToCanonical(updates.placement);
+                const ownerType = ad.ownerType === 'company' ? 'company' : 'user';
+                const { packageId, entitlements } = yield (0, adPlanAccess_1.resolveOwnerPlanAccess)(db, ad.ownerId, ownerType, Date.now());
+                if (!entitlements.allowedPlacements.includes(normalizedPlacement)) {
+                    return res.status(403).json({
+                        success: false,
+                        code: 'PLACEMENT_NOT_ALLOWED',
+                        error: 'Placement not allowed for current plan',
+                        message: `Your ${adPlans_1.AD_PLANS[packageId].name} plan supports ${entitlements.allowedPlacements.join(', ')} placement only.`
+                    });
+                }
+                updates.placement = normalizedPlacement;
+            }
             const result = yield db.collection('ads').findOneAndUpdate({ id }, { $set: Object.assign(Object.assign({}, updates), { updatedAt: new Date().toISOString() }) }, { returnDocument: 'after' });
             if (!result) {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
@@ -1115,30 +1139,7 @@ exports.adsController = {
                 const now = Date.now();
                 const effectiveOwnerId = ad.ownerId;
                 const effectiveOwnerType = ad.ownerType || 'user';
-                const subscriptionQuery = {
-                    status: 'active',
-                    $or: [
-                        { endDate: { $exists: false } },
-                        { endDate: { $gt: now } }
-                    ],
-                    $and: [
-                        {
-                            $or: [
-                                { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                                { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-                            ]
-                        }
-                    ]
-                };
-                // If looking for user type, also match legacy documents without ownerType
-                if (effectiveOwnerType === 'user') {
-                    subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-                }
-                let subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
-                if (subscription) {
-                    // Ensure period is current before checking limits
-                    subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
-                }
+                const subscription = yield (0, adPlanAccess_1.findActiveSubscriptionForOwner)(db, effectiveOwnerId, effectiveOwnerType, now, { refreshPeriod: true });
                 // Enforce active ads limit
                 if (subscription) {
                     const plan = adPlans_1.AD_PLANS[subscription.packageId];
@@ -1182,7 +1183,7 @@ exports.adsController = {
         }
     }),
     getAdAnalytics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
@@ -1209,43 +1210,16 @@ exports.adsController = {
                 }
             }
             const analytics = yield db.collection('adAnalytics').findOne({ adId: id });
-            // Check owner subscription level
-            const now = Date.now();
-            const effectiveOwnerId = ad.ownerId;
-            const effectiveOwnerType = ad.ownerType || 'user';
-            const subscriptionQuery = {
-                status: 'active',
-                $or: [
-                    { endDate: { $exists: false } },
-                    { endDate: { $gt: now } }
-                ],
-                $and: [
-                    {
-                        $or: [
-                            { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                            { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-                        ]
-                    }
-                ]
-            };
-            // If looking for user type, also match legacy documents without ownerType
-            if (effectiveOwnerType === 'user') {
-                subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-            }
-            const subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
-            const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(effectiveOwnerType, effectiveOwnerId);
-            const packageId = subscription
-                ? subscription.packageId
-                : (hasComplimentaryAccess ? 'pkg-enterprise' : 'pkg-starter');
-            const isBasic = packageId === 'pkg-starter';
-            const isPro = packageId === 'pkg-pro';
-            const isEnterprise = packageId === 'pkg-enterprise';
+            // Check owner plan level and metric access rules.
+            const ownerType = ad.ownerType === 'company' ? 'company' : 'user';
+            const ownerPlanAccess = yield (0, adPlanAccess_1.resolveOwnerPlanAccess)(db, ad.ownerId, ownerType, Date.now());
+            const canViewFullMetrics = ownerPlanAccess.entitlements.metricsTier === 'full';
+            const isEnterprise = ownerPlanAccess.packageId === 'pkg-enterprise';
             const impressions = (_a = analytics === null || analytics === void 0 ? void 0 : analytics.impressions) !== null && _a !== void 0 ? _a : 0;
             const clicks = (_b = analytics === null || analytics === void 0 ? void 0 : analytics.clicks) !== null && _b !== void 0 ? _b : 0;
-            const engagement = (_c = analytics === null || analytics === void 0 ? void 0 : analytics.engagement) !== null && _c !== void 0 ? _c : 0;
-            const conversions = (_d = analytics === null || analytics === void 0 ? void 0 : analytics.conversions) !== null && _d !== void 0 ? _d : 0;
-            const spend = (_e = analytics === null || analytics === void 0 ? void 0 : analytics.spend) !== null && _e !== void 0 ? _e : 0;
-            const lastUpdated = (_f = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _f !== void 0 ? _f : Date.now();
+            const engagement = canViewFullMetrics ? ((_c = analytics === null || analytics === void 0 ? void 0 : analytics.engagement) !== null && _c !== void 0 ? _c : 0) : 0;
+            const conversions = canViewFullMetrics ? ((_d = analytics === null || analytics === void 0 ? void 0 : analytics.conversions) !== null && _d !== void 0 ? _d : 0) : 0;
+            const lastUpdated = (_e = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _e !== void 0 ? _e : Date.now();
             // Calculate unique reach for the last 7 days
             const days = 7;
             const startDate = new Date();
@@ -1260,7 +1234,9 @@ exports.adsController = {
             const dailyReachDocs = yield db.collection('adAnalyticsDaily')
                 .find({ adId: id, dateKey: { $in: dateKeys } })
                 .toArray();
-            const reach = dailyReachDocs.reduce((sum, doc) => sum + (doc.uniqueReach || 0), 0);
+            const reach = canViewFullMetrics
+                ? dailyReachDocs.reduce((sum, doc) => sum + (doc.uniqueReach || 0), 0)
+                : 0;
             const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
             const data = {
                 adId: id,
@@ -1270,13 +1246,9 @@ exports.adsController = {
                 reach,
                 engagement,
                 conversions,
-                spend,
+                spend: 0,
                 lastUpdated
             };
-            if (!isBasic) {
-                // data.engagement = engagement; // Always include for consistency
-                // data.spend = spend; // Always include for consistency
-            }
             if (isEnterprise) {
                 data.audience = null; // coming soon
                 data.audienceStatus = 'coming_soon';
@@ -1321,49 +1293,23 @@ exports.adsController = {
                 .collection('adAnalytics')
                 .find({ adId: { $in: adIds } })
                 .toArray();
-            // Check user/company subscription level
-            const now = Date.now();
-            const effectiveOwnerId = ownerId;
-            const effectiveOwnerType = ownerType;
-            const subscriptionQuery = {
-                status: 'active',
-                $or: [
-                    { endDate: { $exists: false } },
-                    { endDate: { $gt: now } }
-                ],
-                $and: [
-                    {
-                        $or: [
-                            { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                            { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-                        ]
-                    }
-                ]
-            };
-            // If looking for user type, also match legacy documents without ownerType
-            if (effectiveOwnerType === 'user') {
-                subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-            }
-            const subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
-            const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(effectiveOwnerType, effectiveOwnerId);
-            const packageId = subscription
-                ? subscription.packageId
-                : (hasComplimentaryAccess ? 'pkg-enterprise' : 'pkg-starter');
+            const normalizedOwnerType = ownerType === 'company' ? 'company' : 'user';
+            const ownerPlanAccess = yield (0, adPlanAccess_1.resolveOwnerPlanAccess)(db, ownerId, normalizedOwnerType, Date.now());
+            const canViewFullMetrics = ownerPlanAccess.entitlements.metricsTier === 'full';
             const analyticsMap = new Map();
             analyticsDocs.forEach(doc => {
                 analyticsMap.set(doc.adId, doc);
             });
             const data = ads.map((ad) => {
-                var _a, _b, _c, _d, _e, _f, _g;
+                var _a, _b, _c, _d, _e, _f;
                 const analytics = analyticsMap.get(ad.id);
                 const impressions = (_a = analytics === null || analytics === void 0 ? void 0 : analytics.impressions) !== null && _a !== void 0 ? _a : 0;
                 const clicks = (_b = analytics === null || analytics === void 0 ? void 0 : analytics.clicks) !== null && _b !== void 0 ? _b : 0;
-                const engagement = (_c = analytics === null || analytics === void 0 ? void 0 : analytics.engagement) !== null && _c !== void 0 ? _c : 0;
-                const conversions = (_d = analytics === null || analytics === void 0 ? void 0 : analytics.conversions) !== null && _d !== void 0 ? _d : 0;
-                const spend = (_e = analytics === null || analytics === void 0 ? void 0 : analytics.spend) !== null && _e !== void 0 ? _e : 0;
-                const reach = (_f = analytics === null || analytics === void 0 ? void 0 : analytics.reach) !== null && _f !== void 0 ? _f : impressions;
+                const engagement = canViewFullMetrics ? ((_c = analytics === null || analytics === void 0 ? void 0 : analytics.engagement) !== null && _c !== void 0 ? _c : 0) : 0;
+                const conversions = canViewFullMetrics ? ((_d = analytics === null || analytics === void 0 ? void 0 : analytics.conversions) !== null && _d !== void 0 ? _d : 0) : 0;
+                const reach = canViewFullMetrics ? ((_e = analytics === null || analytics === void 0 ? void 0 : analytics.reach) !== null && _e !== void 0 ? _e : impressions) : 0;
                 const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-                const lastUpdated = (_g = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _g !== void 0 ? _g : ad.timestamp;
+                const lastUpdated = (_f = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _f !== void 0 ? _f : ad.timestamp;
                 return {
                     adId: ad.id,
                     adName: ad.headline,
@@ -1372,11 +1318,11 @@ exports.adsController = {
                     clicks,
                     ctr,
                     engagement,
-                    spend,
+                    spend: 0,
                     reach,
                     conversions,
                     lastUpdated,
-                    roi: spend > 0 ? (engagement + clicks) / spend : 0,
+                    roi: 0,
                     createdAt: ad.timestamp
                 };
             });
@@ -1391,6 +1337,7 @@ exports.adsController = {
         }
     }),
     getCampaignPerformance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             const { userId } = req.params;
             const ownerType = req.query.ownerType || 'user';
@@ -1421,6 +1368,7 @@ exports.adsController = {
                         totalReach: 0,
                         totalEngagement: 0,
                         totalSpend: 0,
+                        totalConversions: 0,
                         averageCTR: 0,
                         activeAds: 0,
                         performanceScore: 0,
@@ -1428,41 +1376,14 @@ exports.adsController = {
                     }
                 });
             }
-            // Check user/company subscription level
             const now = Date.now();
-            const effectiveOwnerId = ownerId;
-            const effectiveOwnerType = ownerType;
-            const subscriptionQuery = {
-                status: 'active',
-                $or: [
-                    { endDate: { $exists: false } },
-                    { endDate: { $gt: now } }
-                ],
-                $and: [
-                    {
-                        $or: [
-                            { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                            { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-                        ]
-                    }
-                ]
-            };
-            // If looking for user type, also match legacy documents without ownerType
-            if (effectiveOwnerType === 'user') {
-                subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-            }
-            const subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
-            const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(effectiveOwnerType, effectiveOwnerId);
-            const packageId = subscription
-                ? subscription.packageId
-                : (hasComplimentaryAccess ? 'pkg-enterprise' : 'pkg-starter');
-            const isBasic = packageId === 'pkg-starter';
-            // const isPro = packageId === 'pkg-pro';
-            // const isEnterprise = packageId === 'pkg-enterprise';
+            const normalizedOwnerType = ownerType === 'company' ? 'company' : 'user';
+            const ownerPlanAccess = yield (0, adPlanAccess_1.resolveOwnerPlanAccess)(db, ownerId, normalizedOwnerType, now);
+            const canViewFullMetrics = ownerPlanAccess.entitlements.metricsTier === 'full';
+            const trendHistoryDays = Math.max(7, ownerPlanAccess.entitlements.analyticsHistoryDays || 7);
             let totalImpressions = 0;
             let totalClicks = 0;
             let totalEngagement = 0;
-            let totalSpend = 0;
             let totalConversions = 0;
             let activeAds = 0;
             let totalReach = 0;
@@ -1476,19 +1397,18 @@ exports.adsController = {
                 analyticsMap.set(doc.adId, doc);
             });
             ads.forEach((ad) => {
-                var _a, _b, _c, _d, _e, _f, _g;
+                var _a, _b, _c, _d, _e, _f;
                 if (ad.status === 'active')
                     activeAds++;
                 const analytics = analyticsMap.get(ad.id);
                 if (analytics) {
                     totalImpressions += ((_a = analytics.impressions) !== null && _a !== void 0 ? _a : 0);
                     totalClicks += ((_b = analytics.clicks) !== null && _b !== void 0 ? _b : 0);
-                    // Include all metrics regardless of plan for now to ensure data visibility
-                    // We can enforce strict plan limits later if needed
-                    totalEngagement += ((_c = analytics.engagement) !== null && _c !== void 0 ? _c : 0);
-                    totalSpend += ((_d = analytics.spend) !== null && _d !== void 0 ? _d : 0);
-                    totalConversions += ((_e = analytics.conversions) !== null && _e !== void 0 ? _e : 0);
-                    totalReach += ((_g = (_f = analytics.reach) !== null && _f !== void 0 ? _f : analytics.impressions) !== null && _g !== void 0 ? _g : 0);
+                    if (canViewFullMetrics) {
+                        totalEngagement += ((_c = analytics.engagement) !== null && _c !== void 0 ? _c : 0);
+                        totalConversions += ((_d = analytics.conversions) !== null && _d !== void 0 ? _d : 0);
+                        totalReach += ((_f = (_e = analytics.reach) !== null && _e !== void 0 ? _e : analytics.impressions) !== null && _f !== void 0 ? _f : 0);
+                    }
                 }
             });
             const averageCTR = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
@@ -1496,7 +1416,7 @@ exports.adsController = {
             // Weighted: 30% CTR, 30% Engagement Rate, 40% active/fresh factor
             const ctrScore = Math.min(100, (averageCTR / 2) * 100); // 2% CTR = 100 score
             let performanceScore = 0;
-            if (isBasic) {
+            if (!canViewFullMetrics) {
                 // For basic plan, weight: 50% CTR, 50% active/fresh
                 performanceScore = Math.round((ctrScore * 0.5) + (Math.min(100, activeAds * 20) * 0.5));
             }
@@ -1505,11 +1425,10 @@ exports.adsController = {
                 const engScore = Math.min(100, (engRate / 0.05) * 100); // 5% engagement = 100 score
                 performanceScore = Math.round((ctrScore * 0.3) + (engScore * 0.3) + (Math.min(100, activeAds * 20) * 0.4));
             }
-            const daysToNextExpiry = (subscription === null || subscription === void 0 ? void 0 : subscription.endDate)
-                ? Math.ceil((subscription.endDate - now) / (1000 * 60 * 60 * 24))
+            const daysToNextExpiry = ((_a = ownerPlanAccess.subscription) === null || _a === void 0 ? void 0 : _a.endDate)
+                ? Math.ceil((ownerPlanAccess.subscription.endDate - now) / (1000 * 60 * 60 * 24))
                 : null;
-            const build7DayTrend = (ownerId, ownerType) => __awaiter(void 0, void 0, void 0, function* () {
-                const days = 7;
+            const buildTrendHistory = (targetOwnerId, targetOwnerType, days) => __awaiter(void 0, void 0, void 0, function* () {
                 const start = new Date();
                 start.setUTCHours(0, 0, 0, 0);
                 start.setUTCDate(start.getUTCDate() - (days - 1));
@@ -1520,7 +1439,7 @@ exports.adsController = {
                     keys.push(d.toISOString().slice(0, 10));
                 }
                 const docs = yield db.collection('adAnalyticsDaily')
-                    .find({ ownerId, ownerType, dateKey: { $in: keys } })
+                    .find({ ownerId: targetOwnerId, ownerType: targetOwnerType, dateKey: { $in: keys } })
                     .toArray();
                 const map = new Map();
                 for (const k of keys) {
@@ -1539,19 +1458,19 @@ exports.adsController = {
                         continue;
                     row.impressions += doc.impressions || 0;
                     row.clicks += doc.clicks || 0;
-                    row.engagement += doc.engagement || 0;
-                    row.spend += doc.spend || 0;
+                    row.engagement += canViewFullMetrics ? (doc.engagement || 0) : 0;
+                    row.spend = 0;
                 }
                 return Array.from(map.values());
             });
-            const trendData = yield build7DayTrend(ownerId, ownerType);
+            const trendData = yield buildTrendHistory(ownerId, normalizedOwnerType, trendHistoryDays);
             const data = {
                 totalImpressions,
                 totalClicks,
-                totalReach,
-                totalEngagement,
-                totalSpend,
-                totalConversions,
+                totalReach: canViewFullMetrics ? totalReach : 0,
+                totalEngagement: canViewFullMetrics ? totalEngagement : 0,
+                totalSpend: 0,
+                totalConversions: canViewFullMetrics ? totalConversions : 0,
                 averageCTR,
                 activeAds,
                 daysToNextExpiry,
@@ -1584,38 +1503,22 @@ exports.adsController = {
             if (ad.status !== 'active') {
                 return res.status(200).json({ success: true, message: 'Ad not active, impression not tracked.' });
             }
-            // 2. Get Ad Owner's Subscription
+            // 2. Fast duplicate check before any subscription reads.
+            const dedupKey = `${id}-${todayKey}-${userFingerprint}`;
+            const existingDedupe = yield db.collection('adEventDedupes').findOne({ key: dedupKey }, { projection: { _id: 1 } });
+            if (existingDedupe) {
+                return res.status(200).json({ success: true, message: 'Duplicate impression, not tracked.' });
+            }
+            // 3. Get Ad Owner's Subscription
             const effectiveOwnerId = ad.ownerId;
             const effectiveOwnerType = ad.ownerType || 'user';
             const hasComplimentaryAccess = (0, companyAccess_1.hasFullCompanyAccess)(effectiveOwnerType, effectiveOwnerId);
             let subscription = null;
             let plan = null;
             if (!hasComplimentaryAccess) {
-                const subscriptionQuery = {
-                    status: 'active',
-                    $or: [
-                        { endDate: { $exists: false } },
-                        { endDate: { $gt: now } }
-                    ],
-                    $and: [
-                        {
-                            $or: [
-                                { ownerId: effectiveOwnerId, ownerType: effectiveOwnerType },
-                                { userId: effectiveOwnerId, ownerType: effectiveOwnerType } // backward compatibility
-                            ]
-                        }
-                    ]
-                };
-                if (effectiveOwnerType === 'user') {
-                    subscriptionQuery.$and[0].$or.push({ userId: effectiveOwnerId, ownerType: { $exists: false } });
-                }
-                subscription = yield db.collection('adSubscriptions').findOne(subscriptionQuery);
+                subscription = yield (0, adPlanAccess_1.findActiveSubscriptionForOwner)(db, effectiveOwnerId, effectiveOwnerType, now, { refreshPeriod: true });
                 if (!subscription) {
                     return res.status(200).json({ success: true, message: 'No active subscription for ad owner, impression not tracked.' });
-                }
-                subscription = yield (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
-                if (!subscription) {
-                    return res.status(200).json({ success: true, message: 'Subscription check failed, impression not tracked.' });
                 }
                 plan = adPlans_1.AD_PLANS[subscription.packageId] || null;
                 if (!plan) {
@@ -1632,23 +1535,23 @@ exports.adsController = {
                     });
                 }
             }
-            // 4. Deduplicate Impressions (per day, per user fingerprint)
-            const dedupKey = `${id}-${todayKey}-${userFingerprint}`;
-            const existingDedupe = yield db.collection('adEventDedupes').findOne({ key: dedupKey });
-            if (existingDedupe) {
+            // 4. Record dedupe key atomically to avoid duplicate writes in races.
+            const dedupeReserve = yield db.collection('adEventDedupes').updateOne({ key: dedupKey }, {
+                $setOnInsert: {
+                    key: dedupKey,
+                    adId: id,
+                    ownerId: ad.ownerId,
+                    ownerType: ad.ownerType || 'user',
+                    eventType: 'impression',
+                    dateKey: todayKey,
+                    fingerprint: userFingerprint,
+                    timestamp: now,
+                    expiresAt: new Date(now + 24 * 60 * 60 * 1000) // Expires in 24 hours
+                }
+            }, { upsert: true });
+            if (dedupeReserve.upsertedCount === 0) {
                 return res.status(200).json({ success: true, message: 'Duplicate impression, not tracked.' });
             }
-            // Record deduplication key
-            yield db.collection('adEventDedupes').insertOne({
-                key: dedupKey,
-                adId: id,
-                ownerId: ad.ownerId,
-                ownerType: ad.ownerType || 'user',
-                dateKey: todayKey,
-                fingerprint: userFingerprint,
-                timestamp: now,
-                expiresAt: new Date(now + 24 * 60 * 60 * 1000) // Expires in 24 hours
-            });
             // Increment uniqueReach in adAnalyticsDaily
             yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: todayKey }, { $inc: { uniqueReach: 1 } }, { upsert: true });
             // 5. Determine Cost Per Impression (CPI)
