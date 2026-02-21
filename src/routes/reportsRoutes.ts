@@ -46,6 +46,7 @@ const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REPORT_RUNNER_INTERVAL_MS = 60 * 1000;
 const REPORT_RUNNER_BATCH_LIMIT = 20;
 const REPORT_PREVIEW_DAILY_LIMIT = 30;
+const REPORT_CAMPAIGN_DATA_MAX_ROWS = 10000;
 const WEEKDAY_TO_INDEX: Record<WeekdayName, number> = {
   Monday: 1,
   Tuesday: 2,
@@ -241,6 +242,85 @@ const buildOwnerAnalyticsMatch = (ownerId: string, ownerType: 'user' | 'company'
   };
 };
 
+type CampaignMeta = { name: string; status: string; lastUpdated?: number };
+type CampaignDataRow = {
+  id: string;
+  name: string;
+  status: string;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  ctr: number;
+  conversions: number;
+  lastUpdated: number;
+};
+type AnalyticsTotals = {
+  impressions: number;
+  clicks: number;
+  engagement: number;
+  reach: number;
+  conversions: number;
+};
+
+const aggregateAnalyticsTotals = (rows: any[]): AnalyticsTotals => rows.reduce(
+  (acc: AnalyticsTotals, row: any) => {
+    acc.impressions += Number(row?.impressions || 0);
+    acc.clicks += Number(row?.clicks || 0);
+    acc.engagement += Number(row?.engagement || 0);
+    acc.reach += Number(row?.reach || 0);
+    acc.conversions += Number(row?.conversions || 0);
+    return acc;
+  },
+  { impressions: 0, clicks: 0, engagement: 0, reach: 0, conversions: 0 }
+);
+
+const mapCampaignDataRows = (rows: any[], adMetaMap: Map<string, CampaignMeta>): CampaignDataRow[] => rows.map((row: any) => {
+  const impressions = Number(row?.impressions || 0);
+  const clicks = Number(row?.clicks || 0);
+  const adMeta = adMetaMap.get(String(row?.adId || ''));
+  return {
+    id: String(row?.adId || ''),
+    name: adMeta?.name || String(row?.adId || 'Untitled Signal'),
+    status: adMeta?.status || 'active',
+    impressions,
+    reach: Number(row?.reach || 0),
+    clicks,
+    ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
+    conversions: Number(row?.conversions || 0),
+    lastUpdated: adMeta?.lastUpdated || Date.now()
+  };
+});
+
+const buildTopSignals = (campaignData: CampaignDataRow[]) => campaignData.slice(0, 5).map((row) => ({
+  name: row.name,
+  ctr: row.ctr,
+  reach: row.reach
+}));
+
+const buildRecommendations = (
+  ctr: number,
+  totals: AnalyticsTotals,
+  topSignals: Array<{ name: string; ctr: number; reach: number }>
+) => {
+  const recommendations: string[] = [];
+  if (ctr < 1.5) {
+    recommendations.push('Refresh creative and CTA on your lowest-performing signals.');
+  } else {
+    recommendations.push('Scale distribution behind top-performing creative in the next cycle.');
+  }
+  if (totals.conversions < Math.max(1, totals.clicks * 0.02)) {
+    recommendations.push('Improve landing-page relevance to increase conversion quality.');
+  } else {
+    recommendations.push('Replicate winning conversion paths to adjacent audience segments.');
+  }
+  if (topSignals[0]?.name) {
+    recommendations.push(`Prioritize delivery behind "${topSignals[0].name}" until next report cycle.`);
+  } else {
+    recommendations.push('Launch one additional signal to improve trend and optimization depth.');
+  }
+  return recommendations;
+};
+
 const buildScheduledSummaryPayload = async (schedule: ReportScheduleDoc) => {
   const db = getDB();
   const match = buildOwnerAnalyticsMatch(schedule.ownerId, schedule.ownerType);
@@ -252,62 +332,36 @@ const buildScheduledSummaryPayload = async (schedule: ReportScheduleDoc) => {
       clicks: 1,
       engagement: 1,
       reach: 1,
-      spend: 1,
       conversions: 1
     })
-    .sort({ clicks: -1, impressions: -1 })
-    .limit(100)
+    .sort({ impressions: -1, clicks: -1 })
+    .limit(REPORT_CAMPAIGN_DATA_MAX_ROWS)
     .toArray();
 
-  const totals = rows.reduce(
-    (acc: any, row: any) => {
-      acc.impressions += Number(row?.impressions || 0);
-      acc.clicks += Number(row?.clicks || 0);
-      acc.reach += Number(row?.reach || 0);
-      acc.spend += Number(row?.spend || 0);
-      acc.conversions += Number(row?.conversions || 0);
-      return acc;
-    },
-    { impressions: 0, clicks: 0, reach: 0, spend: 0, conversions: 0 }
-  );
+  const totals = aggregateAnalyticsTotals(rows);
 
   const adIds = Array.from(new Set(rows.map((row: any) => row?.adId).filter((id): id is string => typeof id === 'string' && id.length > 0)));
   const ads = adIds.length
-    ? await db.collection('ads').find({ id: { $in: adIds } }).project({ id: 1, headline: 1 }).toArray()
+    ? await db.collection('ads').find({ id: { $in: adIds } }).project({ id: 1, headline: 1, status: 1, lastUpdated: 1 }).toArray()
     : [];
-  const adNameMap = new Map<string, string>(ads.map((ad: any) => [String(ad.id), String(ad.headline || 'Untitled Signal')]));
+  const adMetaMap = new Map<string, CampaignMeta>(
+    ads.map((ad: any) => [
+      String(ad.id),
+      {
+        name: String(ad.headline || 'Untitled Signal'),
+        status: String(ad.status || 'active'),
+        lastUpdated: Number(ad.lastUpdated || 0) || undefined
+      }
+    ])
+  );
 
-  const topSignals = rows.slice(0, 5).map((row: any) => {
-    const impressions = Number(row?.impressions || 0);
-    const clicks = Number(row?.clicks || 0);
-    return {
-      name: adNameMap.get(String(row?.adId || '')) || String(row?.adId || 'Untitled Signal'),
-      ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
-      reach: Number(row?.reach || 0)
-    };
-  });
+  const campaignData = mapCampaignDataRows(rows, adMetaMap);
+  const topSignals = buildTopSignals(campaignData);
 
   const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
-  const auraEfficiency = totals.spend > 0
-    ? ((totals.clicks + totals.conversions * 2) / totals.spend)
-    : 0;
-
-  const recommendations: string[] = [];
-  if (ctr < 1.5) {
-    recommendations.push('Refresh creative and CTA on your lowest-performing signals.');
-  } else {
-    recommendations.push('Scale spend behind top-performing creative in the next cycle.');
-  }
-  if (totals.conversions < Math.max(1, totals.clicks * 0.02)) {
-    recommendations.push('Improve landing-page relevance to increase conversion quality.');
-  } else {
-    recommendations.push('Replicate winning conversion paths to adjacent audience segments.');
-  }
-  if (topSignals[0]?.name) {
-    recommendations.push(`Prioritize budget behind "${topSignals[0].name}" until next report cycle.`);
-  } else {
-    recommendations.push('Launch one additional signal to improve trend and optimization depth.');
-  }
+  const conversionRate = totals.clicks > 0 ? (totals.conversions / totals.clicks) * 100 : 0;
+  const auraEfficiency = Number(((ctr * 0.65) + (conversionRate * 0.35)).toFixed(2));
+  const recommendations = buildRecommendations(ctr, totals, topSignals);
 
   return {
     periodLabel: schedule.frequency === 'daily'
@@ -322,9 +376,9 @@ const buildScheduledSummaryPayload = async (schedule: ReportScheduleDoc) => {
       ctr,
       clicks: totals.clicks,
       conversions: totals.conversions,
-      spend: totals.spend,
       auraEfficiency
     },
+    campaignData,
     topSignals,
     recommendations
   };

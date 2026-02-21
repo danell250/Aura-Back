@@ -118,29 +118,63 @@ const safeText = (value, fallback = 'N/A') => {
         return value.trim();
     return fallback;
 };
+const escapeHtml = (value) => value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+const safeHtmlText = (value, fallback = 'N/A') => escapeHtml(safeText(value, fallback));
 const safeNumber = (value, digits = 2) => {
     const numberValue = Number(value);
     if (!Number.isFinite(numberValue))
         return Number(0).toFixed(digits);
     return numberValue.toFixed(digits);
 };
+const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
+const buildCampaignRowsHtml = (campaignData) => __awaiter(void 0, void 0, void 0, function* () {
+    if (!Array.isArray(campaignData) || campaignData.length === 0)
+        return '';
+    const rows = [];
+    for (let index = 0; index < campaignData.length; index += 1) {
+        const row = campaignData[index];
+        rows.push(`
+      <tr>
+        <td style="padding:8px;border-bottom:1px solid #f1f5f9;color:#0f172a;font-weight:600;">${safeHtmlText(row.name, 'Untitled Signal')}</td>
+        <td style="padding:8px;border-bottom:1px solid #f1f5f9;color:#334155;">${safeHtmlText(row.status, 'active')}</td>
+        <td style="padding:8px;border-bottom:1px solid #f1f5f9;color:#0f172a;text-align:right;">${Number(row.impressions || 0).toLocaleString()}</td>
+        <td style="padding:8px;border-bottom:1px solid #f1f5f9;color:#0f172a;text-align:right;">${Number(row.reach || 0).toLocaleString()}</td>
+        <td style="padding:8px;border-bottom:1px solid #f1f5f9;color:#0f172a;text-align:right;">${Number(row.clicks || 0).toLocaleString()}</td>
+        <td style="padding:8px;border-bottom:1px solid #f1f5f9;color:#0f172a;text-align:right;">${safeNumber(row.ctr, 2)}%</td>
+        <td style="padding:8px;border-bottom:1px solid #f1f5f9;color:#0f172a;text-align:right;">${Number(row.conversions || 0).toLocaleString()}</td>
+      </tr>
+    `);
+        if ((index + 1) % 250 === 0) {
+            yield yieldToEventLoop();
+        }
+    }
+    return rows.join('');
+});
 function sendReportPreviewEmail(to, payload) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+        var _a, _b, _c, _d, _e, _f, _g;
         const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
         const metricReach = Number(((_a = payload.metrics) === null || _a === void 0 ? void 0 : _a.reach) || 0).toLocaleString();
         const metricCtr = safeNumber((_b = payload.metrics) === null || _b === void 0 ? void 0 : _b.ctr, 2);
         const metricClicks = Number(((_c = payload.metrics) === null || _c === void 0 ? void 0 : _c.clicks) || 0).toLocaleString();
         const metricConversions = Number(((_d = payload.metrics) === null || _d === void 0 ? void 0 : _d.conversions) || 0).toLocaleString();
         const metricEfficiency = safeNumber((_e = payload.metrics) === null || _e === void 0 ? void 0 : _e.auraEfficiency, 2);
-        const metricSpend = safeNumber((_f = payload.metrics) === null || _f === void 0 ? void 0 : _f.spend, 2);
         const periodLabel = safeText(payload.periodLabel, 'Last 7 days');
+        const periodLabelHtml = safeHtmlText(payload.periodLabel, 'Last 7 days');
         const scopeLabel = safeText(payload.scope, 'all_signals').replace('_', ' ');
-        const topSignals = Array.isArray(payload.topSignals) ? payload.topSignals.slice(0, 3) : [];
+        const scopeLabelHtml = safeHtmlText(payload.scope, 'all_signals').replace('_', ' ');
+        const topSignals = Array.isArray(payload.topSignals) ? payload.topSignals.slice(0, 5) : [];
         const recommendations = Array.isArray(payload.recommendations) ? payload.recommendations.slice(0, 3) : [];
+        const campaignData = Array.isArray(payload.campaignData) ? payload.campaignData : [];
+        const campaignRowsHtml = yield buildCampaignRowsHtml(campaignData);
         const deliveryMode = payload.deliveryMode === 'pdf_attachment' ? 'pdf_attachment' : 'inline_email';
-        const attachmentName = safeText((_g = payload.pdfAttachment) === null || _g === void 0 ? void 0 : _g.filename, `aura-scheduled-report-${new Date().toISOString().split('T')[0]}.pdf`);
-        const attachmentContent = typeof ((_h = payload.pdfAttachment) === null || _h === void 0 ? void 0 : _h.contentBase64) === 'string'
+        const attachmentName = safeText((_f = payload.pdfAttachment) === null || _f === void 0 ? void 0 : _f.filename, `aura-scheduled-report-${new Date().toISOString().split('T')[0]}.pdf`);
+        const attachmentContent = typeof ((_g = payload.pdfAttachment) === null || _g === void 0 ? void 0 : _g.contentBase64) === 'string'
             ? payload.pdfAttachment.contentBase64.replace(/^data:application\/pdf;base64,/, '').trim()
             : '';
         const shouldAttachPdf = deliveryMode === 'pdf_attachment' && attachmentContent.length > 0;
@@ -167,7 +201,7 @@ function sendReportPreviewEmail(to, payload) {
           <div style="background: linear-gradient(135deg, #0f172a 0%, #0b1120 70%); color: white; padding: 28px 28px 20px 28px;">
             <p style="margin:0;font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#6ee7b7;font-weight:800;">Aura Reports</p>
             <h2 style="margin:10px 0 6px 0;font-size:24px;line-height:1.2;">Scheduled Report Preview</h2>
-            <p style="margin:0;color:#cbd5e1;font-size:13px;">${periodLabel} • Scope: ${scopeLabel}</p>
+            <p style="margin:0;color:#cbd5e1;font-size:13px;">${periodLabelHtml} • Scope: ${scopeLabelHtml}</p>
             ${shouldAttachPdf ? '<p style="margin:8px 0 0 0;color:#a7f3d0;font-size:12px;">Full report PDF attached.</p>' : ''}
           </div>
           <div style="padding: 24px 28px;">
@@ -178,19 +212,39 @@ function sendReportPreviewEmail(to, payload) {
               <tr><td style="padding:8px 0;color:#475569;">Clicks</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${metricClicks}</td></tr>
               <tr><td style="padding:8px 0;color:#475569;">Conversions</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${metricConversions}</td></tr>
               <tr><td style="padding:8px 0;color:#475569;">Aura Efficiency</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${metricEfficiency}</td></tr>
-              <tr><td style="padding:8px 0;color:#475569;">Spend</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">$${metricSpend}</td></tr>
             </table>
 
             ${topSignals.length > 0 ? `
             <h3 style="margin:0 0 8px 0;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;">Top Signals</h3>
             <ul style="margin:0 0 16px 18px;padding:0;color:#334155;">
-              ${topSignals.map((signal) => `<li style="margin-bottom:6px;">${safeText(signal.name)} • CTR ${safeNumber(signal.ctr, 2)}% • Reach ${Number(signal.reach || 0).toLocaleString()}</li>`).join('')}
+              ${topSignals.map((signal) => `<li style="margin-bottom:6px;">${safeHtmlText(signal.name)} • CTR ${safeNumber(signal.ctr, 2)}% • Reach ${Number(signal.reach || 0).toLocaleString()}</li>`).join('')}
             </ul>` : ''}
+
+            ${campaignData.length > 0 ? `
+            <h3 style="margin:0 0 8px 0;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;">Full Campaign Data</h3>
+            <div style="overflow:auto;margin-bottom:16px;">
+              <table style="width:100%;border-collapse:collapse;min-width:640px;">
+                <thead>
+                  <tr>
+                    <th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;">Signal</th>
+                    <th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;">Status</th>
+                    <th style="text-align:right;padding:8px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;">Impressions</th>
+                    <th style="text-align:right;padding:8px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;">Reach</th>
+                    <th style="text-align:right;padding:8px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;">Clicks</th>
+                    <th style="text-align:right;padding:8px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;">CTR</th>
+                    <th style="text-align:right;padding:8px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;">Conversions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${campaignRowsHtml}
+                </tbody>
+              </table>
+            </div>` : ''}
 
             ${recommendations.length > 0 ? `
             <h3 style="margin:0 0 8px 0;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;">Recommendations</h3>
             <ul style="margin:0 0 4px 18px;padding:0;color:#334155;">
-              ${recommendations.map((item) => `<li style="margin-bottom:6px;">${safeText(item)}</li>`).join('')}
+              ${recommendations.map((item) => `<li style="margin-bottom:6px;">${safeHtmlText(item)}</li>`).join('')}
             </ul>` : ''}
           </div>
         </div>

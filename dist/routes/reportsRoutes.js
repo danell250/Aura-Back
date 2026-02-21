@@ -26,6 +26,7 @@ const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REPORT_RUNNER_INTERVAL_MS = 60 * 1000;
 const REPORT_RUNNER_BATCH_LIMIT = 20;
 const REPORT_PREVIEW_DAILY_LIMIT = 30;
+const REPORT_CAMPAIGN_DATA_MAX_ROWS = 10000;
 const WEEKDAY_TO_INDEX = {
     Monday: 1,
     Tuesday: 2,
@@ -185,8 +186,59 @@ const buildOwnerAnalyticsMatch = (ownerId, ownerType) => {
         ]
     };
 };
-const buildScheduledSummaryPayload = (schedule) => __awaiter(void 0, void 0, void 0, function* () {
+const aggregateAnalyticsTotals = (rows) => rows.reduce((acc, row) => {
+    acc.impressions += Number((row === null || row === void 0 ? void 0 : row.impressions) || 0);
+    acc.clicks += Number((row === null || row === void 0 ? void 0 : row.clicks) || 0);
+    acc.engagement += Number((row === null || row === void 0 ? void 0 : row.engagement) || 0);
+    acc.reach += Number((row === null || row === void 0 ? void 0 : row.reach) || 0);
+    acc.conversions += Number((row === null || row === void 0 ? void 0 : row.conversions) || 0);
+    return acc;
+}, { impressions: 0, clicks: 0, engagement: 0, reach: 0, conversions: 0 });
+const mapCampaignDataRows = (rows, adMetaMap) => rows.map((row) => {
+    const impressions = Number((row === null || row === void 0 ? void 0 : row.impressions) || 0);
+    const clicks = Number((row === null || row === void 0 ? void 0 : row.clicks) || 0);
+    const adMeta = adMetaMap.get(String((row === null || row === void 0 ? void 0 : row.adId) || ''));
+    return {
+        id: String((row === null || row === void 0 ? void 0 : row.adId) || ''),
+        name: (adMeta === null || adMeta === void 0 ? void 0 : adMeta.name) || String((row === null || row === void 0 ? void 0 : row.adId) || 'Untitled Signal'),
+        status: (adMeta === null || adMeta === void 0 ? void 0 : adMeta.status) || 'active',
+        impressions,
+        reach: Number((row === null || row === void 0 ? void 0 : row.reach) || 0),
+        clicks,
+        ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
+        conversions: Number((row === null || row === void 0 ? void 0 : row.conversions) || 0),
+        lastUpdated: (adMeta === null || adMeta === void 0 ? void 0 : adMeta.lastUpdated) || Date.now()
+    };
+});
+const buildTopSignals = (campaignData) => campaignData.slice(0, 5).map((row) => ({
+    name: row.name,
+    ctr: row.ctr,
+    reach: row.reach
+}));
+const buildRecommendations = (ctr, totals, topSignals) => {
     var _a;
+    const recommendations = [];
+    if (ctr < 1.5) {
+        recommendations.push('Refresh creative and CTA on your lowest-performing signals.');
+    }
+    else {
+        recommendations.push('Scale distribution behind top-performing creative in the next cycle.');
+    }
+    if (totals.conversions < Math.max(1, totals.clicks * 0.02)) {
+        recommendations.push('Improve landing-page relevance to increase conversion quality.');
+    }
+    else {
+        recommendations.push('Replicate winning conversion paths to adjacent audience segments.');
+    }
+    if ((_a = topSignals[0]) === null || _a === void 0 ? void 0 : _a.name) {
+        recommendations.push(`Prioritize delivery behind "${topSignals[0].name}" until next report cycle.`);
+    }
+    else {
+        recommendations.push('Launch one additional signal to improve trend and optimization depth.');
+    }
+    return recommendations;
+};
+const buildScheduledSummaryPayload = (schedule) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
     const match = buildOwnerAnalyticsMatch(schedule.ownerId, schedule.ownerType);
     const rows = yield db.collection('adAnalytics')
@@ -197,57 +249,30 @@ const buildScheduledSummaryPayload = (schedule) => __awaiter(void 0, void 0, voi
         clicks: 1,
         engagement: 1,
         reach: 1,
-        spend: 1,
         conversions: 1
     })
-        .sort({ clicks: -1, impressions: -1 })
-        .limit(100)
+        .sort({ impressions: -1, clicks: -1 })
+        .limit(REPORT_CAMPAIGN_DATA_MAX_ROWS)
         .toArray();
-    const totals = rows.reduce((acc, row) => {
-        acc.impressions += Number((row === null || row === void 0 ? void 0 : row.impressions) || 0);
-        acc.clicks += Number((row === null || row === void 0 ? void 0 : row.clicks) || 0);
-        acc.reach += Number((row === null || row === void 0 ? void 0 : row.reach) || 0);
-        acc.spend += Number((row === null || row === void 0 ? void 0 : row.spend) || 0);
-        acc.conversions += Number((row === null || row === void 0 ? void 0 : row.conversions) || 0);
-        return acc;
-    }, { impressions: 0, clicks: 0, reach: 0, spend: 0, conversions: 0 });
+    const totals = aggregateAnalyticsTotals(rows);
     const adIds = Array.from(new Set(rows.map((row) => row === null || row === void 0 ? void 0 : row.adId).filter((id) => typeof id === 'string' && id.length > 0)));
     const ads = adIds.length
-        ? yield db.collection('ads').find({ id: { $in: adIds } }).project({ id: 1, headline: 1 }).toArray()
+        ? yield db.collection('ads').find({ id: { $in: adIds } }).project({ id: 1, headline: 1, status: 1, lastUpdated: 1 }).toArray()
         : [];
-    const adNameMap = new Map(ads.map((ad) => [String(ad.id), String(ad.headline || 'Untitled Signal')]));
-    const topSignals = rows.slice(0, 5).map((row) => {
-        const impressions = Number((row === null || row === void 0 ? void 0 : row.impressions) || 0);
-        const clicks = Number((row === null || row === void 0 ? void 0 : row.clicks) || 0);
-        return {
-            name: adNameMap.get(String((row === null || row === void 0 ? void 0 : row.adId) || '')) || String((row === null || row === void 0 ? void 0 : row.adId) || 'Untitled Signal'),
-            ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
-            reach: Number((row === null || row === void 0 ? void 0 : row.reach) || 0)
-        };
-    });
+    const adMetaMap = new Map(ads.map((ad) => [
+        String(ad.id),
+        {
+            name: String(ad.headline || 'Untitled Signal'),
+            status: String(ad.status || 'active'),
+            lastUpdated: Number(ad.lastUpdated || 0) || undefined
+        }
+    ]));
+    const campaignData = mapCampaignDataRows(rows, adMetaMap);
+    const topSignals = buildTopSignals(campaignData);
     const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
-    const auraEfficiency = totals.spend > 0
-        ? ((totals.clicks + totals.conversions * 2) / totals.spend)
-        : 0;
-    const recommendations = [];
-    if (ctr < 1.5) {
-        recommendations.push('Refresh creative and CTA on your lowest-performing signals.');
-    }
-    else {
-        recommendations.push('Scale spend behind top-performing creative in the next cycle.');
-    }
-    if (totals.conversions < Math.max(1, totals.clicks * 0.02)) {
-        recommendations.push('Improve landing-page relevance to increase conversion quality.');
-    }
-    else {
-        recommendations.push('Replicate winning conversion paths to adjacent audience segments.');
-    }
-    if ((_a = topSignals[0]) === null || _a === void 0 ? void 0 : _a.name) {
-        recommendations.push(`Prioritize budget behind "${topSignals[0].name}" until next report cycle.`);
-    }
-    else {
-        recommendations.push('Launch one additional signal to improve trend and optimization depth.');
-    }
+    const conversionRate = totals.clicks > 0 ? (totals.conversions / totals.clicks) * 100 : 0;
+    const auraEfficiency = Number(((ctr * 0.65) + (conversionRate * 0.35)).toFixed(2));
+    const recommendations = buildRecommendations(ctr, totals, topSignals);
     return {
         periodLabel: schedule.frequency === 'daily'
             ? 'Last 24 hours'
@@ -261,9 +286,9 @@ const buildScheduledSummaryPayload = (schedule) => __awaiter(void 0, void 0, voi
             ctr,
             clicks: totals.clicks,
             conversions: totals.conversions,
-            spend: totals.spend,
             auraEfficiency
         },
+        campaignData,
         topSignals,
         recommendations
     };
