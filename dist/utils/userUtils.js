@@ -1,6 +1,18 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.transformUsers = exports.transformUser = void 0;
+const formatJoinedLabel = (value) => {
+    if (!value)
+        return null;
+    const parsed = new Date(value);
+    if (!Number.isFinite(parsed.getTime()))
+        return null;
+    return parsed.toLocaleDateString('en-US', {
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC',
+    });
+};
 const transformUser = (user) => {
     if (!user)
         return user;
@@ -44,12 +56,20 @@ const transformUser = (user) => {
         delete transformed.subscriberCount;
         // Product rule: verification badge is company-only.
         transformed.isVerified = false;
+        const joinedLabel = formatJoinedLabel(transformed.createdAt);
+        if (joinedLabel) {
+            transformed.joinedLabel = joinedLabel;
+        }
+        else {
+            delete transformed.joinedLabel;
+        }
     }
     else {
         // Keep company payload clean from personal graph fields.
         delete transformed.acquaintances;
         delete transformed.sentAcquaintanceRequests;
         delete transformed.sentConnectionRequests;
+        delete transformed.joinedLabel;
     }
     if (transformed.avatarKey &&
         typeof s3BaseUrl === 'string' &&

@@ -127,6 +127,7 @@ const USER_SELF_UPDATE_ALLOWLIST = new Set([
     'name',
     'handle',
     'bio',
+    'title',
     'phone',
     'country',
     'website',
@@ -224,6 +225,7 @@ const PUBLIC_USER_PROFILE_FIELDS = new Set([
     'lastName',
     'name',
     'handle',
+    'title',
     'avatar',
     'avatarType',
     'avatarKey',
@@ -243,6 +245,7 @@ const PUBLIC_USER_PROFILE_FIELDS = new Set([
     'trustScore',
     'activeGlow',
     'userMode',
+    'joinedLabel',
     'type'
 ]);
 const sanitizePublicUserProfile = (user) => {
@@ -908,6 +911,9 @@ exports.usersController = {
             }
             if (typeof mutableUpdates.name === 'string') {
                 updateData.name = mutableUpdates.name.trim();
+            }
+            if (typeof mutableUpdates.title === 'string') {
+                updateData.title = mutableUpdates.title.trim().slice(0, 120);
             }
             if (normalizedFirstName !== null || normalizedLastName !== null) {
                 const nextFirstName = normalizedFirstName !== null && normalizedFirstName !== void 0 ? normalizedFirstName : (typeof existingUser.firstName === 'string' ? existingUser.firstName.trim() : '');
@@ -2507,16 +2513,10 @@ exports.usersController = {
                 });
             }
             // Initialize profileViews array if it doesn't exist
-            const profileViews = user.profileViews || [];
-            // Add the viewer ID to the profile views if not already present
-            if (!profileViews.includes(viewerId)) {
+            const profileViews = Array.isArray(user.profileViews) ? [...user.profileViews] : [];
+            const shouldAddProfileView = !profileViews.includes(viewerId);
+            if (shouldAddProfileView) {
                 profileViews.push(viewerId);
-                yield db.collection('users').updateOne({ id }, {
-                    $set: {
-                        profileViews: profileViews,
-                        updatedAt: new Date().toISOString()
-                    }
-                });
             }
             // Create a notification for the profile owner
             const newNotification = {
@@ -2533,21 +2533,49 @@ exports.usersController = {
                 timestamp: Date.now(),
                 isRead: false
             };
-            // Add notification to the profile owner's notification array
-            const updatedNotifications = [newNotification, ...(user.notifications || [])];
-            yield db.collection('users').updateOne({ id }, {
-                $set: {
-                    profileViews: profileViews,
-                    notifications: updatedNotifications,
-                    updatedAt: new Date().toISOString()
-                }
-            });
-            (0, socketHub_1.emitToIdentity)('user', id, 'notification:new', {
-                ownerType: 'user',
-                ownerId: id,
-                notification: newNotification
-            });
-            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id, 'user');
+            const now = Date.now();
+            const existingRecentViewNotice = Array.isArray(user.notifications)
+                ? user.notifications.find((notif) => {
+                    var _a;
+                    if ((notif === null || notif === void 0 ? void 0 : notif.type) !== 'profile_view')
+                        return false;
+                    if (((_a = notif === null || notif === void 0 ? void 0 : notif.fromUser) === null || _a === void 0 ? void 0 : _a.id) !== viewerId)
+                        return false;
+                    const rawTimestamp = notif === null || notif === void 0 ? void 0 : notif.timestamp;
+                    const ts = typeof rawTimestamp === 'number'
+                        ? rawTimestamp
+                        : new Date(rawTimestamp || 0).getTime();
+                    if (!Number.isFinite(ts) || ts <= 0)
+                        return false;
+                    return now - ts < 60 * 60 * 1000;
+                })
+                : null;
+            const shouldPushNotification = !existingRecentViewNotice;
+            const nextSetPayload = {
+                updatedAt: new Date().toISOString(),
+            };
+            if (shouldAddProfileView) {
+                nextSetPayload.profileViews = profileViews;
+            }
+            if (shouldPushNotification) {
+                const updatedNotifications = [newNotification, ...(user.notifications || [])];
+                nextSetPayload.notifications = updatedNotifications;
+            }
+            if (Object.keys(nextSetPayload).length > 0) {
+                yield db.collection('users').updateOne({ id }, {
+                    $set: nextSetPayload
+                });
+            }
+            if (shouldPushNotification) {
+                (0, socketHub_1.emitToIdentity)('user', id, 'notification:new', {
+                    ownerType: 'user',
+                    ownerId: id,
+                    notification: newNotification
+                });
+            }
+            if (shouldAddProfileView) {
+                (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id, 'user');
+            }
             res.json({
                 success: true,
                 data: {

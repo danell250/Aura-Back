@@ -362,8 +362,9 @@ exports.privacyController = {
                 });
             }
             // Record the profile view (ensure viewer is present at least once)
-            const profileViews = profileOwner.profileViews || [];
-            if (!profileViews.includes(authenticatedUserId)) {
+            const profileViews = Array.isArray(profileOwner.profileViews) ? [...profileOwner.profileViews] : [];
+            const shouldAddProfileView = !profileViews.includes(authenticatedUserId);
+            if (shouldAddProfileView) {
                 profileViews.push(authenticatedUserId);
                 yield db.collection(ownerCollection).updateOne({ id: profileOwnerId }, {
                     $set: {
@@ -426,7 +427,9 @@ exports.privacyController = {
                 ownerId: profileOwnerId,
                 notification: newNotification
             });
-            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, profileOwnerId, ownerType);
+            if (shouldAddProfileView) {
+                (0, postsController_1.emitAuthorInsightsUpdate)(req.app, profileOwnerId, ownerType);
+            }
             console.log('Profile view notification created:', {
                 profileOwnerId,
                 viewerId: authenticatedUserId,

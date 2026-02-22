@@ -9,6 +9,8 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = express_1.default.Router();
 // Apply requireAuth to all routes in this router
 router.use(authMiddleware_1.requireAuth);
+// GET /api/messages/rtc-config - Get WebRTC ICE configuration
+router.get('/rtc-config', messagesController_1.messagesController.getRtcConfig);
 // GET /api/messages/conversations - Get all conversations for a user
 router.get('/conversations', messagesController_1.messagesController.getConversations);
 // GET /api/messages/call-history - Get call history for an identity

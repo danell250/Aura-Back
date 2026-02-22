@@ -28,6 +28,7 @@ const REPORT_RUNNER_INTERVAL_MS = 60 * 1000;
 const REPORT_RUNNER_BATCH_LIMIT = 20;
 const REPORT_PREVIEW_DAILY_LIMIT = 30;
 const REPORT_CAMPAIGN_DATA_MAX_ROWS = 10000;
+const REPORT_TREND_AD_QUERY_CHUNK_SIZE = 400;
 const WEEKDAY_TO_INDEX = {
     Monday: 1,
     Tuesday: 2,
@@ -192,14 +193,6 @@ const buildOwnerAnalyticsMatch = (ownerId, ownerType) => {
         ]
     };
 };
-const aggregateAnalyticsTotals = (rows) => rows.reduce((acc, row) => {
-    acc.impressions += Number((row === null || row === void 0 ? void 0 : row.impressions) || 0);
-    acc.clicks += Number((row === null || row === void 0 ? void 0 : row.clicks) || 0);
-    acc.engagement += Number((row === null || row === void 0 ? void 0 : row.engagement) || 0);
-    acc.reach += Number((row === null || row === void 0 ? void 0 : row.reach) || 0);
-    acc.conversions += Number((row === null || row === void 0 ? void 0 : row.conversions) || 0);
-    return acc;
-}, { impressions: 0, clicks: 0, engagement: 0, reach: 0, conversions: 0 });
 const mapCampaignDataRows = (rows, adMetaMap) => rows.map((row) => {
     const impressions = Number((row === null || row === void 0 ? void 0 : row.impressions) || 0);
     const clicks = Number((row === null || row === void 0 ? void 0 : row.clicks) || 0);
@@ -244,6 +237,101 @@ const buildRecommendations = (ctr, totals, topSignals) => {
     }
     return recommendations;
 };
+const getReportWindow = (frequency) => {
+    if (frequency === 'daily') {
+        return { periodLabel: 'Last 24 hours', days: 1 };
+    }
+    if (frequency === 'monthly') {
+        return { periodLabel: 'Last 30 days', days: 30 };
+    }
+    return { periodLabel: 'Last 7 days', days: 7 };
+};
+const buildDateKeys = (days) => {
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    start.setUTCDate(start.getUTCDate() - (days - 1));
+    const keys = [];
+    for (let index = 0; index < days; index += 1) {
+        const day = new Date(start);
+        day.setUTCDate(start.getUTCDate() + index);
+        keys.push(day.toISOString().slice(0, 10));
+    }
+    return keys;
+};
+const buildDailyAnalyticsMatch = (ownerId, ownerType, dateKeys, adIds) => {
+    const scopedAdIds = Array.isArray(adIds) ? adIds.filter((id) => typeof id === 'string' && id.length > 0) : [];
+    const match = {
+        ownerId,
+        dateKey: { $in: dateKeys }
+    };
+    if (scopedAdIds.length > 0) {
+        match.adId = { $in: scopedAdIds };
+    }
+    if (ownerType === 'company') {
+        return Object.assign(Object.assign({}, match), { ownerType: 'company' });
+    }
+    return Object.assign(Object.assign({}, match), { $or: [
+            { ownerType: 'user' },
+            { ownerType: { $exists: false } }
+        ] });
+};
+const normalizePlacementLabel = (placement) => {
+    const normalized = typeof placement === 'string' ? placement.trim().toLowerCase() : '';
+    if (normalized === 'search')
+        return 'Search';
+    if (normalized === 'story')
+        return 'Story';
+    if (normalized === 'profile' || normalized === 'left' || normalized === 'right' || normalized === 'sidebar') {
+        return 'Profile';
+    }
+    return 'Feed';
+};
+const normalizeContentTypeLabel = (mediaType) => {
+    const normalized = typeof mediaType === 'string' ? mediaType.trim().toLowerCase() : '';
+    if (normalized === 'video')
+        return 'Video';
+    if (normalized === 'document')
+        return 'Document';
+    return 'Image';
+};
+const buildBreakdownRows = (campaignData, getLabel, getValue) => {
+    if (!Array.isArray(campaignData) || campaignData.length === 0)
+        return [];
+    const buckets = new Map();
+    let total = 0;
+    for (const row of campaignData) {
+        const label = getLabel(row);
+        const candidateValue = Math.max(0, Number(getValue(row) || 0));
+        const weightedValue = candidateValue > 0 ? candidateValue : 1;
+        buckets.set(label, (buckets.get(label) || 0) + weightedValue);
+        total += weightedValue;
+    }
+    const safeTotal = Math.max(1, total);
+    return Array.from(buckets.entries())
+        .map(([label, value]) => ({
+        label,
+        value,
+        share: (value / safeTotal) * 100
+    }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 4);
+};
+const applyCampaignScope = (campaignData, scope, campaignName) => {
+    if (scope !== 'specific_campaign')
+        return campaignData;
+    const query = campaignName.trim().toLowerCase();
+    if (!query)
+        return campaignData;
+    const filtered = campaignData.filter((row) => row.name.toLowerCase().includes(query));
+    return filtered.length > 0 ? filtered : campaignData;
+};
+const aggregateCampaignTotals = (campaignData) => campaignData.reduce((acc, row) => {
+    acc.impressions += Number(row.impressions || 0);
+    acc.clicks += Number(row.clicks || 0);
+    acc.reach += Number(row.reach || 0);
+    acc.conversions += Number(row.conversions || 0);
+    return acc;
+}, { impressions: 0, clicks: 0, engagement: 0, reach: 0, conversions: 0 });
 const buildScheduledSummaryPayload = (schedule) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
     const match = buildOwnerAnalyticsMatch(schedule.ownerId, schedule.ownerType);
@@ -260,31 +348,86 @@ const buildScheduledSummaryPayload = (schedule) => __awaiter(void 0, void 0, voi
         .sort({ impressions: -1, clicks: -1 })
         .limit(REPORT_CAMPAIGN_DATA_MAX_ROWS)
         .toArray();
-    const totals = aggregateAnalyticsTotals(rows);
     const adIds = Array.from(new Set(rows.map((row) => row === null || row === void 0 ? void 0 : row.adId).filter((id) => typeof id === 'string' && id.length > 0)));
     const ads = adIds.length
-        ? yield db.collection('ads').find({ id: { $in: adIds } }).project({ id: 1, headline: 1, status: 1, lastUpdated: 1 }).toArray()
+        ? yield db.collection('ads').find({ id: { $in: adIds } }).project({
+            id: 1,
+            headline: 1,
+            status: 1,
+            lastUpdated: 1,
+            placement: 1,
+            mediaType: 1
+        }).toArray()
         : [];
     const adMetaMap = new Map(ads.map((ad) => [
         String(ad.id),
         {
             name: String(ad.headline || 'Untitled Signal'),
             status: String(ad.status || 'active'),
-            lastUpdated: Number(ad.lastUpdated || 0) || undefined
+            lastUpdated: Number(ad.lastUpdated || 0) || undefined,
+            placement: typeof ad.placement === 'string' ? ad.placement : undefined,
+            mediaType: typeof ad.mediaType === 'string' ? ad.mediaType : undefined
         }
     ]));
-    const campaignData = mapCampaignDataRows(rows, adMetaMap);
+    const fullCampaignData = mapCampaignDataRows(rows, adMetaMap);
+    const campaignData = applyCampaignScope(fullCampaignData, schedule.scope, schedule.campaignName);
+    const totals = aggregateCampaignTotals(campaignData);
     const topSignals = buildTopSignals(campaignData);
+    const { periodLabel, days } = getReportWindow(schedule.frequency);
     const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
     const conversionRate = totals.clicks > 0 ? (totals.conversions / totals.clicks) * 100 : 0;
     const auraEfficiency = Number(((ctr * 0.65) + (conversionRate * 0.35)).toFixed(2));
     const recommendations = buildRecommendations(ctr, totals, topSignals);
+    const scopedAdIds = campaignData.map((row) => row.id).filter((id) => id.length > 0);
+    const trendScopedAdIds = schedule.scope === 'specific_campaign' ? scopedAdIds : [];
+    const trendDateKeys = buildDateKeys(Math.max(7, days));
+    const trendDailyDocs = [];
+    const fetchTrendDailyChunk = (adIdsChunk) => __awaiter(void 0, void 0, void 0, function* () {
+        return db.collection('adAnalyticsDaily')
+            .find(buildDailyAnalyticsMatch(schedule.ownerId, schedule.ownerType, trendDateKeys, adIdsChunk))
+            .project({
+            dateKey: 1,
+            impressions: 1,
+            clicks: 1
+        })
+            .toArray();
+    });
+    if (trendScopedAdIds.length === 0) {
+        trendDailyDocs.push(...(yield fetchTrendDailyChunk()));
+    }
+    else {
+        for (let start = 0; start < trendScopedAdIds.length; start += REPORT_TREND_AD_QUERY_CHUNK_SIZE) {
+            const adIdsChunk = trendScopedAdIds.slice(start, start + REPORT_TREND_AD_QUERY_CHUNK_SIZE);
+            trendDailyDocs.push(...(yield fetchTrendDailyChunk(adIdsChunk)));
+        }
+    }
+    const trendMap = new Map(trendDateKeys.map((dateKey) => [
+        dateKey,
+        {
+            date: dateKey,
+            impressions: 0,
+            clicks: 0,
+            isProjection: false
+        }
+    ]));
+    for (const doc of trendDailyDocs) {
+        const dateKey = typeof doc.dateKey === 'string' ? doc.dateKey : '';
+        if (!dateKey)
+            continue;
+        const row = trendMap.get(dateKey);
+        if (!row)
+            continue;
+        row.impressions += Number(doc.impressions || 0);
+        row.clicks += Number(doc.clicks || 0);
+    }
+    const trendSeries = trendDateKeys.map((dateKey) => trendMap.get(dateKey));
+    const placementBreakdown = buildBreakdownRows(campaignData, (row) => { var _a; return normalizePlacementLabel((_a = adMetaMap.get(row.id)) === null || _a === void 0 ? void 0 : _a.placement); }, (row) => row.impressions);
+    const contentBreakdown = buildBreakdownRows(campaignData, (row) => { var _a; return normalizeContentTypeLabel((_a = adMetaMap.get(row.id)) === null || _a === void 0 ? void 0 : _a.mediaType); }, (row) => row.impressions).map((row) => ({
+        label: row.label,
+        impressions: row.value
+    }));
     return {
-        periodLabel: schedule.frequency === 'daily'
-            ? 'Last 24 hours'
-            : schedule.frequency === 'weekly'
-                ? 'Last 7 days'
-                : 'Last 30 days',
+        periodLabel,
         scope: schedule.scope,
         campaignName: schedule.campaignName,
         metrics: {
@@ -292,10 +435,25 @@ const buildScheduledSummaryPayload = (schedule) => __awaiter(void 0, void 0, voi
             ctr,
             clicks: totals.clicks,
             conversions: totals.conversions,
-            auraEfficiency
+            auraEfficiency,
+            engagementRate: auraEfficiency
         },
         campaignData,
         topSignals,
+        placementBreakdown,
+        contentBreakdown,
+        visuals: {
+            trendSeries,
+            placementBreakdown,
+            contentBreakdown,
+            topSignals: campaignData.slice(0, 8).map((row) => ({
+                name: row.name,
+                ctr: row.ctr,
+                reach: row.reach,
+                impressions: row.impressions,
+                clicks: row.clicks
+            }))
+        },
         recommendations
     };
 });

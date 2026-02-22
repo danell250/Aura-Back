@@ -155,26 +155,131 @@ const buildCampaignRowsHtml = (campaignData) => __awaiter(void 0, void 0, void 0
     }
     return rows.join('');
 });
+const buildTrendSvg = (series) => {
+    if (!Array.isArray(series) || series.length < 2)
+        return '';
+    const width = 560;
+    const height = 170;
+    const margin = { top: 18, right: 20, bottom: 24, left: 36 };
+    const chartWidth = width - margin.left - margin.right;
+    const chartHeight = height - margin.top - margin.bottom;
+    const clean = series.slice(-24).map((point) => ({
+        impressions: Number((point === null || point === void 0 ? void 0 : point.impressions) || 0),
+        clicks: Number((point === null || point === void 0 ? void 0 : point.clicks) || 0)
+    }));
+    const maxY = Math.max(1, ...clean.map((point) => point.impressions), ...clean.map((point) => point.clicks));
+    const stepX = clean.length > 1 ? chartWidth / (clean.length - 1) : 0;
+    const toY = (value) => margin.top + chartHeight - ((value / maxY) * chartHeight);
+    const pointsToPolyline = (values) => values
+        .map((value, index) => `${Math.round(margin.left + (index * stepX))},${Math.round(toY(value))}`)
+        .join(' ');
+    const impressionsPath = pointsToPolyline(clean.map((point) => point.impressions));
+    const clicksPath = pointsToPolyline(clean.map((point) => point.clicks));
+    return `
+    <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Impressions and clicks trend">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="#f8fafc" stroke="#e2e8f0" />
+      <line x1="${margin.left}" y1="${margin.top + chartHeight}" x2="${margin.left + chartWidth}" y2="${margin.top + chartHeight}" stroke="#cbd5e1" stroke-width="1" />
+      <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${margin.top + chartHeight}" stroke="#cbd5e1" stroke-width="1" />
+      <polyline points="${impressionsPath}" fill="none" stroke="#059669" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+      <polyline points="${clicksPath}" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+      <text x="${margin.left}" y="14" font-size="11" fill="#475569" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+        Max ${Math.round(maxY).toLocaleString()}
+      </text>
+      <text x="${width - 94}" y="14" font-size="11" fill="#059669" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+        ● Impressions
+      </text>
+      <text x="${width - 94}" y="30" font-size="11" fill="#10b981" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+        ● Clicks
+      </text>
+    </svg>
+  `;
+};
+const buildDistributionBarsHtml = (rows, labelSuffix = 'share') => {
+    if (!Array.isArray(rows) || rows.length === 0)
+        return '';
+    const cleanRows = rows.slice(0, 5).map((row) => ({
+        label: safeHtmlText(row === null || row === void 0 ? void 0 : row.label, 'Unknown'),
+        value: Number((row === null || row === void 0 ? void 0 : row.value) || 0),
+        share: Number((row === null || row === void 0 ? void 0 : row.share) || 0)
+    }));
+    const maxValue = Math.max(1, ...cleanRows.map((row) => row.value));
+    return cleanRows.map((row) => {
+        const widthPercent = Math.max(2, Math.round((row.value / maxValue) * 100));
+        const valueLabel = labelSuffix === 'share'
+            ? `${row.share.toFixed(1)}%`
+            : row.value.toLocaleString();
+        return `
+      <div style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px;color:#334155;margin-bottom:4px;">
+          <span style="font-weight:600;">${row.label}</span>
+          <span style="font-weight:700;">${valueLabel}</span>
+        </div>
+        <div style="height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden;">
+          <div style="height:100%;width:${widthPercent}%;background:linear-gradient(90deg,#10b981,#14b8a6);border-radius:999px;"></div>
+        </div>
+      </div>
+    `;
+    }).join('');
+};
+const REPORT_EMAIL_MAX_CAMPAIGN_ROWS = 10000;
 function sendReportPreviewEmail(to, payload) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
         const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
         const metricReach = Number(((_a = payload.metrics) === null || _a === void 0 ? void 0 : _a.reach) || 0).toLocaleString();
         const metricCtr = safeNumber((_b = payload.metrics) === null || _b === void 0 ? void 0 : _b.ctr, 2);
         const metricClicks = Number(((_c = payload.metrics) === null || _c === void 0 ? void 0 : _c.clicks) || 0).toLocaleString();
         const metricConversions = Number(((_d = payload.metrics) === null || _d === void 0 ? void 0 : _d.conversions) || 0).toLocaleString();
-        const metricEfficiency = safeNumber((_e = payload.metrics) === null || _e === void 0 ? void 0 : _e.auraEfficiency, 2);
+        const metricEfficiency = safeNumber((_f = (_e = payload.metrics) === null || _e === void 0 ? void 0 : _e.engagementRate) !== null && _f !== void 0 ? _f : (_g = payload.metrics) === null || _g === void 0 ? void 0 : _g.auraEfficiency, 2);
         const periodLabel = safeText(payload.periodLabel, 'Last 7 days');
         const periodLabelHtml = safeHtmlText(payload.periodLabel, 'Last 7 days');
         const scopeLabel = safeText(payload.scope, 'all_signals').replace('_', ' ');
         const scopeLabelHtml = safeHtmlText(payload.scope, 'all_signals').replace('_', ' ');
         const topSignals = Array.isArray(payload.topSignals) ? payload.topSignals.slice(0, 5) : [];
-        const recommendations = Array.isArray(payload.recommendations) ? payload.recommendations.slice(0, 3) : [];
         const campaignData = Array.isArray(payload.campaignData) ? payload.campaignData : [];
-        const campaignRowsHtml = yield buildCampaignRowsHtml(campaignData);
+        const boundedCampaignData = campaignData.slice(0, REPORT_EMAIL_MAX_CAMPAIGN_ROWS);
+        const campaignDataTruncated = campaignData.length > boundedCampaignData.length;
+        const visualTrendSeries = Array.isArray((_h = payload.visuals) === null || _h === void 0 ? void 0 : _h.trendSeries)
+            ? payload.visuals.trendSeries
+            : [];
+        const hasPlacementBreakdownSource = Array.isArray((_j = payload.visuals) === null || _j === void 0 ? void 0 : _j.placementBreakdown) || Array.isArray(payload.placementBreakdown);
+        const fallbackDistributionRows = (() => {
+            const topCampaigns = boundedCampaignData.slice(0, 4);
+            const totalImpressions = Math.max(1, topCampaigns.reduce((sum, row) => sum + Number((row === null || row === void 0 ? void 0 : row.impressions) || 0), 0));
+            return topCampaigns.map((row) => {
+                const value = Number((row === null || row === void 0 ? void 0 : row.impressions) || 0);
+                return {
+                    label: (row === null || row === void 0 ? void 0 : row.name) || 'Signal',
+                    value,
+                    share: (value / totalImpressions) * 100
+                };
+            });
+        })();
+        const visualPlacementRows = Array.isArray((_k = payload.visuals) === null || _k === void 0 ? void 0 : _k.placementBreakdown)
+            ? payload.visuals.placementBreakdown
+            : (Array.isArray(payload.placementBreakdown) ? payload.placementBreakdown : fallbackDistributionRows);
+        const visualContentRows = Array.isArray((_l = payload.visuals) === null || _l === void 0 ? void 0 : _l.contentBreakdown)
+            ? payload.visuals.contentBreakdown.map((row) => ({
+                label: row === null || row === void 0 ? void 0 : row.label,
+                value: Number((row === null || row === void 0 ? void 0 : row.impressions) || 0),
+                share: 0
+            }))
+            : (Array.isArray(payload.contentBreakdown)
+                ? payload.contentBreakdown.map((row) => ({
+                    label: row === null || row === void 0 ? void 0 : row.label,
+                    value: Number((row === null || row === void 0 ? void 0 : row.impressions) || 0),
+                    share: 0
+                }))
+                : []);
+        const trendSvg = buildTrendSvg(visualTrendSeries);
+        const placementBarsHtml = buildDistributionBarsHtml(visualPlacementRows, 'share');
+        const contentBarsHtml = buildDistributionBarsHtml(visualContentRows, 'value');
+        const placementSectionTitle = hasPlacementBreakdownSource ? 'Placement Distribution' : 'Campaign Distribution';
+        const recommendations = Array.isArray(payload.recommendations) ? payload.recommendations.slice(0, 3) : [];
+        const campaignRowsHtml = yield buildCampaignRowsHtml(boundedCampaignData);
         const deliveryMode = payload.deliveryMode === 'pdf_attachment' ? 'pdf_attachment' : 'inline_email';
-        const attachmentName = safeText((_f = payload.pdfAttachment) === null || _f === void 0 ? void 0 : _f.filename, `aura-scheduled-report-${new Date().toISOString().split('T')[0]}.pdf`);
-        const attachmentContent = typeof ((_g = payload.pdfAttachment) === null || _g === void 0 ? void 0 : _g.contentBase64) === 'string'
+        const attachmentName = safeText((_m = payload.pdfAttachment) === null || _m === void 0 ? void 0 : _m.filename, `aura-scheduled-report-${new Date().toISOString().split('T')[0]}.pdf`);
+        const attachmentContent = typeof ((_o = payload.pdfAttachment) === null || _o === void 0 ? void 0 : _o.contentBase64) === 'string'
             ? payload.pdfAttachment.contentBase64.replace(/^data:application\/pdf;base64,/, '').trim()
             : '';
         const shouldAttachPdf = deliveryMode === 'pdf_attachment' && attachmentContent.length > 0;
@@ -211,8 +316,33 @@ function sendReportPreviewEmail(to, payload) {
               <tr><td style="padding:8px 0;color:#475569;">CTR</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${metricCtr}%</td></tr>
               <tr><td style="padding:8px 0;color:#475569;">Clicks</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${metricClicks}</td></tr>
               <tr><td style="padding:8px 0;color:#475569;">Conversions</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${metricConversions}</td></tr>
-              <tr><td style="padding:8px 0;color:#475569;">Aura Efficiency</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${metricEfficiency}</td></tr>
+              <tr><td style="padding:8px 0;color:#475569;">Engagement Rate</td><td style="padding:8px 0;text-align:right;font-weight:700;color:#0f172a;">${metricEfficiency}%</td></tr>
             </table>
+
+            ${(trendSvg || placementBarsHtml || contentBarsHtml) ? `
+            <h3 style="margin:0 0 8px 0;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;">Visual Insights</h3>
+            ${trendSvg ? `
+              <div style="margin-bottom:14px;border:1px solid #e2e8f0;border-radius:12px;padding:8px;background:#ffffff;">
+                ${trendSvg}
+              </div>
+            ` : ''}
+            ${(placementBarsHtml || contentBarsHtml) ? `
+              <div style="display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:14px;">
+                ${placementBarsHtml ? `
+                  <div style="border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#ffffff;">
+                    <p style="margin:0 0 8px 0;font-size:12px;font-weight:800;letter-spacing:0.04em;color:#475569;text-transform:uppercase;">${safeHtmlText(placementSectionTitle)}</p>
+                    ${placementBarsHtml}
+                  </div>
+                ` : ''}
+                ${contentBarsHtml ? `
+                  <div style="border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#ffffff;">
+                    <p style="margin:0 0 8px 0;font-size:12px;font-weight:800;letter-spacing:0.04em;color:#475569;text-transform:uppercase;">Content Distribution</p>
+                    ${contentBarsHtml}
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
+            ` : ''}
 
             ${topSignals.length > 0 ? `
             <h3 style="margin:0 0 8px 0;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;">Top Signals</h3>
@@ -220,8 +350,9 @@ function sendReportPreviewEmail(to, payload) {
               ${topSignals.map((signal) => `<li style="margin-bottom:6px;">${safeHtmlText(signal.name)} • CTR ${safeNumber(signal.ctr, 2)}% • Reach ${Number(signal.reach || 0).toLocaleString()}</li>`).join('')}
             </ul>` : ''}
 
-            ${campaignData.length > 0 ? `
+            ${boundedCampaignData.length > 0 ? `
             <h3 style="margin:0 0 8px 0;font-size:14px;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;">Full Campaign Data</h3>
+            ${campaignDataTruncated ? `<p style="margin:0 0 8px 0;font-size:12px;color:#64748b;">Showing the first ${REPORT_EMAIL_MAX_CAMPAIGN_ROWS.toLocaleString()} signals for stable email delivery.</p>` : ''}
             <div style="overflow:auto;margin-bottom:16px;">
               <table style="width:100%;border-collapse:collapse;min-width:640px;">
                 <thead>
