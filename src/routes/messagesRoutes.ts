@@ -1,5 +1,6 @@
 import express from 'express';
 import { messagesController } from '../controllers/messagesController';
+import { messageGroupsController } from '../controllers/messageGroupsController';
 import { requireAuth } from '../middleware/authMiddleware';
 
 const router = express.Router();
@@ -16,6 +17,13 @@ router.get('/conversations', messagesController.getConversations);
 router.get('/call-history', messagesController.getCallHistory);
 // Alias for conversation-specific messages
 router.get('/conversation/:userId', messagesController.getMessages);
+
+// Group messaging
+router.get('/groups', messageGroupsController.getGroupConversations);
+router.post('/groups', messageGroupsController.createGroupConversation);
+router.get('/groups/:groupId/messages', messageGroupsController.getGroupMessages);
+router.post('/groups/:groupId/messages', messageGroupsController.sendGroupMessage);
+router.put('/groups/:groupId/read', messageGroupsController.markGroupMessagesRead);
 
 // PUT /api/messages/mark-read - Mark messages as read
 router.put('/mark-read', messagesController.markAsRead);

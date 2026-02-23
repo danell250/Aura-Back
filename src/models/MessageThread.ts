@@ -7,7 +7,7 @@ export interface IMessageThread {
   key: string;
   ownerType: 'user' | 'company';
   ownerId: string;
-  peerType: 'user' | 'company';
+  peerType: 'user' | 'company' | 'group';
   peerId: string;
   state: MessageThreadState;
   archived?: boolean;
@@ -29,7 +29,7 @@ let messageThreadsCollection: Collection<IMessageThread>;
 export const buildMessageThreadKey = (
   ownerType: 'user' | 'company',
   ownerId: string,
-  peerType: 'user' | 'company',
+  peerType: 'user' | 'company' | 'group',
   peerId: string
 ): string => `${ownerType}:${ownerId}::${peerType}:${peerId}`;
 

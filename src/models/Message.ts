@@ -18,6 +18,8 @@ export interface IMessage {
   mediaMimeType?: string;
   mediaSize?: number;
   replyTo?: string;
+  groupId?: string;
+  groupMessageId?: string;
   isEdited: boolean;
   editedAt?: Date;
   deletedFor?: string[];
@@ -26,15 +28,25 @@ export interface IMessage {
 // This will be initialized when the database connection is established
 let messagesCollection: Collection<IMessage>;
 
-export const initializeMessageCollection = (db: Db) => {
+export const initializeMessageCollection = async (db: Db) => {
   messagesCollection = db.collection<IMessage>('messages');
   
   // Create indexes for better performance
-  messagesCollection.createIndex({ senderId: 1, receiverId: 1, timestamp: -1 });
-  messagesCollection.createIndex({ senderOwnerType: 1, senderOwnerId: 1, receiverOwnerType: 1, receiverOwnerId: 1, timestamp: -1 });
-  messagesCollection.createIndex({ receiverId: 1, isRead: 1 });
-  messagesCollection.createIndex({ receiverOwnerType: 1, receiverOwnerId: 1, isRead: 1 });
-  messagesCollection.createIndex({ timestamp: -1 });
+  await Promise.all([
+    messagesCollection.createIndex({ senderId: 1, receiverId: 1, timestamp: -1 }, { background: true }),
+    messagesCollection.createIndex(
+      { senderOwnerType: 1, senderOwnerId: 1, receiverOwnerType: 1, receiverOwnerId: 1, timestamp: -1 },
+      { background: true }
+    ),
+    messagesCollection.createIndex({ receiverId: 1, isRead: 1 }, { background: true }),
+    messagesCollection.createIndex({ receiverOwnerType: 1, receiverOwnerId: 1, isRead: 1 }, { background: true }),
+    messagesCollection.createIndex({ groupId: 1, timestamp: -1 }, { background: true, sparse: true }),
+    messagesCollection.createIndex(
+      { groupId: 1, groupMessageId: 1, receiverOwnerType: 1, receiverOwnerId: 1 },
+      { background: true, sparse: true }
+    ),
+    messagesCollection.createIndex({ timestamp: -1 }, { background: true }),
+  ]);
 };
 
 export const getMessagesCollection = (): Collection<IMessage> => {

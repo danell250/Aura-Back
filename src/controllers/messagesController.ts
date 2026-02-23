@@ -208,14 +208,6 @@ const resolvePeerIdentity = async (
   return null;
 };
 
-const resolvePeerType = async (
-  rawType: unknown,
-  id: string
-): Promise<'user' | 'company' | null> => {
-  const peer = await resolvePeerIdentity(rawType, id);
-  return peer?.type || null;
-};
-
 const applyRateLimit = (actor: { type: 'user' | 'company'; id: string }) => {
   const key = actorMarker(actor.type, actor.id);
   const now = Date.now();

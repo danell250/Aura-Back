@@ -2,6 +2,7 @@ import { MongoClient, Db } from "mongodb";
 import dotenv from "dotenv";
 import { initializeMessageCollection } from "./models/Message";
 import { initializeMessageThreadCollection } from "./models/MessageThread";
+import { initializeMessageGroupCollection } from "./models/MessageGroup";
 import { initializeUserCollection } from "./models/User";
 import { initializeAdAnalyticsDailyCollection } from "./models/AdAnalyticsDaily";
 import { initializeAdEventDedupesCollection } from "./models/AdEventDedupe";
@@ -49,6 +50,28 @@ const maxRetries = 5;
 let reconnectInterval: NodeJS.Timeout | null = null;
 let monitoringClient: MongoClient | null = null;
 
+const initializeCoreCollections = async (db: Db): Promise<void> => {
+  await initializeMessageCollection(db);
+  console.log("✅ Message collection initialized");
+
+  await initializeMessageThreadCollection(db);
+  console.log("✅ Message thread collection initialized");
+
+  await initializeMessageGroupCollection(db);
+  console.log("✅ Message group collection initialized");
+
+  await initializeCallLogsCollection(db);
+  console.log("✅ Call logs collection initialized");
+
+  await initializeUserCollection(db);
+
+  await initializeAdAnalyticsDailyCollection(db);
+  console.log("✅ AdAnalyticsDaily collection initialized");
+
+  await initializeAdEventDedupesCollection(db);
+  console.log("✅ AdEventDedupes collection initialized");
+};
+
 // Connection state management
 export function isDBConnected(): boolean {
   return isConnected;
@@ -86,22 +109,7 @@ export async function connectDB(): Promise<Db | null> {
     
     // Initialize collections
     try {
-      initializeMessageCollection(db);
-      console.log("✅ Message collection initialized");
-
-      await initializeMessageThreadCollection(db);
-      console.log("✅ Message thread collection initialized");
-
-      await initializeCallLogsCollection(db);
-      console.log("✅ Call logs collection initialized");
-      
-      await initializeUserCollection(db);
-      
-      await initializeAdAnalyticsDailyCollection(db);
-      console.log("✅ AdAnalyticsDaily collection initialized");
-      
-      await initializeAdEventDedupesCollection(db);
-      console.log("✅ AdEventDedupes collection initialized");
+      await initializeCoreCollections(db);
 
       // Initialize Company and Invite indexes
       try {
