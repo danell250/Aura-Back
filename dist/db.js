@@ -23,6 +23,7 @@ const mongodb_1 = require("mongodb");
 const dotenv_1 = __importDefault(require("dotenv"));
 const Message_1 = require("./models/Message");
 const MessageThread_1 = require("./models/MessageThread");
+const MessageGroup_1 = require("./models/MessageGroup");
 const User_1 = require("./models/User");
 const AdAnalyticsDaily_1 = require("./models/AdAnalyticsDaily");
 const AdEventDedupe_1 = require("./models/AdEventDedupe");
@@ -63,6 +64,21 @@ let connectionAttempts = 0;
 const maxRetries = 5;
 let reconnectInterval = null;
 let monitoringClient = null;
+const initializeCoreCollections = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    yield (0, Message_1.initializeMessageCollection)(db);
+    console.log("✅ Message collection initialized");
+    yield (0, MessageThread_1.initializeMessageThreadCollection)(db);
+    console.log("✅ Message thread collection initialized");
+    yield (0, MessageGroup_1.initializeMessageGroupCollection)(db);
+    console.log("✅ Message group collection initialized");
+    yield (0, CallLog_1.initializeCallLogsCollection)(db);
+    console.log("✅ Call logs collection initialized");
+    yield (0, User_1.initializeUserCollection)(db);
+    yield (0, AdAnalyticsDaily_1.initializeAdAnalyticsDailyCollection)(db);
+    console.log("✅ AdAnalyticsDaily collection initialized");
+    yield (0, AdEventDedupe_1.initializeAdEventDedupesCollection)(db);
+    console.log("✅ AdEventDedupes collection initialized");
+});
 // Connection state management
 function isDBConnected() {
     return isConnected;
@@ -95,17 +111,7 @@ function connectDB() {
             connectionAttempts = 0; // Reset on successful connection
             // Initialize collections
             try {
-                (0, Message_1.initializeMessageCollection)(db);
-                console.log("✅ Message collection initialized");
-                yield (0, MessageThread_1.initializeMessageThreadCollection)(db);
-                console.log("✅ Message thread collection initialized");
-                yield (0, CallLog_1.initializeCallLogsCollection)(db);
-                console.log("✅ Call logs collection initialized");
-                yield (0, User_1.initializeUserCollection)(db);
-                yield (0, AdAnalyticsDaily_1.initializeAdAnalyticsDailyCollection)(db);
-                console.log("✅ AdAnalyticsDaily collection initialized");
-                yield (0, AdEventDedupe_1.initializeAdEventDedupesCollection)(db);
-                console.log("✅ AdEventDedupes collection initialized");
+                yield initializeCoreCollections(db);
                 // Initialize Company and Invite indexes
                 try {
                     yield db.collection('companies').createIndex({ id: 1 }, { unique: true });

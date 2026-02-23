@@ -181,10 +181,6 @@ const resolvePeerIdentity = (rawType, rawId) => __awaiter(void 0, void 0, void 0
         return { type: 'user', id: userId };
     return null;
 });
-const resolvePeerType = (rawType, id) => __awaiter(void 0, void 0, void 0, function* () {
-    const peer = yield resolvePeerIdentity(rawType, id);
-    return (peer === null || peer === void 0 ? void 0 : peer.type) || null;
-});
 const applyRateLimit = (actor) => {
     const key = actorMarker(actor.type, actor.id);
     const now = Date.now();
@@ -690,7 +686,7 @@ exports.messagesController = {
                     receiverOwnerType: { $exists: false },
                 });
             }
-            yield messagesCollection.updateMany(markReadFilter, { $set: { isRead: true } });
+            yield messagesCollection.updateMany(markReadFilter, { $set: { isRead: true, readAt: new Date() } });
             res.json({
                 success: true,
                 data: mappedMessages.reverse(),
@@ -768,6 +764,7 @@ exports.messagesController = {
                 text: String(text || ''),
                 timestamp: new Date(),
                 isRead: false,
+                readAt: null,
                 messageType,
                 mediaUrl,
                 mediaKey,
@@ -974,7 +971,7 @@ exports.messagesController = {
                     receiverOwnerType: { $exists: false },
                 });
             }
-            yield messagesCollection.updateMany(filter, { $set: { isRead: true } });
+            yield messagesCollection.updateMany(filter, { $set: { isRead: true, readAt: new Date() } });
             yield upsertThread(actor.type, actor.id, otherType, resolvedOtherId, { clearRequest: true });
             res.json({ success: true, message: 'Messages marked as read' });
         }

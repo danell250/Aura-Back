@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const messagesController_1 = require("../controllers/messagesController");
+const messageGroupsController_1 = require("../controllers/messageGroupsController");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = express_1.default.Router();
 // Apply requireAuth to all routes in this router
@@ -17,6 +18,12 @@ router.get('/conversations', messagesController_1.messagesController.getConversa
 router.get('/call-history', messagesController_1.messagesController.getCallHistory);
 // Alias for conversation-specific messages
 router.get('/conversation/:userId', messagesController_1.messagesController.getMessages);
+// Group messaging
+router.get('/groups', messageGroupsController_1.messageGroupsController.getGroupConversations);
+router.post('/groups', messageGroupsController_1.messageGroupsController.createGroupConversation);
+router.get('/groups/:groupId/messages', messageGroupsController_1.messageGroupsController.getGroupMessages);
+router.post('/groups/:groupId/messages', messageGroupsController_1.messageGroupsController.sendGroupMessage);
+router.put('/groups/:groupId/read', messageGroupsController_1.messageGroupsController.markGroupMessagesRead);
 // PUT /api/messages/mark-read - Mark messages as read
 router.put('/mark-read', messagesController_1.messagesController.markAsRead);
 // DELETE /api/messages/conversation - Delete all messages in a conversation

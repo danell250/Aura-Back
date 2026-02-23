@@ -492,7 +492,12 @@ export const sendGroupMessage = async (
     throw new Error('Group not found');
   }
 
-  const recipients = Array.isArray(group.participants) ? group.participants : [];
+  const recipients: Array<{ type: 'user' | 'company'; id: string }> = Array.isArray(group.participants)
+    ? group.participants.map((participant) => ({
+        type: participant.type === 'company' ? 'company' : 'user',
+        id: String(participant.id),
+      }))
+    : [];
   const outgoing = buildGroupOutgoingMessages(actor, recipients, { ...payload, mediaUrl, groupId });
   const insert = await getMessagesCollection().insertMany(outgoing);
   const emittedRows = outgoing.map((row, index) => ({
@@ -501,11 +506,7 @@ export const sendGroupMessage = async (
     id: String(insert.insertedIds[index]),
   }));
 
-  const upsertParticipants = recipients.map((participant) => ({
-    type: participant.type === 'company' ? 'company' : 'user',
-    id: participant.id,
-  }));
-  await upsertGroupThreadsForParticipants(groupId, upsertParticipants);
+  await upsertGroupThreadsForParticipants(groupId, recipients);
 
   const senderMessage =
     emittedRows.find(
