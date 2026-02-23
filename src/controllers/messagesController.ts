@@ -20,7 +20,7 @@ const sendRateState = new Map<string, { count: number; startedAt: number }>();
 const MESSAGE_STATES: MessageThreadState[] = ['active', 'archived', 'requests', 'muted', 'blocked'];
 
 const actorMarker = (type: 'user' | 'company', id: string) => `${type}:${id}`;
-const peerMarker = (type: 'user' | 'company', id: string) => `${type}:${id}`;
+const peerMarker = (type: 'user' | 'company' | 'group', id: string) => `${type}:${id}`;
 const actorDeleteMarkers = (actor: { type: 'user' | 'company'; id: string }) => {
   const markers = [actorMarker(actor.type, actor.id)];
   // Preserve old personal-only deletion markers for legacy user<->user message rows.
