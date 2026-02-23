@@ -11,6 +11,7 @@ export interface IMessage {
   text: string;
   timestamp: Date;
   isRead: boolean;
+  readAt?: Date | null;
   messageType: 'text' | 'image' | 'file';
   mediaUrl?: string;
   mediaKey?: string;

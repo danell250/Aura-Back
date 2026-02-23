@@ -1185,6 +1185,69 @@ async function startServer() {
         }
       );
 
+      type SocketTypingPayload = {
+        fromType?: 'user' | 'company';
+        fromId?: string;
+        toType?: 'user' | 'company';
+        toId?: string;
+      };
+
+      const normalizeTypingPayload = (payload: SocketTypingPayload) => {
+        const fromType = payload?.fromType;
+        const fromId = typeof payload?.fromId === 'string' ? payload.fromId.trim() : '';
+        const toType = payload?.toType;
+        const toId = typeof payload?.toId === 'string' ? payload.toId.trim() : '';
+
+        if (!fromType || !fromId || !toType || !toId) {
+          return null;
+        }
+
+        return { fromType, fromId, toType, toId };
+      };
+
+      const routeTypingEvent = (eventName: 'typing:start' | 'typing:stop', payload: SocketTypingPayload) => {
+        const typing = normalizeTypingPayload(payload);
+        if (!typing) {
+          return { typing: null, error: 'Invalid typing payload' as string };
+        }
+
+        const fromRoom = identityRoom(typing.fromType, typing.fromId);
+        if (!identityRooms.has(fromRoom)) {
+          console.warn(`⚠️ Blocked typing event from non-joined identity ${typing.fromType}:${typing.fromId}`);
+          return { typing: null, error: 'Identity room is not joined' as string };
+        }
+
+        const targetRoom = identityRoom(typing.toType, typing.toId);
+        io.to(targetRoom).emit(eventName, {
+          fromType: typing.fromType,
+          fromId: typing.fromId,
+          toType: typing.toType,
+          toId: typing.toId,
+          fromUserId: user?.id,
+          timestamp: Date.now(),
+        });
+
+        return { typing, error: null as string | null };
+      };
+
+      socket.on('typing:start', (payload, ack?: (result: any) => void) => {
+        const { typing, error } = routeTypingEvent('typing:start', payload);
+        if (!typing) {
+          ack?.({ success: false, error: error || 'Unable to route typing start' });
+          return;
+        }
+        ack?.({ success: true });
+      });
+
+      socket.on('typing:stop', (payload, ack?: (result: any) => void) => {
+        const { typing, error } = routeTypingEvent('typing:stop', payload);
+        if (!typing) {
+          ack?.({ success: false, error: error || 'Unable to route typing stop' });
+          return;
+        }
+        ack?.({ success: true });
+      });
+
       type SocketCallPayload = {
         callId?: string;
         fromType?: 'user' | 'company';

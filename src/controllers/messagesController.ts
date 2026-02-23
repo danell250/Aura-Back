@@ -841,7 +841,7 @@ export const messagesController = {
         });
       }
 
-      await messagesCollection.updateMany(markReadFilter, { $set: { isRead: true } });
+      await messagesCollection.updateMany(markReadFilter, { $set: { isRead: true, readAt: new Date() } });
 
       res.json({
         success: true,
@@ -943,6 +943,7 @@ export const messagesController = {
         text: String(text || ''),
         timestamp: new Date(),
         isRead: false,
+        readAt: null,
         messageType,
         mediaUrl,
         mediaKey,
@@ -1197,7 +1198,7 @@ export const messagesController = {
         });
       }
 
-      await messagesCollection.updateMany(filter, { $set: { isRead: true } });
+      await messagesCollection.updateMany(filter, { $set: { isRead: true, readAt: new Date() } });
 
       await upsertThread(actor.type, actor.id, otherType, resolvedOtherId, { clearRequest: true });
 

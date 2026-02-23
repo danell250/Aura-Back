@@ -132,6 +132,7 @@ export interface Message {
   text: string;
   timestamp: number;
   isRead?: boolean;
+  readAt?: number | string | null;
   messageType?: 'text' | 'image' | 'file';
   mediaUrl?: string;
   replyTo?: string;
