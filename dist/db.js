@@ -193,6 +193,7 @@ function connectDB() {
                         partialFilterExpression: { paypalOrderId: { $type: 'string' } },
                         name: 'ad_sub_paypal_order_unique'
                     });
+                    yield db.collection('adSubscriptions').createIndex({ ownerId: 1, ownerType: 1, status: 1, endDate: 1 }, { name: 'idx_adSub_owner_status_end' });
                     console.log("✅ Payment idempotency indexes initialized");
                 }
                 catch (paymentIndexError) {

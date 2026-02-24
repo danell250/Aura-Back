@@ -11,7 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveOwnerPlanAccess = exports.findActiveSubscriptionForOwner = exports.buildActiveSubscriptionQuery = void 0;
 const adPlans_1 = require("../constants/adPlans");
-const adSubscriptionsController_1 = require("../controllers/adSubscriptionsController");
+const billingPeriod_1 = require("./billingPeriod");
 const companyAccess_1 = require("./companyAccess");
 const buildActiveSubscriptionQuery = (ownerId, ownerType, now = Date.now()) => {
     const query = {
@@ -40,7 +40,7 @@ const findActiveSubscriptionForOwner = (db_1, ownerId_1, ownerType_1, ...args_1)
     if (!subscription)
         return null;
     if (options === null || options === void 0 ? void 0 : options.refreshPeriod) {
-        return (0, adSubscriptionsController_1.ensureCurrentPeriod)(db, subscription);
+        return (0, billingPeriod_1.ensureCurrentBillingPeriod)(db, subscription);
     }
     return subscription;
 });

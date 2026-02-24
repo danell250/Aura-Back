@@ -13,13 +13,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.adSubscriptionsController = void 0;
-exports.getCurrentBillingWindow = getCurrentBillingWindow;
-exports.ensureCurrentPeriod = ensureCurrentPeriod;
 const db_1 = require("../db");
 const axios_1 = __importDefault(require("axios"));
 const securityLogger_1 = require("../utils/securityLogger");
 const identityUtils_1 = require("../utils/identityUtils");
 const companyAccess_1 = require("../utils/companyAccess");
+const billingPeriod_1 = require("../utils/billingPeriod");
+const adPlans_1 = require("../constants/adPlans");
 function verifyPayPalWebhookSignature(req) {
     return __awaiter(this, void 0, void 0, function* () {
         const webhookId = process.env.PAYPAL_WEBHOOK_ID;
@@ -59,44 +59,7 @@ function verifyPayPalWebhookSignature(req) {
         return verifyResponse.data.verification_status === 'SUCCESS';
     });
 }
-const adPlans_1 = require("../constants/adPlans");
-function getCurrentBillingWindow(subscriptionStart) {
-    const start = new Date(subscriptionStart);
-    const end = new Date(start);
-    end.setMonth(end.getMonth() + 1);
-    return { start, end };
-}
 const BILLING_MS = 30 * 24 * 60 * 60 * 1000;
-function ensureCurrentPeriod(db, subscription) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const now = Date.now();
-        const oneDayMs = 24 * 60 * 60 * 1000;
-        // If still in current period, return as-is
-        if (subscription.periodEnd && now < subscription.periodEnd) {
-            return subscription;
-        }
-        // Calculate new period bounds
-        const durationDays = subscription.durationDays || 30;
-        const periodStart = now;
-        const periodEnd = now + (durationDays * oneDayMs);
-        // Use findOneAndUpdate for atomicity - only update if period hasn't been reset by another request
-        const updated = yield db.collection('adSubscriptions').findOneAndUpdate({
-            id: subscription.id,
-            // Conditional check to prevent race conditions
-            periodEnd: subscription.periodEnd
-        }, {
-            $set: {
-                adsUsed: 0,
-                impressionsUsed: 0,
-                periodStart,
-                periodEnd,
-                updatedAt: now
-            }
-        }, { returnDocument: 'after' });
-        // Return updated document or original if no update occurred
-        return updated.value || subscription;
-    });
-}
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 const parseOwnerType = (value) => {
     if (value === undefined || value === null || value === '')
@@ -790,11 +753,14 @@ exports.adSubscriptionsController = {
                 .find(query)
                 .sort({ createdAt: -1 })
                 .toArray();
-            // Update subscription periods and return
-            const updated = [];
-            for (const sub of activeSubscriptions) {
-                updated.push(yield ensureCurrentPeriod(db, sub));
-            }
+            // Refresh only subscriptions that are due for period rollover.
+            const updated = yield Promise.all(activeSubscriptions.map((sub) => __awaiter(void 0, void 0, void 0, function* () {
+                const periodEnd = Number((sub === null || sub === void 0 ? void 0 : sub.periodEnd) || 0);
+                const periodNeedsRefresh = !periodEnd || now >= periodEnd;
+                if (!periodNeedsRefresh)
+                    return sub;
+                return (0, billingPeriod_1.ensureCurrentBillingPeriod)(db, sub);
+            })));
             // Auto-expire any subscriptions that have passed their end date
             const expireQuery = Object.assign({ status: 'active', endDate: { $exists: true, $lte: now } }, buildOwnerScope(actor.id, actor.type));
             yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateMany(expireQuery, {
@@ -919,21 +885,20 @@ exports.adSubscriptionsController = {
                     });
                     if (subscription) {
                         const renewalNow = Date.now();
-                        const renewalDays = subscription.durationDays || 30;
-                        const nextBillingDate = renewalNow + (30 * 24 * 60 * 60 * 1000);
-                        const nextPeriodEnd = renewalNow + (renewalDays * 24 * 60 * 60 * 1000);
-                        yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne({ _id: subscription._id }, {
+                        const nextBillingDate = renewalNow + BILLING_MS;
+                        const prepped = yield db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOneAndUpdate({ _id: subscription._id }, {
                             $set: {
-                                adsUsed: 0,
-                                impressionsUsed: 0,
-                                periodStart: renewalNow,
-                                periodEnd: nextPeriodEnd,
+                                // Mark the period as due now, then let ensureCurrentBillingPeriod
+                                // apply the single canonical reset/advance logic.
+                                periodEnd: renewalNow - 1,
                                 nextBillingDate,
                                 endDate: nextBillingDate,
                                 updatedAt: renewalNow,
                                 status: 'active'
                             }
-                        });
+                        }, { returnDocument: 'after' });
+                        const renewalSubscription = (prepped === null || prepped === void 0 ? void 0 : prepped.value) || subscription;
+                        yield (0, billingPeriod_1.ensureCurrentBillingPeriod)(db, renewalSubscription);
                         const amount = (resource.amount && (resource.amount.total || resource.amount.value)) ||
                             undefined;
                         const currency = (resource.amount && (resource.amount.currency || resource.amount.currency_code)) ||

@@ -13,9 +13,15 @@ exports.getAdAnalyticsDailyCollection = exports.initializeAdAnalyticsDailyCollec
 let adAnalyticsDailyCollection;
 const initializeAdAnalyticsDailyCollection = (db) => __awaiter(void 0, void 0, void 0, function* () {
     adAnalyticsDailyCollection = db.collection('adAnalyticsDaily');
-    // Create indexes for performance and uniqueness
-    yield adAnalyticsDailyCollection.createIndex({ adId: 1, dateKey: 1 }, { unique: true });
-    yield adAnalyticsDailyCollection.createIndex({ ownerId: 1, dateKey: 1 });
+    // Remove legacy unique index that can collide across owners sharing the same adId/dateKey.
+    const indexes = yield adAnalyticsDailyCollection.indexes();
+    const legacyUnique = indexes.find((index) => { var _a, _b; return index.unique && ((_a = index.key) === null || _a === void 0 ? void 0 : _a.adId) === 1 && ((_b = index.key) === null || _b === void 0 ? void 0 : _b.dateKey) === 1; });
+    if (legacyUnique === null || legacyUnique === void 0 ? void 0 : legacyUnique.name) {
+        yield adAnalyticsDailyCollection.dropIndex(legacyUnique.name);
+    }
+    // Create indexes matching actual upsert/query filters.
+    yield adAnalyticsDailyCollection.createIndex({ adId: 1, ownerId: 1, ownerType: 1, dateKey: 1 }, { unique: true, name: 'ad_analytics_daily_unique_owner_day' });
+    yield adAnalyticsDailyCollection.createIndex({ ownerId: 1, ownerType: 1, dateKey: 1 }, { name: 'ad_analytics_daily_owner_date' });
 });
 exports.initializeAdAnalyticsDailyCollection = initializeAdAnalyticsDailyCollection;
 const getAdAnalyticsDailyCollection = () => {

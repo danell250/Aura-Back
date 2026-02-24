@@ -9,24 +9,16 @@ export interface IAdAnalyticsDaily {
   clicks: number;
   engagement: number;
   conversions: number;
+  uniqueReach: number;
   spend: number;
   updatedAt: number;
+  createdAt?: number;
 }
 
 let adAnalyticsDailyCollection: Collection<IAdAnalyticsDaily>;
 
 export const initializeAdAnalyticsDailyCollection = async (db: Db) => {
   adAnalyticsDailyCollection = db.collection<IAdAnalyticsDaily>('adAnalyticsDaily');
-  
-  // Create indexes for performance and uniqueness
-  await adAnalyticsDailyCollection.createIndex(
-    { adId: 1, dateKey: 1 },
-    { unique: true }
-  );
-  
-  await adAnalyticsDailyCollection.createIndex(
-    { ownerId: 1, dateKey: 1 }
-  );
 };
 
 export const getAdAnalyticsDailyCollection = (): Collection<IAdAnalyticsDaily> => {

@@ -4,6 +4,8 @@ import axios from 'axios';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { resolveIdentityActor } from '../utils/identityUtils';
 import { buildFullAccessAdSubscription, hasFullCompanyAccess } from '../utils/companyAccess';
+import { ensureCurrentBillingPeriod } from '../utils/billingPeriod';
+import { AD_PLANS } from '../constants/adPlans';
 
 async function verifyPayPalWebhookSignature(req: Request): Promise<boolean> {
   const webhookId = process.env.PAYPAL_WEBHOOK_ID;
@@ -50,53 +52,8 @@ async function verifyPayPalWebhookSignature(req: Request): Promise<boolean> {
   );
   return verifyResponse.data.verification_status === 'SUCCESS';
 }
-import { AD_PLANS } from '../constants/adPlans';
-
-export function getCurrentBillingWindow(subscriptionStart: Date) {
-  const start = new Date(subscriptionStart);
-  const end = new Date(start);
-  end.setMonth(end.getMonth() + 1);
-  return { start, end };
-}
 
 const BILLING_MS = 30 * 24 * 60 * 60 * 1000;
-
-export async function ensureCurrentPeriod(db: any, subscription: any) {
-  const now = Date.now();
-  const oneDayMs = 24 * 60 * 60 * 1000;
-
-  // If still in current period, return as-is
-  if (subscription.periodEnd && now < subscription.periodEnd) {
-    return subscription;
-  }
-
-  // Calculate new period bounds
-  const durationDays = subscription.durationDays || 30;
-  const periodStart = now;
-  const periodEnd = now + (durationDays * oneDayMs);
-
-  // Use findOneAndUpdate for atomicity - only update if period hasn't been reset by another request
-  const updated = await db.collection('adSubscriptions').findOneAndUpdate(
-    {
-      id: subscription.id,
-      // Conditional check to prevent race conditions
-      periodEnd: subscription.periodEnd
-    },
-    {
-      $set: {
-        adsUsed: 0,
-        impressionsUsed: 0,
-        periodStart,
-        periodEnd,
-        updatedAt: now
-      }
-    },
-    { returnDocument: 'after' }
-  );
-
-  // Return updated document or original if no update occurred
-  return updated.value || subscription;
-}
 
 const AD_SUBSCRIPTIONS_COLLECTION = 'adSubscriptions';
 type OwnerType = 'user' | 'company';
@@ -869,11 +826,15 @@ export const adSubscriptionsController = {
         .sort({ createdAt: -1 })
         .toArray();
 
-      // Update subscription periods and return
-      const updated = [];
-      for (const sub of activeSubscriptions) {
-        updated.push(await ensureCurrentPeriod(db, sub));
-      }
+      // Refresh only subscriptions that are due for period rollover.
+      const updated = await Promise.all(
+        activeSubscriptions.map(async (sub) => {
+          const periodEnd = Number(sub?.periodEnd || 0);
+          const periodNeedsRefresh = !periodEnd || now >= periodEnd;
+          if (!periodNeedsRefresh) return sub;
+          return ensureCurrentBillingPeriod(db, sub);
+        })
+      );
 
       // Auto-expire any subscriptions that have passed their end date
       const expireQuery: any = {
@@ -1024,25 +985,25 @@ export const adSubscriptionsController = {
 
           if (subscription) {
             const renewalNow = Date.now();
-            const renewalDays = subscription.durationDays || 30;
-            const nextBillingDate = renewalNow + (30 * 24 * 60 * 60 * 1000);
-            const nextPeriodEnd = renewalNow + (renewalDays * 24 * 60 * 60 * 1000);
-
-            await db.collection(AD_SUBSCRIPTIONS_COLLECTION).updateOne(
+            const nextBillingDate = renewalNow + BILLING_MS;
+            const prepped = await db.collection(AD_SUBSCRIPTIONS_COLLECTION).findOneAndUpdate(
               { _id: subscription._id },
               {
                 $set: {
-                  adsUsed: 0,
-                  impressionsUsed: 0,
-                  periodStart: renewalNow,
-                  periodEnd: nextPeriodEnd,
+                  // Mark the period as due now, then let ensureCurrentBillingPeriod
+                  // apply the single canonical reset/advance logic.
+                  periodEnd: renewalNow - 1,
                   nextBillingDate,
                   endDate: nextBillingDate,
                   updatedAt: renewalNow,
                   status: 'active'
                 }
-              }
+              },
+              { returnDocument: 'after' }
             );
+
+            const renewalSubscription = prepped?.value || subscription;
+            await ensureCurrentBillingPeriod(db, renewalSubscription);
 
             const amount =
               (resource.amount && (resource.amount.total || resource.amount.value)) ||

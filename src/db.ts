@@ -7,6 +7,7 @@ import { initializeUserCollection } from "./models/User";
 import { initializeAdAnalyticsDailyCollection } from "./models/AdAnalyticsDaily";
 import { initializeAdEventDedupesCollection } from "./models/AdEventDedupe";
 import { initializeCallLogsCollection } from "./models/CallLog";
+import { runIndexMigration } from "./db/addMissingIndexes";
 
 dotenv.config();
 
@@ -49,6 +50,7 @@ let connectionAttempts = 0;
 const maxRetries = 5;
 let reconnectInterval: NodeJS.Timeout | null = null;
 let monitoringClient: MongoClient | null = null;
+let indexMigrationCompleted = false;
 
 const initializeCoreCollections = async (db: Db): Promise<void> => {
   await initializeMessageCollection(db);
@@ -198,28 +200,22 @@ export async function connectDB(): Promise<Db | null> {
           { orderId: 1 },
           { sparse: true, name: 'tx_order_id_idx' }
         );
-        await db.collection('adSubscriptions').createIndex(
-          { paypalSubscriptionId: 1 },
-          {
-            unique: true,
-            partialFilterExpression: { paypalSubscriptionId: { $type: 'string' } },
-            name: 'ad_sub_paypal_subscription_unique'
-          }
-        );
-        await db.collection('adSubscriptions').createIndex(
-          { paypalOrderId: 1 },
-          {
-            unique: true,
-            partialFilterExpression: { paypalOrderId: { $type: 'string' } },
-            name: 'ad_sub_paypal_order_unique'
-          }
-        );
         console.log("✅ Payment idempotency indexes initialized");
       } catch (paymentIndexError) {
         console.warn("⚠️  Warning: Could not initialize payment indexes:", paymentIndexError);
       }
+
     } catch (error) {
       console.warn("⚠️  Warning: Could not initialize collections:", error);
+    }
+
+    if (!indexMigrationCompleted) {
+      try {
+        await runIndexMigration(db);
+        indexMigrationCompleted = true;
+      } catch (migrationError) {
+        console.warn("⚠️  Warning: Could not run index migration:", migrationError);
+      }
     }
     
     console.log("✅ Connected to MongoDB successfully");

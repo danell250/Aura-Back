@@ -1,6 +1,6 @@
 import { Db } from 'mongodb';
 import { AD_PLANS, AdPlanEntitlements, AdPlanId, getPlanEntitlements } from '../constants/adPlans';
-import { ensureCurrentPeriod } from '../controllers/adSubscriptionsController';
+import { ensureCurrentBillingPeriod as refreshBillingPeriod } from './billingPeriod';
 import { hasFullCompanyAccess } from './companyAccess';
 
 export type AdOwnerType = 'user' | 'company';
@@ -50,7 +50,7 @@ export const findActiveSubscriptionForOwner = async (
   if (!subscription) return null;
 
   if (options?.refreshPeriod) {
-    return ensureCurrentPeriod(db, subscription);
+    return refreshBillingPeriod(db, subscription);
   }
 
   return subscription;
