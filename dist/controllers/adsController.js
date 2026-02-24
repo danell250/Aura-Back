@@ -1650,18 +1650,31 @@ exports.adsController = {
             if (dedupe.upsertedCount === 0) {
                 return res.json({ success: true, deduped: true });
             }
-            const inc = { engagement: 1 };
+            const shouldCountAsClick = engagementType === 'share';
+            const analyticsInc = Object.assign({ engagement: 1 }, (shouldCountAsClick ? { clicks: 1 } : {}));
             if (engagementType)
-                inc[`engagementByType.${engagementType}`] = 1;
+                analyticsInc[`engagementByType.${engagementType}`] = 1;
             yield db.collection('adAnalytics').updateOne({ adId: id }, {
-                $inc: inc,
+                $inc: analyticsInc,
                 $set: {
                     lastUpdated: now,
                     ownerId: ad.ownerId,
                     ownerType: ad.ownerType || 'user'
                 }
             }, { upsert: true });
-            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey }, { $inc: Object.assign({ engagement: 1 }, (engagementType ? { [`engagementByType.${engagementType}`]: 1 } : {})), $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
+            const dailyInc = Object.assign({ engagement: 1 }, (shouldCountAsClick ? { clicks: 1 } : {}));
+            if (engagementType)
+                dailyInc[`engagementByType.${engagementType}`] = 1;
+            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey }, { $inc: dailyInc, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
+            if (shouldCountAsClick) {
+                const updatedAnalytics = yield db.collection('adAnalytics').findOne({ adId: id });
+                if (updatedAnalytics) {
+                    const impressions = Number(updatedAnalytics.impressions || 0);
+                    const clicks = Number(updatedAnalytics.clicks || 0);
+                    const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+                    yield db.collection('adAnalytics').updateOne({ adId: id }, { $set: { ctr, lastUpdated: now } });
+                }
+            }
             // Emit real-time update
             (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true });

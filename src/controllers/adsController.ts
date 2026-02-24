@@ -1965,13 +1965,17 @@ export const adsController = {
         return res.json({ success: true, deduped: true });
       }
 
-      const inc: any = { engagement: 1 };
-      if (engagementType) inc[`engagementByType.${engagementType}`] = 1;
+      const shouldCountAsClick = engagementType === 'share';
+      const analyticsInc: any = {
+        engagement: 1,
+        ...(shouldCountAsClick ? { clicks: 1 } : {})
+      };
+      if (engagementType) analyticsInc[`engagementByType.${engagementType}`] = 1;
 
       await db.collection('adAnalytics').updateOne(
         { adId: id },
         { 
-          $inc: inc, 
+          $inc: analyticsInc, 
           $set: { 
             lastUpdated: now,
             ownerId: ad.ownerId,
@@ -1981,11 +1985,30 @@ export const adsController = {
         { upsert: true }
       );
 
+      const dailyInc: any = {
+        engagement: 1,
+        ...(shouldCountAsClick ? { clicks: 1 } : {})
+      };
+      if (engagementType) dailyInc[`engagementByType.${engagementType}`] = 1;
+
       await db.collection('adAnalyticsDaily').updateOne(
         { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey },
-        { $inc: { engagement: 1, ...(engagementType ? { [`engagementByType.${engagementType}`]: 1 } : {}) }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } },
+        { $inc: dailyInc, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } },
         { upsert: true }
       );
+
+      if (shouldCountAsClick) {
+        const updatedAnalytics = await db.collection('adAnalytics').findOne({ adId: id });
+        if (updatedAnalytics) {
+          const impressions = Number(updatedAnalytics.impressions || 0);
+          const clicks = Number(updatedAnalytics.clicks || 0);
+          const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
+          await db.collection('adAnalytics').updateOne(
+            { adId: id },
+            { $set: { ctr, lastUpdated: now } }
+          );
+        }
+      }
 
       // Emit real-time update
       emitAdAnalyticsUpdate(req.app, id, ad.ownerId, ad.ownerType || 'user');
