@@ -22,6 +22,7 @@ const postsController_1 = require("./postsController");
 const securityLogger_1 = require("../utils/securityLogger");
 const socketHub_1 = require("../realtime/socketHub");
 const companyAccess_1 = require("../utils/companyAccess");
+const notificationsController_1 = require("./notificationsController");
 const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
     const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
@@ -642,7 +643,7 @@ exports.usersController = {
                     message: `User with ID ${id} does not exist`
                 });
             }
-            const targetUser = yield db.collection('users').findOne({ id: targetUserId });
+            const targetUser = yield db.collection('users').findOne({ id: targetUserId }, { projection: { id: 1 } });
             if (!targetUser) {
                 return res.status(404).json({
                     success: false,
@@ -657,12 +658,12 @@ exports.usersController = {
                     updatedAt: new Date().toISOString()
                 }
             });
-            const updatedNotifications = (targetUser.notifications || []).filter((n) => !(n.type === 'acquaintance_request' && n.fromUser.id === id));
-            yield db.collection('users').updateOne({ id: targetUserId }, {
-                $set: {
-                    notifications: updatedNotifications,
-                    updatedAt: new Date().toISOString()
-                }
+            yield db.collection('notifications').deleteMany({
+                ownerType: 'user',
+                ownerId: targetUserId,
+                type: 'acquaintance_request',
+                "fromUser.id": id,
+                isRead: { $ne: true }
             });
             res.json({
                 success: true,
@@ -1003,29 +1004,17 @@ exports.usersController = {
                             { "author.type": { $exists: false } }
                         ]
                     }, { $set: { "author.activeGlow": mutableUpdates.activeGlow } });
-                    // 3. Update Notifications
-                    yield db.collection('users').updateMany({
-                        notifications: {
-                            $elemMatch: {
-                                "fromUser.id": id,
-                                $or: [
-                                    { "fromUser.type": "user" },
-                                    { "fromUser.type": { $exists: false } }
-                                ]
-                            }
-                        }
+                    yield db.collection('notifications').updateMany({
+                        "fromUser.id": id,
+                        $or: [
+                            { "fromUser.type": "user" },
+                            { "fromUser.type": { $exists: false } }
+                        ]
                     }, {
                         $set: {
-                            "notifications.$[elem].fromUser.activeGlow": mutableUpdates.activeGlow
+                            "fromUser.activeGlow": mutableUpdates.activeGlow,
+                            updatedAt: new Date()
                         }
-                    }, {
-                        arrayFilters: [{
-                                "elem.fromUser.id": id,
-                                $or: [
-                                    { "elem.fromUser.type": "user" },
-                                    { "elem.fromUser.type": { $exists: false } }
-                                ]
-                            }]
                     });
                     // 4. Update Ads
                     yield db.collection('ads').updateMany({
@@ -1155,31 +1144,19 @@ exports.usersController = {
                             "author.avatarKey": updates.avatarKey
                         }
                     });
-                    // 3. Update Notifications (in all users who have notifications from this user)
-                    yield db.collection('users').updateMany({
-                        notifications: {
-                            $elemMatch: {
-                                "fromUser.id": userId,
-                                $or: [
-                                    { "fromUser.type": "user" },
-                                    { "fromUser.type": { $exists: false } }
-                                ]
-                            }
-                        }
+                    yield db.collection('notifications').updateMany({
+                        "fromUser.id": userId,
+                        $or: [
+                            { "fromUser.type": "user" },
+                            { "fromUser.type": { $exists: false } }
+                        ]
                     }, {
                         $set: {
-                            "notifications.$[elem].fromUser.avatar": updates.avatar,
-                            "notifications.$[elem].fromUser.avatarType": updates.avatarType,
-                            "notifications.$[elem].fromUser.avatarKey": updates.avatarKey
+                            "fromUser.avatar": updates.avatar,
+                            "fromUser.avatarType": updates.avatarType,
+                            "fromUser.avatarKey": updates.avatarKey,
+                            updatedAt: new Date()
                         }
-                    }, {
-                        arrayFilters: [{
-                                "elem.fromUser.id": userId,
-                                $or: [
-                                    { "elem.fromUser.type": "user" },
-                                    { "elem.fromUser.type": { $exists: false } }
-                                ]
-                            }]
                     });
                     console.log(`Propagated avatar update for user ${userId} to posts, comments, and notifications.`);
                 }
@@ -1270,58 +1247,38 @@ exports.usersController = {
                     message: 'Users are already connected'
                 });
             }
-            // Update acceptor (add acquaintance, update notifications)
+            // Update acceptor (add acquaintance, mark pending request notifications as read)
             const updatedAcceptorAcquaintances = [...acceptorAcquaintances, requesterId];
-            // Mark the specific request notification as read
-            const updatedNotifications = (acceptor.notifications || []).map((n) => {
-                if (n.type === 'acquaintance_request' && n.fromUser.id === requesterId) {
-                    return Object.assign(Object.assign({}, n), { isRead: true });
+            yield db.collection('notifications').updateMany({
+                ownerType: 'user',
+                ownerId: id,
+                type: 'acquaintance_request',
+                "fromUser.id": requesterId,
+                isRead: { $ne: true }
+            }, {
+                $set: {
+                    isRead: true,
+                    readAt: new Date(),
+                    updatedAt: new Date()
                 }
-                return n;
             });
             yield db.collection('users').updateOne({ id }, {
                 $set: {
                     acquaintances: updatedAcceptorAcquaintances,
-                    notifications: updatedNotifications,
                     updatedAt: new Date().toISOString()
                 }
             });
             // Update requester (add acquaintance, remove sent request, add acceptance notification)
             const requesterSentRequests = (requester.sentAcquaintanceRequests || []).filter((rid) => rid !== id);
             const requesterAcquaintances = [...(requester.acquaintances || []), id];
-            const acceptanceNotification = {
-                id: `notif-accept-${Date.now()}-${Math.random()}`,
-                type: 'acquaintance_accepted', // Using a generic type or reuse 'acquaintance_request' with different message
-                fromUser: {
-                    id: acceptor.id,
-                    name: acceptor.name,
-                    handle: acceptor.handle,
-                    avatar: acceptor.avatar,
-                    avatarType: acceptor.avatarType
-                },
-                message: 'accepted your connection request',
-                timestamp: Date.now(),
-                isRead: false,
-                connectionId: id
-            };
             yield db.collection('users').updateOne({ id: requesterId }, {
                 $set: {
                     acquaintances: requesterAcquaintances,
                     sentAcquaintanceRequests: requesterSentRequests,
                     updatedAt: new Date().toISOString()
-                },
-                $push: {
-                    notifications: {
-                        $each: [acceptanceNotification],
-                        $position: 0
-                    }
                 }
             });
-            (0, socketHub_1.emitToIdentity)('user', requesterId, 'notification:new', {
-                ownerType: 'user',
-                ownerId: requesterId,
-                notification: acceptanceNotification
-            });
+            yield (0, notificationsController_1.createNotificationInDB)(requesterId, 'acquaintance_accepted', acceptor.id, 'accepted your connection request', undefined, id, undefined, undefined, 'user');
             res.json({
                 success: true,
                 data: {
@@ -2518,38 +2475,14 @@ exports.usersController = {
             if (shouldAddProfileView) {
                 profileViews.push(viewerId);
             }
-            // Create a notification for the profile owner
-            const newNotification = {
-                id: `notif-profile-view-${Date.now()}-${Math.random()}`,
-                type: 'profile_view',
-                fromUser: {
-                    id: viewer.id,
-                    name: viewer.name,
-                    handle: viewer.handle,
-                    avatar: viewer.avatar,
-                    avatarType: viewer.avatarType
-                },
-                message: 'viewed your profile',
-                timestamp: Date.now(),
-                isRead: false
-            };
             const now = Date.now();
-            const existingRecentViewNotice = Array.isArray(user.notifications)
-                ? user.notifications.find((notif) => {
-                    var _a;
-                    if ((notif === null || notif === void 0 ? void 0 : notif.type) !== 'profile_view')
-                        return false;
-                    if (((_a = notif === null || notif === void 0 ? void 0 : notif.fromUser) === null || _a === void 0 ? void 0 : _a.id) !== viewerId)
-                        return false;
-                    const rawTimestamp = notif === null || notif === void 0 ? void 0 : notif.timestamp;
-                    const ts = typeof rawTimestamp === 'number'
-                        ? rawTimestamp
-                        : new Date(rawTimestamp || 0).getTime();
-                    if (!Number.isFinite(ts) || ts <= 0)
-                        return false;
-                    return now - ts < 60 * 60 * 1000;
-                })
-                : null;
+            const existingRecentViewNotice = yield db.collection('notifications').findOne({
+                ownerType: 'user',
+                ownerId: id,
+                type: 'profile_view',
+                "fromUser.id": viewerId,
+                timestamp: { $gte: now - 60 * 60 * 1000 }
+            }, { projection: { id: 1 } });
             const shouldPushNotification = !existingRecentViewNotice;
             const nextSetPayload = {
                 updatedAt: new Date().toISOString(),
@@ -2557,21 +2490,13 @@ exports.usersController = {
             if (shouldAddProfileView) {
                 nextSetPayload.profileViews = profileViews;
             }
-            if (shouldPushNotification) {
-                const updatedNotifications = [newNotification, ...(user.notifications || [])];
-                nextSetPayload.notifications = updatedNotifications;
-            }
             if (Object.keys(nextSetPayload).length > 0) {
                 yield db.collection('users').updateOne({ id }, {
                     $set: nextSetPayload
                 });
             }
             if (shouldPushNotification) {
-                (0, socketHub_1.emitToIdentity)('user', id, 'notification:new', {
-                    ownerType: 'user',
-                    ownerId: id,
-                    notification: newNotification
-                });
+                yield (0, notificationsController_1.createNotificationInDB)(id, 'profile_view', viewer.id, 'viewed your profile', undefined, undefined, { viewedBy: viewer.id }, undefined, 'user');
             }
             if (shouldAddProfileView) {
                 (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id, 'user');
@@ -2644,35 +2569,7 @@ exports.usersController = {
                     message: 'You are already connected with this user'
                 });
             }
-            // Create notification for target user
-            const newNotification = {
-                id: `notif-conn-${Date.now()}-${Math.random()}`,
-                type: 'acquaintance_request',
-                fromUser: {
-                    id: requester.id,
-                    name: requester.name,
-                    handle: requester.handle,
-                    avatar: requester.avatar,
-                    avatarType: requester.avatarType
-                },
-                message: 'wants to connect with you',
-                timestamp: Date.now(),
-                isRead: false
-            };
-            // Add to target user's notifications and sentRequests
-            const updatedNotifications = [newNotification, ...(targetUser.notifications || [])];
-            // Update target user
-            yield db.collection('users').updateOne({ id }, {
-                $set: {
-                    notifications: updatedNotifications,
-                    updatedAt: new Date().toISOString()
-                }
-            });
-            (0, socketHub_1.emitToIdentity)('user', id, 'notification:new', {
-                ownerType: 'user',
-                ownerId: id,
-                notification: newNotification
-            });
+            const newNotification = yield (0, notificationsController_1.createNotificationInDB)(id, 'acquaintance_request', requester.id, 'wants to connect with you', undefined, undefined, undefined, undefined, 'user');
             // Update requester's sentAcquaintanceRequests
             yield db.collection('users').updateOne({ id: fromUserId }, {
                 $addToSet: { sentAcquaintanceRequests: id },
@@ -2716,54 +2613,33 @@ exports.usersController = {
                     message: `User with ID ${requesterId} does not exist`
                 });
             }
-            // Mark the specific request notification as read (rejected)
-            const updatedNotifications = (rejecter.notifications || []).map((n) => {
-                if (n.type === 'acquaintance_request' && n.fromUser.id === requesterId) {
-                    return Object.assign(Object.assign({}, n), { isRead: true });
+            yield db.collection('notifications').updateMany({
+                ownerType: 'user',
+                ownerId: id,
+                type: 'acquaintance_request',
+                "fromUser.id": requesterId,
+                isRead: { $ne: true }
+            }, {
+                $set: {
+                    isRead: true,
+                    readAt: new Date(),
+                    updatedAt: new Date()
                 }
-                return n;
             });
             yield db.collection('users').updateOne({ id }, {
                 $set: {
-                    notifications: updatedNotifications,
                     updatedAt: new Date().toISOString()
                 }
             });
             // Remove the sent request from requester's sentAcquaintanceRequests
             const requesterSentRequests = (requester.sentAcquaintanceRequests || []).filter((rid) => rid !== id);
-            // Create a rejection notification for the requester
-            const rejectionNotification = {
-                id: `notif-reject-${Date.now()}-${Math.random()}`,
-                type: 'acquaintance_rejected',
-                fromUser: {
-                    id: rejecter.id,
-                    name: rejecter.name,
-                    handle: rejecter.handle,
-                    avatar: rejecter.avatar,
-                    avatarType: rejecter.avatarType
-                },
-                message: 'declined your connection request',
-                timestamp: Date.now(),
-                isRead: false,
-                connectionId: id
-            };
             yield db.collection('users').updateOne({ id: requesterId }, {
                 $set: {
                     sentAcquaintanceRequests: requesterSentRequests,
                     updatedAt: new Date().toISOString()
-                },
-                $push: {
-                    notifications: {
-                        $each: [rejectionNotification],
-                        $position: 0
-                    }
                 }
             });
-            (0, socketHub_1.emitToIdentity)('user', requesterId, 'notification:new', {
-                ownerType: 'user',
-                ownerId: requesterId,
-                notification: rejectionNotification
-            });
+            yield (0, notificationsController_1.createNotificationInDB)(requesterId, 'acquaintance_rejected', rejecter.id, 'declined your connection request', undefined, id, undefined, undefined, 'user');
             res.json({
                 success: true,
                 data: {

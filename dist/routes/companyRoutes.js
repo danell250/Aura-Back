@@ -971,7 +971,19 @@ router.post('/invites/accept', authMiddleware_1.requireAuth, (req, res) => __awa
             }
         });
         // Update the notification to mark it as read/accepted
-        yield db.collection('users').updateOne({ id: currentUser.id, 'notifications.type': 'company_invite', 'notifications.meta.token': token }, { $set: { 'notifications.$.isRead': true } });
+        const now = new Date();
+        yield db.collection('notifications').updateMany({
+            ownerType: 'user',
+            ownerId: currentUser.id,
+            type: 'company_invite',
+            'meta.token': token
+        }, {
+            $set: {
+                isRead: true,
+                readAt: now,
+                updatedAt: now
+            }
+        });
         res.json({ success: true, message: 'Invite accepted successfully' });
     }
     catch (error) {
@@ -1236,7 +1248,19 @@ router.post('/invites/:inviteId/accept', authMiddleware_1.requireAuth, (req, res
             }
         });
         // Mark notification as read
-        yield db.collection('users').updateOne({ id: currentUser.id, 'notifications.meta.inviteId': inviteId }, { $set: { 'notifications.$.isRead': true } });
+        const now = new Date();
+        yield db.collection('notifications').updateMany({
+            ownerType: 'user',
+            ownerId: currentUser.id,
+            type: 'company_invite',
+            'meta.inviteId': inviteId
+        }, {
+            $set: {
+                isRead: true,
+                readAt: now,
+                updatedAt: now
+            }
+        });
         res.json({ success: true, message: 'Invite accepted successfully' });
     }
     catch (error) {
@@ -1276,7 +1300,19 @@ router.post('/invites/:inviteId/decline', authMiddleware_1.requireAuth, (req, re
             }
         });
         // Mark notification as read
-        yield db.collection('users').updateOne({ id: currentUser.id, 'notifications.meta.inviteId': inviteId }, { $set: { 'notifications.$.isRead': true } });
+        const now = new Date();
+        yield db.collection('notifications').updateMany({
+            ownerType: 'user',
+            ownerId: currentUser.id,
+            type: 'company_invite',
+            'meta.inviteId': inviteId
+        }, {
+            $set: {
+                isRead: true,
+                readAt: now,
+                updatedAt: now
+            }
+        });
         res.json({ success: true, message: 'Invite declined' });
     }
     catch (error) {

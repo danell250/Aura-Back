@@ -77,6 +77,7 @@ const companyRoutes_1 = __importDefault(require("./routes/companyRoutes"));
 const reportsRoutes_1 = __importStar(require("./routes/reportsRoutes"));
 const ownerControlRoutes_1 = __importDefault(require("./routes/ownerControlRoutes"));
 const jobsRoutes_1 = __importDefault(require("./routes/jobsRoutes"));
+const notificationsController_1 = require("./controllers/notificationsController");
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const csrfMiddleware_1 = require("./middleware/csrfMiddleware");
 const path_1 = __importDefault(require("path"));
@@ -1415,6 +1416,8 @@ function startServer() {
                     console.log('✅ Database connection established');
                     (0, reportsRoutes_1.startReportScheduleWorker)();
                     console.log('📬 Scheduled report worker started');
+                    (0, notificationsController_1.startNotificationCleanupWorker)();
+                    console.log('🧹 Notification cleanup worker started');
                     const shouldLoadDemoData = process.env.NODE_ENV !== 'production' &&
                         process.env.DISABLE_DEMO_BOOTSTRAP !== 'true';
                     if (shouldLoadDemoData) {

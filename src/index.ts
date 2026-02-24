@@ -29,6 +29,7 @@ import companyRoutes from './routes/companyRoutes';
 import reportsRoutes, { startReportScheduleWorker } from './routes/reportsRoutes';
 import ownerControlRoutes from './routes/ownerControlRoutes';
 import jobsRoutes from './routes/jobsRoutes';
+import { startNotificationCleanupWorker } from './controllers/notificationsController';
 import { attachUser, requireAuth } from './middleware/authMiddleware';
 import { createCsrfProtection } from './middleware/csrfMiddleware';
 import path from 'path';
@@ -1541,6 +1542,8 @@ async function startServer() {
         console.log('✅ Database connection established');
         startReportScheduleWorker();
         console.log('📬 Scheduled report worker started');
+        startNotificationCleanupWorker();
+        console.log('🧹 Notification cleanup worker started');
 
         const shouldLoadDemoData =
           process.env.NODE_ENV !== 'production' &&

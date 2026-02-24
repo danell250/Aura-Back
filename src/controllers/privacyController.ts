@@ -2,8 +2,8 @@ import { Request, Response } from 'express';
 import { getDB } from '../db';
 import { User } from '../types';
 import { transformUsers } from '../utils/userUtils';
-import { emitToIdentity } from '../realtime/socketHub';
 import { emitAuthorInsightsUpdate } from './postsController';
+import { createNotificationInDB } from './notificationsController';
 
 const escapeRegexForSearch = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -407,34 +407,16 @@ export const privacyController = {
         );
       }
 
-      const newNotification = {
-        id: `notif-view-${Date.now()}-${Math.random()}`,
-        type: 'profile_view',
-        fromUser: {
-          id: viewer.id,
-          name: viewer.name,
-          handle: viewer.handle,
-          avatar: viewer.avatar,
-          avatarType: viewer.avatarType
+      const existingRecentViewNotice = await db.collection('notifications').findOne(
+        {
+          ownerType,
+          ownerId: profileOwnerId,
+          type: 'profile_view',
+          'fromUser.id': authenticatedUserId,
+          timestamp: { $gte: Date.now() - 60 * 60 * 1000 },
         },
-        message: 'viewed your profile',
-        timestamp: Date.now(),
-        isRead: false
-      };
-
-      const existingRecentViewNotice = Array.isArray(profileOwner.notifications)
-        ? profileOwner.notifications.find((notif: any) => {
-            if (notif?.type !== 'profile_view') return false;
-            if (notif?.fromUser?.id !== authenticatedUserId) return false;
-            const rawTimestamp = notif?.timestamp;
-            const ts =
-              typeof rawTimestamp === 'number'
-                ? rawTimestamp
-                : new Date(rawTimestamp || 0).getTime();
-            if (!Number.isFinite(ts) || ts <= 0) return false;
-            return Date.now() - ts < 60 * 60 * 1000; // one hour
-          })
-        : null;
+        { projection: { id: 1 } },
+      );
 
       if (existingRecentViewNotice) {
         return res.json({
@@ -448,23 +430,17 @@ export const privacyController = {
         });
       }
 
-      await db.collection(ownerCollection).updateOne(
-        { id: profileOwnerId },
-        { 
-          $push: { 
-            notifications: {
-              $each: [newNotification],
-              $position: 0
-            }
-          }
-        } as any
+      await createNotificationInDB(
+        profileOwnerId,
+        'profile_view',
+        viewer.id,
+        'viewed your profile',
+        undefined,
+        undefined,
+        { viewedBy: viewer.id },
+        undefined,
+        ownerType
       );
-
-      emitToIdentity(ownerType, profileOwnerId, 'notification:new', {
-        ownerType,
-        ownerId: profileOwnerId,
-        notification: newNotification
-      });
       if (shouldAddProfileView) {
         emitAuthorInsightsUpdate(req.app, profileOwnerId, ownerType);
       }

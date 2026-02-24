@@ -8,6 +8,7 @@ import { emitAuthorInsightsUpdate } from './postsController';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { emitToIdentity } from '../realtime/socketHub';
 import { getFullCompanyCreditBalance } from '../utils/companyAccess';
+import { createNotificationInDB } from './notificationsController';
 
 const generateUniqueHandle = async (firstName: string, lastName: string): Promise<string> => {
   const db = getDB();
@@ -734,7 +735,7 @@ export const usersController = {
         });
       }
 
-      const targetUser = await db.collection('users').findOne({ id: targetUserId });
+      const targetUser = await db.collection('users').findOne({ id: targetUserId }, { projection: { id: 1 } });
       if (!targetUser) {
         return res.status(404).json({
           success: false,
@@ -755,19 +756,13 @@ export const usersController = {
         }
       );
 
-      const updatedNotifications = (targetUser.notifications || []).filter(
-        (n: any) => !(n.type === 'acquaintance_request' && n.fromUser.id === id)
-      );
-
-      await db.collection('users').updateOne(
-        { id: targetUserId },
-        {
-          $set: {
-            notifications: updatedNotifications,
-            updatedAt: new Date().toISOString()
-          }
-        }
-      );
+      await db.collection('notifications').deleteMany({
+        ownerType: 'user',
+        ownerId: targetUserId,
+        type: 'acquaintance_request',
+        "fromUser.id": id,
+        isRead: { $ne: true }
+      });
 
       res.json({
         success: true,
@@ -1220,32 +1215,19 @@ export const usersController = {
             { $set: { "author.activeGlow": mutableUpdates.activeGlow } }
           );
 
-          // 3. Update Notifications
-          await db.collection('users').updateMany(
+          await db.collection('notifications').updateMany(
             {
-              notifications: {
-                $elemMatch: {
-                  "fromUser.id": id,
-                  $or: [
-                    { "fromUser.type": "user" },
-                    { "fromUser.type": { $exists: false } }
-                  ]
-                }
-              }
+              "fromUser.id": id,
+              $or: [
+                { "fromUser.type": "user" },
+                { "fromUser.type": { $exists: false } }
+              ]
             },
             {
               $set: {
-                "notifications.$[elem].fromUser.activeGlow": mutableUpdates.activeGlow
+                "fromUser.activeGlow": mutableUpdates.activeGlow,
+                updatedAt: new Date()
               }
-            },
-            {
-              arrayFilters: [{
-                "elem.fromUser.id": id,
-                $or: [
-                  { "elem.fromUser.type": "user" },
-                  { "elem.fromUser.type": { $exists: false } }
-                ]
-              }]
             }
           );
 
@@ -1418,34 +1400,21 @@ export const usersController = {
             }
           );
 
-          // 3. Update Notifications (in all users who have notifications from this user)
-          await db.collection('users').updateMany(
+          await db.collection('notifications').updateMany(
             {
-              notifications: {
-                $elemMatch: {
-                  "fromUser.id": userId,
-                  $or: [
-                    { "fromUser.type": "user" },
-                    { "fromUser.type": { $exists: false } }
-                  ]
-                }
-              }
+              "fromUser.id": userId,
+              $or: [
+                { "fromUser.type": "user" },
+                { "fromUser.type": { $exists: false } }
+              ]
             },
             {
               $set: {
-                "notifications.$[elem].fromUser.avatar": updates.avatar,
-                "notifications.$[elem].fromUser.avatarType": updates.avatarType,
-                "notifications.$[elem].fromUser.avatarKey": updates.avatarKey
+                "fromUser.avatar": updates.avatar,
+                "fromUser.avatarType": updates.avatarType,
+                "fromUser.avatarKey": updates.avatarKey,
+                updatedAt: new Date()
               }
-            },
-            {
-              arrayFilters: [{
-                "elem.fromUser.id": userId,
-                $or: [
-                  { "elem.fromUser.type": "user" },
-                  { "elem.fromUser.type": { $exists: false } }
-                ]
-              }]
             }
           );
 
@@ -1553,22 +1522,30 @@ export const usersController = {
         });
       }
 
-      // Update acceptor (add acquaintance, update notifications)
+      // Update acceptor (add acquaintance, mark pending request notifications as read)
       const updatedAcceptorAcquaintances = [...acceptorAcquaintances, requesterId];
-      // Mark the specific request notification as read
-      const updatedNotifications = (acceptor.notifications || []).map((n: any) => {
-        if (n.type === 'acquaintance_request' && n.fromUser.id === requesterId) {
-          return { ...n, isRead: true };
+      await db.collection('notifications').updateMany(
+        {
+          ownerType: 'user',
+          ownerId: id,
+          type: 'acquaintance_request',
+          "fromUser.id": requesterId,
+          isRead: { $ne: true }
+        },
+        {
+          $set: {
+            isRead: true,
+            readAt: new Date(),
+            updatedAt: new Date()
+          }
         }
-        return n;
-      });
+      );
 
       await db.collection('users').updateOne(
         { id },
         {
           $set: {
             acquaintances: updatedAcceptorAcquaintances,
-            notifications: updatedNotifications,
             updatedAt: new Date().toISOString()
           }
         }
@@ -1578,22 +1555,6 @@ export const usersController = {
       const requesterSentRequests = (requester.sentAcquaintanceRequests || []).filter((rid: string) => rid !== id);
       const requesterAcquaintances = [...(requester.acquaintances || []), id];
 
-      const acceptanceNotification = {
-        id: `notif-accept-${Date.now()}-${Math.random()}`,
-        type: 'acquaintance_accepted', // Using a generic type or reuse 'acquaintance_request' with different message
-        fromUser: {
-          id: acceptor.id,
-          name: acceptor.name,
-          handle: acceptor.handle,
-          avatar: acceptor.avatar,
-          avatarType: acceptor.avatarType
-        },
-        message: 'accepted your connection request',
-        timestamp: Date.now(),
-        isRead: false,
-        connectionId: id
-      };
-
       await db.collection('users').updateOne(
         { id: requesterId },
         {
@@ -1601,21 +1562,21 @@ export const usersController = {
             acquaintances: requesterAcquaintances,
             sentAcquaintanceRequests: requesterSentRequests,
             updatedAt: new Date().toISOString()
-          },
-          $push: {
-            notifications: {
-              $each: [acceptanceNotification],
-              $position: 0
-            }
-          } as any
+          }
         }
       );
 
-      emitToIdentity('user', requesterId, 'notification:new', {
-        ownerType: 'user',
-        ownerId: requesterId,
-        notification: acceptanceNotification
-      });
+      await createNotificationInDB(
+        requesterId,
+        'acquaintance_accepted',
+        acceptor.id,
+        'accepted your connection request',
+        undefined,
+        id,
+        undefined,
+        undefined,
+        'user'
+      );
 
       res.json({
         success: true,
@@ -3003,36 +2964,17 @@ export const usersController = {
         profileViews.push(viewerId);
       }
 
-      // Create a notification for the profile owner
-      const newNotification = {
-        id: `notif-profile-view-${Date.now()}-${Math.random()}`,
-        type: 'profile_view',
-        fromUser: {
-          id: viewer.id,
-          name: viewer.name,
-          handle: viewer.handle,
-          avatar: viewer.avatar,
-          avatarType: viewer.avatarType
-        },
-        message: 'viewed your profile',
-        timestamp: Date.now(),
-        isRead: false
-      };
-
       const now = Date.now();
-      const existingRecentViewNotice = Array.isArray(user.notifications)
-        ? user.notifications.find((notif: any) => {
-            if (notif?.type !== 'profile_view') return false;
-            if (notif?.fromUser?.id !== viewerId) return false;
-            const rawTimestamp = notif?.timestamp;
-            const ts =
-              typeof rawTimestamp === 'number'
-                ? rawTimestamp
-                : new Date(rawTimestamp || 0).getTime();
-            if (!Number.isFinite(ts) || ts <= 0) return false;
-            return now - ts < 60 * 60 * 1000;
-          })
-        : null;
+      const existingRecentViewNotice = await db.collection('notifications').findOne(
+        {
+          ownerType: 'user',
+          ownerId: id,
+          type: 'profile_view',
+          "fromUser.id": viewerId,
+          timestamp: { $gte: now - 60 * 60 * 1000 }
+        },
+        { projection: { id: 1 } }
+      );
 
       const shouldPushNotification = !existingRecentViewNotice;
       const nextSetPayload: Record<string, unknown> = {
@@ -3041,11 +2983,6 @@ export const usersController = {
 
       if (shouldAddProfileView) {
         nextSetPayload.profileViews = profileViews;
-      }
-
-      if (shouldPushNotification) {
-        const updatedNotifications = [newNotification, ...(user.notifications || [])];
-        nextSetPayload.notifications = updatedNotifications;
       }
 
       if (Object.keys(nextSetPayload).length > 0) {
@@ -3058,11 +2995,17 @@ export const usersController = {
       }
 
       if (shouldPushNotification) {
-        emitToIdentity('user', id, 'notification:new', {
-          ownerType: 'user',
-          ownerId: id,
-          notification: newNotification
-        });
+        await createNotificationInDB(
+          id,
+          'profile_view',
+          viewer.id,
+          'viewed your profile',
+          undefined,
+          undefined,
+          { viewedBy: viewer.id },
+          undefined,
+          'user'
+        );
       }
       if (shouldAddProfileView) {
         emitAuthorInsightsUpdate(req.app, id, 'user');
@@ -3141,41 +3084,17 @@ export const usersController = {
         });
       }
 
-      // Create notification for target user
-      const newNotification = {
-        id: `notif-conn-${Date.now()}-${Math.random()}`,
-        type: 'acquaintance_request',
-        fromUser: {
-          id: requester.id,
-          name: requester.name,
-          handle: requester.handle,
-          avatar: requester.avatar,
-          avatarType: requester.avatarType
-        },
-        message: 'wants to connect with you',
-        timestamp: Date.now(),
-        isRead: false
-      };
-
-      // Add to target user's notifications and sentRequests
-      const updatedNotifications = [newNotification, ...(targetUser.notifications || [])];
-
-      // Update target user
-      await db.collection('users').updateOne(
-        { id },
-        {
-          $set: {
-            notifications: updatedNotifications,
-            updatedAt: new Date().toISOString()
-          }
-        }
+      const newNotification = await createNotificationInDB(
+        id,
+        'acquaintance_request',
+        requester.id,
+        'wants to connect with you',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'user'
       );
-
-      emitToIdentity('user', id, 'notification:new', {
-        ownerType: 'user',
-        ownerId: id,
-        notification: newNotification
-      });
 
       // Update requester's sentAcquaintanceRequests
       await db.collection('users').updateOne(
@@ -3229,19 +3148,27 @@ export const usersController = {
         });
       }
 
-      // Mark the specific request notification as read (rejected)
-      const updatedNotifications = (rejecter.notifications || []).map((n: any) => {
-        if (n.type === 'acquaintance_request' && n.fromUser.id === requesterId) {
-          return { ...n, isRead: true };
+      await db.collection('notifications').updateMany(
+        {
+          ownerType: 'user',
+          ownerId: id,
+          type: 'acquaintance_request',
+          "fromUser.id": requesterId,
+          isRead: { $ne: true }
+        },
+        {
+          $set: {
+            isRead: true,
+            readAt: new Date(),
+            updatedAt: new Date()
+          }
         }
-        return n;
-      });
+      );
 
       await db.collection('users').updateOne(
         { id },
         {
           $set: {
-            notifications: updatedNotifications,
             updatedAt: new Date().toISOString()
           }
         }
@@ -3250,44 +3177,27 @@ export const usersController = {
       // Remove the sent request from requester's sentAcquaintanceRequests
       const requesterSentRequests = (requester.sentAcquaintanceRequests || []).filter((rid: string) => rid !== id);
 
-      // Create a rejection notification for the requester
-      const rejectionNotification = {
-        id: `notif-reject-${Date.now()}-${Math.random()}`,
-        type: 'acquaintance_rejected',
-        fromUser: {
-          id: rejecter.id,
-          name: rejecter.name,
-          handle: rejecter.handle,
-          avatar: rejecter.avatar,
-          avatarType: rejecter.avatarType
-        },
-        message: 'declined your connection request',
-        timestamp: Date.now(),
-        isRead: false,
-        connectionId: id
-      };
-
       await db.collection('users').updateOne(
         { id: requesterId },
         {
           $set: {
             sentAcquaintanceRequests: requesterSentRequests,
             updatedAt: new Date().toISOString()
-          },
-          $push: {
-            notifications: {
-              $each: [rejectionNotification],
-              $position: 0
-            }
-          } as any
+          }
         }
       );
 
-      emitToIdentity('user', requesterId, 'notification:new', {
-        ownerType: 'user',
-        ownerId: requesterId,
-        notification: rejectionNotification
-      });
+      await createNotificationInDB(
+        requesterId,
+        'acquaintance_rejected',
+        rejecter.id,
+        'declined your connection request',
+        undefined,
+        id,
+        undefined,
+        undefined,
+        'user'
+      );
 
       res.json({
         success: true,

@@ -12,8 +12,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.privacyController = void 0;
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
-const socketHub_1 = require("../realtime/socketHub");
 const postsController_1 = require("./postsController");
+const notificationsController_1 = require("./notificationsController");
 const escapeRegexForSearch = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 exports.privacyController = {
     // GET /api/privacy/settings/:userId - Get user's privacy settings
@@ -373,36 +373,13 @@ exports.privacyController = {
                     }
                 });
             }
-            const newNotification = {
-                id: `notif-view-${Date.now()}-${Math.random()}`,
+            const existingRecentViewNotice = yield db.collection('notifications').findOne({
+                ownerType,
+                ownerId: profileOwnerId,
                 type: 'profile_view',
-                fromUser: {
-                    id: viewer.id,
-                    name: viewer.name,
-                    handle: viewer.handle,
-                    avatar: viewer.avatar,
-                    avatarType: viewer.avatarType
-                },
-                message: 'viewed your profile',
-                timestamp: Date.now(),
-                isRead: false
-            };
-            const existingRecentViewNotice = Array.isArray(profileOwner.notifications)
-                ? profileOwner.notifications.find((notif) => {
-                    var _a;
-                    if ((notif === null || notif === void 0 ? void 0 : notif.type) !== 'profile_view')
-                        return false;
-                    if (((_a = notif === null || notif === void 0 ? void 0 : notif.fromUser) === null || _a === void 0 ? void 0 : _a.id) !== authenticatedUserId)
-                        return false;
-                    const rawTimestamp = notif === null || notif === void 0 ? void 0 : notif.timestamp;
-                    const ts = typeof rawTimestamp === 'number'
-                        ? rawTimestamp
-                        : new Date(rawTimestamp || 0).getTime();
-                    if (!Number.isFinite(ts) || ts <= 0)
-                        return false;
-                    return Date.now() - ts < 60 * 60 * 1000; // one hour
-                })
-                : null;
+                'fromUser.id': authenticatedUserId,
+                timestamp: { $gte: Date.now() - 60 * 60 * 1000 },
+            }, { projection: { id: 1 } });
             if (existingRecentViewNotice) {
                 return res.json({
                     success: true,
@@ -414,19 +391,7 @@ exports.privacyController = {
                     message: 'Profile view already recorded recently'
                 });
             }
-            yield db.collection(ownerCollection).updateOne({ id: profileOwnerId }, {
-                $push: {
-                    notifications: {
-                        $each: [newNotification],
-                        $position: 0
-                    }
-                }
-            });
-            (0, socketHub_1.emitToIdentity)(ownerType, profileOwnerId, 'notification:new', {
-                ownerType,
-                ownerId: profileOwnerId,
-                notification: newNotification
-            });
+            yield (0, notificationsController_1.createNotificationInDB)(profileOwnerId, 'profile_view', viewer.id, 'viewed your profile', undefined, undefined, { viewedBy: viewer.id }, undefined, ownerType);
             if (shouldAddProfileView) {
                 (0, postsController_1.emitAuthorInsightsUpdate)(req.app, profileOwnerId, ownerType);
             }

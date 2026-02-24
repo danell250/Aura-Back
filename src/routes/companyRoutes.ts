@@ -1153,11 +1153,22 @@ router.post('/invites/accept', requireAuth, async (req, res) => {
     );
 
     // Update the notification to mark it as read/accepted
-    await db.collection('users').updateOne(
-      { id: currentUser.id, 'notifications.type': 'company_invite', 'notifications.meta.token': token },
-      { $set: { 'notifications.$.isRead': true } }
+    const now = new Date();
+    await db.collection('notifications').updateMany(
+      {
+        ownerType: 'user',
+        ownerId: currentUser.id,
+        type: 'company_invite',
+        'meta.token': token
+      },
+      {
+        $set: {
+          isRead: true,
+          readAt: now,
+          updatedAt: now
+        }
+      }
     );
-
     res.json({ success: true, message: 'Invite accepted successfully' });
   } catch (error) {
     console.error('Accept invite error:', error);
@@ -1489,11 +1500,22 @@ router.post('/invites/:inviteId/accept', requireAuth, async (req, res) => {
     );
 
     // Mark notification as read
-    await db.collection('users').updateOne(
-      { id: currentUser.id, 'notifications.meta.inviteId': inviteId },
-      { $set: { 'notifications.$.isRead': true } }
+    const now = new Date();
+    await db.collection('notifications').updateMany(
+      {
+        ownerType: 'user',
+        ownerId: currentUser.id,
+        type: 'company_invite',
+        'meta.inviteId': inviteId
+      },
+      {
+        $set: {
+          isRead: true,
+          readAt: now,
+          updatedAt: now
+        }
+      }
     );
-
     res.json({ success: true, message: 'Invite accepted successfully' });
   } catch (error) {
     console.error('Accept invite error:', error);
@@ -1543,11 +1565,22 @@ router.post('/invites/:inviteId/decline', requireAuth, async (req, res) => {
     );
 
     // Mark notification as read
-    await db.collection('users').updateOne(
-      { id: currentUser.id, 'notifications.meta.inviteId': inviteId },
-      { $set: { 'notifications.$.isRead': true } }
+    const now = new Date();
+    await db.collection('notifications').updateMany(
+      {
+        ownerType: 'user',
+        ownerId: currentUser.id,
+        type: 'company_invite',
+        'meta.inviteId': inviteId
+      },
+      {
+        $set: {
+          isRead: true,
+          readAt: now,
+          updatedAt: now
+        }
+      }
     );
-
     res.json({ success: true, message: 'Invite declined' });
   } catch (error) {
     console.error('Decline invite error:', error);

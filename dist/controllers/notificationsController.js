@@ -9,11 +9,239 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.notificationsController = exports.createNotificationInDB = void 0;
+exports.notificationsController = exports.createNotificationInDB = exports.startNotificationCleanupWorker = void 0;
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
 const identityUtils_1 = require("../utils/identityUtils");
 const socketHub_1 = require("../realtime/socketHub");
+const NOTIFICATIONS_COLLECTION = 'notifications';
+const DEFAULT_PAGE_LIMIT = 20;
+const MAX_PAGE_LIMIT = 100;
+const MAX_NOTIFICATIONS_PER_OWNER = 200;
+const NOTIFICATION_CLEANUP_QUEUE_BATCH = 100;
+const NOTIFICATION_CLEANUP_QUEUE_DELAY_MS = 1000;
+const NOTIFICATION_CLEANUP_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+const NOTIFICATION_CLEANUP_SWEEP_OWNER_LIMIT = 500;
+const notificationCleanupQueue = new Set();
+let notificationCleanupDrainScheduled = false;
+let notificationCleanupDrainInFlight = false;
+let notificationCleanupSweepTimer = null;
+const buildTypedNotificationId = (type) => {
+    const timestamp = Date.now();
+    const entropy = Math.random().toString(36).slice(2, 11);
+    return `notif-${type}-${timestamp}-${entropy}`;
+};
+let notificationIndexesInitPromise = null;
+const ensureNotificationIndexes = (db) => {
+    if (notificationIndexesInitPromise) {
+        return notificationIndexesInitPromise;
+    }
+    notificationIndexesInitPromise = (() => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            yield db.collection(NOTIFICATIONS_COLLECTION).createIndexes([
+                {
+                    key: { id: 1 },
+                    name: 'notifications_id_unique',
+                    unique: true,
+                },
+                {
+                    key: { ownerType: 1, ownerId: 1, timestamp: -1, id: -1 },
+                    name: 'notifications_owner_cursor_idx',
+                },
+                {
+                    key: { ownerType: 1, ownerId: 1, isRead: 1, timestamp: -1 },
+                    name: 'notifications_owner_unread_idx',
+                },
+                {
+                    key: { ownerType: 1, ownerId: 1, type: 1, yearKey: 1, 'fromUser.id': 1, timestamp: -1 },
+                    name: 'notifications_owner_type_year_idx',
+                    sparse: true,
+                },
+            ]);
+        }
+        catch (error) {
+            notificationIndexesInitPromise = null;
+            throw error;
+        }
+    }))();
+    return notificationIndexesInitPromise;
+};
+const parseLimit = (rawLimit) => {
+    const parsed = Number(rawLimit);
+    if (!Number.isFinite(parsed))
+        return DEFAULT_PAGE_LIMIT;
+    return Math.max(1, Math.min(MAX_PAGE_LIMIT, Math.floor(parsed)));
+};
+const encodeCursor = (timestamp, id) => {
+    return Buffer.from(`${timestamp}:${id}`, 'utf8').toString('base64url');
+};
+const decodeCursor = (rawCursor) => {
+    if (typeof rawCursor !== 'string' || !rawCursor.trim())
+        return null;
+    try {
+        const decoded = Buffer.from(rawCursor, 'base64url').toString('utf8');
+        const delimiterIndex = decoded.indexOf(':');
+        if (delimiterIndex <= 0)
+            return null;
+        const timestampRaw = decoded.slice(0, delimiterIndex);
+        const id = decoded.slice(delimiterIndex + 1);
+        const timestamp = Number(timestampRaw);
+        if (!Number.isFinite(timestamp) || !id)
+            return null;
+        return { timestamp, id };
+    }
+    catch (_a) {
+        return null;
+    }
+};
+const enforceNotificationCap = (db, ownerType, ownerId) => __awaiter(void 0, void 0, void 0, function* () {
+    const boundary = yield db
+        .collection(NOTIFICATIONS_COLLECTION)
+        .find({ ownerType, ownerId })
+        .sort({ timestamp: -1, id: -1 })
+        .skip(MAX_NOTIFICATIONS_PER_OWNER - 1)
+        .limit(1)
+        .project({ timestamp: 1, id: 1, _id: 0 })
+        .next();
+    if (!boundary) {
+        return;
+    }
+    const boundaryTimestamp = Number(boundary.timestamp);
+    const boundaryId = String(boundary.id || '');
+    if (!Number.isFinite(boundaryTimestamp) || !boundaryId) {
+        return;
+    }
+    yield db.collection(NOTIFICATIONS_COLLECTION).deleteMany({
+        ownerType,
+        ownerId,
+        $or: [
+            { timestamp: { $lt: boundaryTimestamp } },
+            { timestamp: boundaryTimestamp, id: { $lt: boundaryId } },
+        ],
+    });
+});
+const evictOldestNotificationIfAtCap = (db, ownerType, ownerId) => __awaiter(void 0, void 0, void 0, function* () {
+    const capBoundary = yield db
+        .collection(NOTIFICATIONS_COLLECTION)
+        .find({ ownerType, ownerId })
+        .sort({ timestamp: -1, id: -1 })
+        .skip(MAX_NOTIFICATIONS_PER_OWNER - 1)
+        .limit(1)
+        .project({ id: 1, _id: 0 })
+        .next();
+    if (!capBoundary) {
+        return;
+    }
+    yield db.collection(NOTIFICATIONS_COLLECTION).findOneAndDelete({ ownerType, ownerId }, { sort: { timestamp: 1, id: 1 } });
+});
+const makeCleanupOwnerKey = (ownerType, ownerId) => `${ownerType}:${ownerId}`;
+const parseCleanupOwnerKey = (rawKey) => {
+    const delimiterIndex = rawKey.indexOf(':');
+    if (delimiterIndex <= 0)
+        return null;
+    const ownerTypeRaw = rawKey.slice(0, delimiterIndex);
+    const ownerId = rawKey.slice(delimiterIndex + 1);
+    if (!ownerId)
+        return null;
+    if (ownerTypeRaw !== 'user' && ownerTypeRaw !== 'company')
+        return null;
+    return { ownerType: ownerTypeRaw, ownerId };
+};
+const processNotificationCleanupQueue = () => __awaiter(void 0, void 0, void 0, function* () {
+    if (notificationCleanupDrainInFlight || notificationCleanupQueue.size === 0 || !(0, db_1.isDBConnected)()) {
+        return;
+    }
+    notificationCleanupDrainInFlight = true;
+    try {
+        const db = (0, db_1.getDB)();
+        yield ensureNotificationIndexes(db);
+        const ownerKeys = Array.from(notificationCleanupQueue).slice(0, NOTIFICATION_CLEANUP_QUEUE_BATCH);
+        ownerKeys.forEach((ownerKey) => notificationCleanupQueue.delete(ownerKey));
+        for (const ownerKey of ownerKeys) {
+            const target = parseCleanupOwnerKey(ownerKey);
+            if (!target)
+                continue;
+            yield enforceNotificationCap(db, target.ownerType, target.ownerId);
+        }
+    }
+    catch (error) {
+        console.error('Error processing notification cleanup queue:', error);
+    }
+    finally {
+        notificationCleanupDrainInFlight = false;
+        if (notificationCleanupQueue.size > 0) {
+            scheduleNotificationCleanupDrain();
+        }
+    }
+});
+const scheduleNotificationCleanupDrain = () => {
+    if (notificationCleanupDrainScheduled) {
+        return;
+    }
+    notificationCleanupDrainScheduled = true;
+    setTimeout(() => {
+        notificationCleanupDrainScheduled = false;
+        void processNotificationCleanupQueue();
+    }, NOTIFICATION_CLEANUP_QUEUE_DELAY_MS);
+};
+const queueNotificationCleanup = (ownerType, ownerId) => {
+    if (!ownerId)
+        return;
+    notificationCleanupQueue.add(makeCleanupOwnerKey(ownerType, ownerId));
+    scheduleNotificationCleanupDrain();
+};
+const runNotificationRetentionSweep = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b;
+    const overflowingOwners = yield db
+        .collection(NOTIFICATIONS_COLLECTION)
+        .aggregate([
+        {
+            $group: {
+                _id: { ownerType: '$ownerType', ownerId: '$ownerId' },
+                total: { $sum: 1 },
+            },
+        },
+        { $match: { total: { $gt: MAX_NOTIFICATIONS_PER_OWNER } } },
+        { $limit: NOTIFICATION_CLEANUP_SWEEP_OWNER_LIMIT },
+    ])
+        .toArray();
+    for (const ownerRow of overflowingOwners) {
+        const ownerType = (_a = ownerRow === null || ownerRow === void 0 ? void 0 : ownerRow._id) === null || _a === void 0 ? void 0 : _a.ownerType;
+        const ownerId = (_b = ownerRow === null || ownerRow === void 0 ? void 0 : ownerRow._id) === null || _b === void 0 ? void 0 : _b.ownerId;
+        if ((ownerType === 'user' || ownerType === 'company') && ownerId) {
+            yield enforceNotificationCap(db, ownerType, ownerId);
+        }
+    }
+    return overflowingOwners.length;
+});
+const startNotificationCleanupWorker = () => {
+    if (notificationCleanupSweepTimer) {
+        return;
+    }
+    const runSweep = () => __awaiter(void 0, void 0, void 0, function* () {
+        if (!(0, db_1.isDBConnected)())
+            return;
+        try {
+            const db = (0, db_1.getDB)();
+            yield ensureNotificationIndexes(db);
+            const cleanedOwners = yield runNotificationRetentionSweep(db);
+            if (cleanedOwners > 0) {
+                console.log(`🧹 Notification cleanup capped ${cleanedOwners} owner(s) to ${MAX_NOTIFICATIONS_PER_OWNER} records.`);
+            }
+        }
+        catch (error) {
+            console.error('Error during notification retention sweep:', error);
+        }
+    });
+    notificationCleanupSweepTimer = setInterval(() => {
+        void runSweep();
+    }, NOTIFICATION_CLEANUP_SWEEP_INTERVAL_MS);
+    if (typeof notificationCleanupSweepTimer.unref === 'function') {
+        notificationCleanupSweepTimer.unref();
+    }
+    void runSweep();
+};
+exports.startNotificationCleanupWorker = startNotificationCleanupWorker;
 const resolveTargetCollection = (db, targetId, requestedOwnerType) => __awaiter(void 0, void 0, void 0, function* () {
     const preferred = requestedOwnerType === 'company' ? 'companies' : 'users';
     const fallback = preferred === 'companies' ? 'users' : 'companies';
@@ -59,7 +287,6 @@ const createNotificationInDB = (userId_1, type_1, fromUserId_1, message_1, postI
         }
     }
     let fromUserDoc = null;
-    let targetCollectionName = ownerType === 'company' ? 'companies' : 'users';
     let targetOwnerType = ownerType;
     if (db) {
         try {
@@ -69,7 +296,6 @@ const createNotificationInDB = (userId_1, type_1, fromUserId_1, message_1, postI
             ]);
             fromUserDoc = resolvedFromUser;
             if (resolvedTarget) {
-                targetCollectionName = resolvedTarget.collectionName;
                 targetOwnerType = resolvedTarget.ownerType;
             }
         }
@@ -77,17 +303,25 @@ const createNotificationInDB = (userId_1, type_1, fromUserId_1, message_1, postI
             console.error('Error resolving notification identities in DB:', error);
         }
     }
+    if (db) {
+        try {
+            yield ensureNotificationIndexes(db);
+        }
+        catch (error) {
+            console.error('Error ensuring notification indexes:', error);
+        }
+    }
     if (db && yearKey) {
         try {
-            const existingDoc = yield db.collection(targetCollectionName).findOne({
-                id: userId,
-                notifications: { $elemMatch: { yearKey, type } }
+            const existingNotification = yield db.collection(NOTIFICATIONS_COLLECTION).findOne({
+                ownerType: targetOwnerType,
+                ownerId: userId,
+                type,
+                yearKey,
+                'fromUser.id': fromUserId,
             });
-            if (existingDoc && Array.isArray(existingDoc.notifications)) {
-                const existingNotification = existingDoc.notifications.find((n) => n.yearKey === yearKey && n.type === type);
-                if (existingNotification) {
-                    return existingNotification;
-                }
+            if (existingNotification) {
+                return existingNotification;
             }
         }
         catch (error) {
@@ -114,9 +348,10 @@ const createNotificationInDB = (userId_1, type_1, fromUserId_1, message_1, postI
         avatarType: 'image',
         activeGlow: undefined
     };
+    const notificationId = buildTypedNotificationId(type);
     const newNotification = {
-        id: `notif-${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        notificationId: `notif-${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        id: notificationId,
+        ownerId: userId,
         userId,
         type,
         fromUser,
@@ -129,18 +364,17 @@ const createNotificationInDB = (userId_1, type_1, fromUserId_1, message_1, postI
         postId: postId || '',
         connectionId: connectionId || undefined,
         meta: meta || undefined,
-        data: meta || undefined, // Alias for 'data' as requested
         yearKey: yearKey || undefined,
         ownerType: targetOwnerType // Store resolved ownerType in notification
     };
     if (db) {
         try {
-            yield db.collection(targetCollectionName).updateOne({ id: userId }, {
-                $push: { notifications: { $each: [newNotification], $position: 0 } }
-            });
+            yield evictOldestNotificationIfAtCap(db, targetOwnerType, userId);
+            yield db.collection(NOTIFICATIONS_COLLECTION).insertOne(newNotification);
+            queueNotificationCleanup(targetOwnerType, userId);
         }
         catch (error) {
-            console.error(`Error creating notification in DB (${targetCollectionName}):`, error);
+            console.error(`Error creating notification document in ${NOTIFICATIONS_COLLECTION}:`, error);
         }
     }
     (0, socketHub_1.emitToIdentity)(targetOwnerType, userId, 'notification:new', {
@@ -160,55 +394,88 @@ exports.notificationsController = {
             if (!authenticatedUserId) {
                 return res.status(401).json({ success: false, error: 'Unauthorized' });
             }
-            const { page = 1, limit = 20, unreadOnly, ownerType = 'user', ownerId } = req.query;
+            const { limit = DEFAULT_PAGE_LIMIT, unreadOnly, ownerType = 'user', ownerId, cursor } = req.query;
             // Resolve effective actor identity
-            const actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
-                ownerType: ownerType,
-                ownerId: ownerId
-            });
+            let actor;
+            try {
+                actor = yield (0, identityUtils_1.resolveIdentityActor)(authenticatedUserId, {
+                    ownerType: ownerType,
+                    ownerId: ownerId
+                });
+            }
+            catch (resolveError) {
+                console.error('Error resolving notification identity actor:', resolveError);
+                return res.status(500).json({
+                    success: false,
+                    error: 'Failed to resolve notification identity'
+                });
+            }
             if (!actor) {
                 return res.status(403).json({ success: false, error: 'Unauthorized access to this identity' });
             }
             const targetId = actor.id;
-            const collectionName = actor.type === 'company' ? 'companies' : 'users';
             if (!(0, db_1.isDBConnected)()) {
                 return res.json({
                     success: true,
                     data: [],
-                    pagination: { page: Number(page), limit: Number(limit), total: 0, pages: 0 },
+                    pagination: { limit: parseLimit(limit), nextCursor: null, hasMore: false },
                     unreadCount: 0
                 });
             }
             const db = (0, db_1.getDB)();
-            const doc = yield db.collection(collectionName).findOne({ id: targetId });
-            if (!doc) {
-                return res.status(404).json({
+            yield ensureNotificationIndexes(db);
+            const limitNumber = parseLimit(limit);
+            const parsedCursor = decodeCursor(cursor);
+            if (cursor && !parsedCursor) {
+                return res.status(400).json({
                     success: false,
-                    error: `${actor.type === 'company' ? 'Company' : 'User'} not found`
+                    error: 'Invalid cursor format'
                 });
             }
-            let notifications = doc.notifications || [];
+            const baseQuery = {
+                ownerType: actor.type,
+                ownerId: targetId,
+            };
             if (unreadOnly === 'true') {
-                notifications = notifications.filter((notif) => !notif.isRead);
+                baseQuery.isRead = { $ne: true };
             }
-            notifications.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-            const startIndex = (Number(page) - 1) * Number(limit);
-            const paginatedNotifications = notifications.slice(startIndex, startIndex + Number(limit)).map((notification) => {
+            const query = Object.assign({}, baseQuery);
+            if (parsedCursor) {
+                query.$or = [
+                    { timestamp: { $lt: parsedCursor.timestamp } },
+                    { timestamp: parsedCursor.timestamp, id: { $lt: parsedCursor.id } },
+                ];
+            }
+            const notificationDocs = yield db
+                .collection(NOTIFICATIONS_COLLECTION)
+                .find(query)
+                .sort({ timestamp: -1, id: -1 })
+                .limit(limitNumber + 1)
+                .toArray();
+            const hasMore = notificationDocs.length > limitNumber;
+            const pageItems = hasMore ? notificationDocs.slice(0, limitNumber) : notificationDocs;
+            const unreadCount = yield db.collection(NOTIFICATIONS_COLLECTION).countDocuments({
+                ownerType: actor.type,
+                ownerId: targetId,
+                isRead: { $ne: true },
+            });
+            const transformed = pageItems.map((notification) => {
                 if (notification.fromUser) {
                     notification.fromUser = (0, userUtils_1.transformUser)(notification.fromUser);
                 }
                 return notification;
             });
+            const tail = transformed[transformed.length - 1];
+            const nextCursor = hasMore && tail ? encodeCursor(Number(tail.timestamp || 0), String(tail.id || '')) : null;
             res.json({
                 success: true,
-                data: paginatedNotifications,
+                data: transformed,
                 pagination: {
-                    page: Number(page),
-                    limit: Number(limit),
-                    total: notifications.length,
-                    pages: Math.ceil(notifications.length / Number(limit))
+                    limit: limitNumber,
+                    nextCursor,
+                    hasMore,
                 },
-                unreadCount: (doc.notifications || []).filter((n) => !n.isRead).length
+                unreadCount
             });
         }
         catch (error) {
@@ -237,15 +504,23 @@ exports.notificationsController = {
             if (!actor) {
                 return res.status(403).json({ success: false, error: 'Unauthorized sender identity' });
             }
+            if (actor.id !== fromUserId) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Forbidden',
+                    message: 'Sender identity does not match authenticated actor'
+                });
+            }
             const isAdmin = ((_b = req.user) === null || _b === void 0 ? void 0 : _b.role) === 'admin' || ((_c = req.user) === null || _c === void 0 ? void 0 : _c.isAdmin) === true;
             if (!isAdmin && userId !== actor.id) {
                 return res.status(403).json({
                     success: false,
                     error: 'Forbidden',
-                    message: 'You can only create notifications for your own identity'
+                    message: 'Only admins can create notifications for other identities'
                 });
             }
             const db = (0, db_1.getDB)();
+            yield ensureNotificationIndexes(db);
             const senderCollection = actor.type === 'company' ? 'companies' : 'users';
             const fromDoc = yield db.collection(senderCollection).findOne({ id: actor.id });
             const fromUser = fromDoc ? {
@@ -268,8 +543,10 @@ exports.notificationsController = {
                 avatarType: 'image',
                 activeGlow: undefined
             };
+            const notificationId = buildTypedNotificationId(type);
             const newNotification = {
-                id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                id: notificationId,
+                ownerId: userId,
                 userId,
                 type,
                 fromUser,
@@ -285,7 +562,9 @@ exports.notificationsController = {
             if (!targetDoc) {
                 return res.status(404).json({ success: false, error: 'Target identity not found' });
             }
-            yield db.collection(collectionName).updateOne({ id: userId }, { $push: { notifications: { $each: [newNotification], $position: 0 } } });
+            yield evictOldestNotificationIfAtCap(db, ownerType, userId);
+            yield db.collection(NOTIFICATIONS_COLLECTION).insertOne(newNotification);
+            queueNotificationCleanup(ownerType, userId);
             if (newNotification.fromUser) {
                 newNotification.fromUser = (0, userUtils_1.transformUser)(newNotification.fromUser);
             }
@@ -316,13 +595,17 @@ exports.notificationsController = {
                 return res.status(403).json({ success: false, error: 'Unauthorized' });
             }
             const actorId = actor.id;
-            const collectionName = actor.type === 'company' ? 'companies' : 'users';
-            // Update notification only if it belongs to the authorized actor
-            const result = yield db.collection(collectionName).updateOne({ id: actorId, "notifications.id": id }, {
+            yield ensureNotificationIndexes(db);
+            const now = new Date();
+            const result = yield db.collection(NOTIFICATIONS_COLLECTION).updateOne({
+                ownerType: actor.type,
+                ownerId: actorId,
+                id
+            }, {
                 $set: {
-                    "notifications.$.isRead": true,
-                    "notifications.$.readAt": new Date(),
-                    "notifications.$.updatedAt": new Date()
+                    isRead: true,
+                    readAt: now,
+                    updatedAt: now
                 }
             });
             if (result.matchedCount === 0) {
@@ -354,16 +637,22 @@ exports.notificationsController = {
                 return res.status(403).json({ success: false, error: 'Unauthorized' });
             }
             const actorId = actor.id;
-            const collectionName = actor.type === 'company' ? 'companies' : 'users';
-            const doc = yield db.collection(collectionName).findOne({ id: actorId });
-            if (!doc) {
-                return res.status(404).json({ success: false, error: 'Identity not found' });
+            yield ensureNotificationIndexes(db);
+            const now = new Date();
+            const collectionResult = yield db.collection(NOTIFICATIONS_COLLECTION).updateMany({
+                ownerType: actor.type,
+                ownerId: actorId,
+                isRead: { $ne: true }
+            }, {
+                $set: {
+                    isRead: true,
+                    readAt: now,
+                    updatedAt: now
+                }
+            });
+            if (collectionResult.modifiedCount === 0) {
+                return res.json({ success: true, message: 'No unread notifications' });
             }
-            if (!doc.notifications || doc.notifications.length === 0) {
-                return res.json({ success: true, message: 'No notifications' });
-            }
-            const updatedNotifications = doc.notifications.map((n) => (Object.assign(Object.assign({}, n), { isRead: true })));
-            yield db.collection(collectionName).updateOne({ id: actorId }, { $set: { notifications: updatedNotifications } });
             res.json({ success: true, message: 'All notifications marked as read' });
         }
         catch (error) {
@@ -391,9 +680,13 @@ exports.notificationsController = {
                 return res.status(403).json({ success: false, error: 'Unauthorized' });
             }
             const actorId = actor.id;
-            const collectionName = actor.type === 'company' ? 'companies' : 'users';
-            const result = yield db.collection(collectionName).updateOne({ id: actorId, "notifications.id": id }, { $pull: { notifications: { id: id } } });
-            if (result.matchedCount === 0) {
+            yield ensureNotificationIndexes(db);
+            const result = yield db.collection(NOTIFICATIONS_COLLECTION).deleteOne({
+                ownerType: actor.type,
+                ownerId: actorId,
+                id
+            });
+            if (result.deletedCount === 0) {
                 return res.status(404).json({ success: false, error: 'Notification not found' });
             }
             res.json({ success: true, message: 'Notification deleted successfully' });
