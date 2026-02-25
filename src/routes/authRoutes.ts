@@ -68,6 +68,8 @@ const resolveTrustedFrontendUrl = (req: Request): string => {
 
 const AUTH_RETURN_TO_COOKIE = 'aura_auth_return_to';
 const AUTH_RETURN_TO_COOKIE_MAX_AGE_MS = 15 * 60 * 1000;
+const DISCORD_AUTH_STATE_COOKIE = 'discord_auth_state';
+const OAUTH_STATE_COOKIE_MAX_AGE_MS = 5 * 60 * 1000;
 
 const sanitizeReturnToPath = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
@@ -251,30 +253,74 @@ router.post('/check-handle', async (req: Request, res: Response) => {
   }
 });
 
-// ============ RATE LIMITER ============
-const loginRateLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 5,
+const makeAuthRateLimiter = ({
+  route,
+  key,
+  max,
+  windowMs,
+  message,
+}: {
+  route: string;
+  key: string;
+  max: number;
+  windowMs: number;
+  message: string;
+}) => rateLimit({
+  windowMs,
+  max,
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req, res) => {
     logSecurityEvent({
       req,
       type: 'rate_limit_triggered',
-      route: '/login',
+      route,
       metadata: {
-        key: 'login',
-        max: 5,
-        windowMs: 60 * 1000
-      }
+        key,
+        max,
+        windowMs,
+      },
     });
 
     res.status(429).json({
       success: false,
-      error: 'Too many login attempts',
-      message: 'Too many login attempts, please try again in a minute'
+      error: 'Too many requests',
+      message,
     });
-  }
+  },
+});
+
+// ============ RATE LIMITERS ============
+const loginRateLimiter = makeAuthRateLimiter({
+  route: '/login',
+  key: 'login',
+  max: 5,
+  windowMs: 60 * 1000,
+  message: 'Too many login attempts, please try again in a minute',
+});
+
+const magicLinkRateLimiter = makeAuthRateLimiter({
+  route: '/magic-link',
+  key: 'magic_link_request',
+  max: 6,
+  windowMs: 15 * 60 * 1000,
+  message: 'Too many magic-link requests. Please wait before trying again.',
+});
+
+const magicLinkVerifyRateLimiter = makeAuthRateLimiter({
+  route: '/magic-link/verify',
+  key: 'magic_link_verify',
+  max: 20,
+  windowMs: 15 * 60 * 1000,
+  message: 'Too many verification attempts. Please request a new magic link.',
+});
+
+const registerRateLimiter = makeAuthRateLimiter({
+  route: '/register',
+  key: 'register',
+  max: 6,
+  windowMs: 15 * 60 * 1000,
+  message: 'Too many sign-up attempts. Please try again later.',
 });
 
 // ============ GOOGLE OAUTH ============
@@ -732,6 +778,12 @@ if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
   rememberAuthReturnTo(req, res);
 
   const state = crypto.randomBytes(16).toString('hex');
+  res.cookie(DISCORD_AUTH_STATE_COOKIE, state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: OAUTH_STATE_COOKIE_MAX_AGE_MS,
+  });
 
   const redirectUri =
     process.env.DISCORD_CALLBACK_URL ||
@@ -749,7 +801,7 @@ if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
 });
 
 router.get('/discord/callback', async (req: Request, res: Response) => {
-  const { code, error } = req.query;
+  const { code, error, state } = req.query;
 
   const frontendUrl = resolveTrustedFrontendUrl(req);
   const returnTo = consumeAuthReturnTo(req, res);
@@ -760,6 +812,20 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
   }
   if (!code) {
     const loginPath = buildLoginRedirectPath('discord_no_code', returnTo);
+    return res.redirect(`${frontendUrl}${loginPath}`);
+  }
+
+  const storedState = typeof req.cookies?.[DISCORD_AUTH_STATE_COOKIE] === 'string'
+    ? req.cookies[DISCORD_AUTH_STATE_COOKIE]
+    : '';
+  res.clearCookie(DISCORD_AUTH_STATE_COOKIE, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+  });
+
+  if (!state || typeof state !== 'string' || !storedState || state !== storedState) {
+    const loginPath = buildLoginRedirectPath('discord_state_mismatch', returnTo);
     return res.redirect(`${frontendUrl}${loginPath}`);
   }
 
@@ -890,7 +956,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
 
 // ============ MAGIC LINK ============
 
-router.post("/magic-link", async (req: Request, res: Response) => {
+router.post("/magic-link", magicLinkRateLimiter, async (req: Request, res: Response) => {
   console.log('🔹 POST /magic-link hit');
   try {
     const { email, inviteToken, returnTo } = req.body || {};
@@ -983,7 +1049,7 @@ router.post("/magic-link", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/magic-link/verify", async (req: Request, res: Response) => {
+router.post("/magic-link/verify", magicLinkVerifyRateLimiter, async (req: Request, res: Response) => {
   try {
     const { email, token } = req.body || {};
     if (!email || !token) {
@@ -1476,7 +1542,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
       return res.status(401).json({
         success: false,
         error: 'Invalid credentials',
-        message: 'User not found'
+        message: 'Invalid email/handle or password'
       });
     }
 
@@ -1493,7 +1559,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
       return res.status(401).json({
         success: false,
         error: 'Invalid credentials',
-        message: 'Please log in with Google or reset your password'
+        message: 'Invalid email/handle or password'
       });
     }
 
@@ -1512,7 +1578,7 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
       return res.status(401).json({
         success: false,
         error: 'Invalid credentials',
-        message: 'Invalid password'
+        message: 'Invalid email/handle or password'
       });
     }
 
@@ -1666,7 +1732,7 @@ router.post('/complete-oauth-profile', async (req: Request, res: Response) => {
 });
 
 
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', registerRateLimiter, async (req: Request, res: Response) => {
   try {
     const { firstName, lastName, email, phone, dob, password, handle } = req.body;
 

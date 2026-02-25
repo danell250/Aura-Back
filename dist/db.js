@@ -28,6 +28,7 @@ const User_1 = require("./models/User");
 const AdAnalyticsDaily_1 = require("./models/AdAnalyticsDaily");
 const AdEventDedupe_1 = require("./models/AdEventDedupe");
 const CallLog_1 = require("./models/CallLog");
+const addMissingIndexes_1 = require("./db/addMissingIndexes");
 dotenv_1.default.config();
 const DEFAULT_MONGO_URI = "mongodb://localhost:27017/aura";
 const DEFAULT_DB_NAME = "aura";
@@ -64,6 +65,7 @@ let connectionAttempts = 0;
 const maxRetries = 5;
 let reconnectInterval = null;
 let monitoringClient = null;
+let indexMigrationCompleted = false;
 const initializeCoreCollections = (db) => __awaiter(void 0, void 0, void 0, function* () {
     yield (0, Message_1.initializeMessageCollection)(db);
     console.log("✅ Message collection initialized");
@@ -183,17 +185,6 @@ function connectDB() {
                     });
                     yield db.collection('transactions').createIndex({ type: 1, transactionId: 1 }, { name: 'tx_type_transaction_id_idx' });
                     yield db.collection('transactions').createIndex({ orderId: 1 }, { sparse: true, name: 'tx_order_id_idx' });
-                    yield db.collection('adSubscriptions').createIndex({ paypalSubscriptionId: 1 }, {
-                        unique: true,
-                        partialFilterExpression: { paypalSubscriptionId: { $type: 'string' } },
-                        name: 'ad_sub_paypal_subscription_unique'
-                    });
-                    yield db.collection('adSubscriptions').createIndex({ paypalOrderId: 1 }, {
-                        unique: true,
-                        partialFilterExpression: { paypalOrderId: { $type: 'string' } },
-                        name: 'ad_sub_paypal_order_unique'
-                    });
-                    yield db.collection('adSubscriptions').createIndex({ ownerId: 1, ownerType: 1, status: 1, endDate: 1 }, { name: 'idx_adSub_owner_status_end' });
                     console.log("✅ Payment idempotency indexes initialized");
                 }
                 catch (paymentIndexError) {
@@ -202,6 +193,15 @@ function connectDB() {
             }
             catch (error) {
                 console.warn("⚠️  Warning: Could not initialize collections:", error);
+            }
+            if (!indexMigrationCompleted) {
+                try {
+                    yield (0, addMissingIndexes_1.runIndexMigration)(db);
+                    indexMigrationCompleted = true;
+                }
+                catch (migrationError) {
+                    console.warn("⚠️  Warning: Could not run index migration:", migrationError);
+                }
             }
             console.log("✅ Connected to MongoDB successfully");
             console.log(`📊 MongoDB connected to database: aura`);
