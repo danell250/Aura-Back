@@ -8,7 +8,15 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __asyncValues = (this && this.__asyncValues) || function (o) {
+    if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+    var m = o[Symbol.asyncIterator], i;
+    return m ? m.call(o) : (o = typeof __values === "function" ? __values(o) : o[Symbol.iterator](), i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i);
+    function verb(n) { i[n] = o[n] && function (v) { return new Promise(function (resolve, reject) { v = o[n](v), settle(resolve, reject, v.done, v.value); }); }; }
+    function settle(resolve, reject, d, v) { Promise.resolve(v).then(function(v) { resolve({ value: v, done: d }); }, reject); }
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.calculateResponseRate = calculateResponseRate;
 exports.calculateUserTrust = calculateUserTrust;
 exports.getSerendipityMatchesForUser = getSerendipityMatchesForUser;
 exports.recalculateAllTrustScores = recalculateAllTrustScores;
@@ -82,39 +90,53 @@ const getMessageTimestampMs = (message) => {
 function calculateResponseRate(messages, userId) {
     if (!Array.isArray(messages) || messages.length === 0)
         return 0;
-    const incomingPersonalMessages = messages.filter((message) => {
+    const incomingBySender = new Map();
+    const outgoingByReceiver = new Map();
+    for (const message of messages) {
         const sender = getMessageParty(message, 'sender');
         const receiver = getMessageParty(message, 'receiver');
         const timestamp = getMessageTimestampMs(message);
         if (!sender || !receiver || !timestamp)
-            return false;
-        // Trust response rate is personal-only and user<->user only.
-        return receiver.type === 'user' && receiver.id === userId && sender.type === 'user' && sender.id !== userId;
-    });
-    if (incomingPersonalMessages.length === 0)
-        return 0;
-    let responded = 0;
-    for (const incoming of incomingPersonalMessages) {
-        const incomingSender = getMessageParty(incoming, 'sender');
-        if (!incomingSender)
             continue;
-        const incomingTs = getMessageTimestampMs(incoming);
-        const hasReply = messages.some((candidate) => {
-            const sender = getMessageParty(candidate, 'sender');
-            const receiver = getMessageParty(candidate, 'receiver');
-            const timestamp = getMessageTimestampMs(candidate);
-            if (!sender || !receiver || !timestamp)
-                return false;
-            return (sender.type === 'user' &&
-                sender.id === userId &&
-                receiver.type === 'user' &&
-                receiver.id === incomingSender.id &&
-                timestamp > incomingTs);
-        });
-        if (hasReply)
-            responded += 1;
+        // Incoming personal user->user message to current user.
+        if (receiver.type === 'user' && receiver.id === userId && sender.type === 'user' && sender.id !== userId) {
+            const incoming = incomingBySender.get(sender.id) || [];
+            incoming.push(timestamp);
+            incomingBySender.set(sender.id, incoming);
+            continue;
+        }
+        // Outgoing personal user->user message from current user.
+        if (sender.type === 'user' && sender.id === userId && receiver.type === 'user' && receiver.id !== userId) {
+            const outgoing = outgoingByReceiver.get(receiver.id) || [];
+            outgoing.push(timestamp);
+            outgoingByReceiver.set(receiver.id, outgoing);
+        }
     }
-    const ratio = responded / incomingPersonalMessages.length;
+    let incomingMessagesTotal = 0;
+    let respondedMessages = 0;
+    for (const [senderId, incoming] of incomingBySender) {
+        if (!incoming.length)
+            continue;
+        const outgoing = outgoingByReceiver.get(senderId) || [];
+        const incomingWindow = incoming.length > 200 ? incoming.slice(-200) : [...incoming];
+        const outgoingWindow = outgoing.length > 200 ? outgoing.slice(-200) : [...outgoing];
+        incomingMessagesTotal += incomingWindow.length;
+        if (!outgoingWindow.length)
+            continue;
+        let outgoingIndex = 0;
+        for (const incomingTurnStart of incomingWindow) {
+            while (outgoingIndex < outgoingWindow.length && outgoingWindow[outgoingIndex] <= incomingTurnStart) {
+                outgoingIndex += 1;
+            }
+            if (outgoingIndex < outgoingWindow.length) {
+                respondedMessages += 1;
+                outgoingIndex += 1;
+            }
+        }
+    }
+    if (incomingMessagesTotal === 0)
+        return 0;
+    const ratio = respondedMessages / incomingMessagesTotal;
     return clampScore(ratio * 20);
 }
 function calculatePositiveInteractions(posts) {
@@ -227,13 +249,12 @@ function calculateHashtagOverlapScore(baseTags, candidateTags) {
     const score = clampScore(jaccard * 15);
     return { score, shared };
 }
-function calculateIndustryMatchScore(currentUser, candidate) {
-    // Industry-based matching for users is deprecated as industry is no longer stored on User objects.
-    // Future implementation will use company memberships.
+function getIndustrySignalStub(_currentUser, _candidate) {
+    // Industry-based matching is intentionally disabled until company-membership scoring lands.
     return { score: 0, match: false };
 }
-function calculateUserTrust(userId) {
-    return __awaiter(this, void 0, void 0, function* () {
+function calculateUserTrust(userId_1) {
+    return __awaiter(this, arguments, void 0, function* (userId, options = {}) {
         const db = (0, db_1.getDB)();
         const user = yield db.collection('users').findOne({ id: userId });
         if (!user)
@@ -262,7 +283,7 @@ function calculateUserTrust(userId) {
                     receiverOwnerType: { $exists: false },
                 },
             ]
-        });
+        }).sort({ timestamp: 1 });
         const messages = yield messagesCursor.toArray();
         const profileCompleteness = calculateProfileCompleteness(user);
         const activityLevel = calculateActivityLevel(posts.length);
@@ -278,12 +299,14 @@ function calculateUserTrust(userId) {
             negativeFlags;
         const total = clampScore(totalRaw);
         const level = getTrustLevel(total);
-        yield db.collection('users').updateOne({ id: userId }, {
-            $set: {
-                trustScore: total,
-                updatedAt: new Date().toISOString()
-            }
-        });
+        if (options.persist !== false) {
+            yield db.collection('users').updateOne({ id: userId }, {
+                $set: {
+                    trustScore: total,
+                    updatedAt: new Date().toISOString()
+                }
+            });
+        }
         return {
             profileCompleteness,
             activityLevel,
@@ -298,6 +321,7 @@ function calculateUserTrust(userId) {
 }
 function getSerendipityMatchesForUser(userId_1) {
     return __awaiter(this, arguments, void 0, function* (userId, limit = 20) {
+        var _a;
         const db = (0, db_1.getDB)();
         const currentUser = yield db.collection('users').findOne({ id: userId });
         if (!currentUser) {
@@ -362,21 +386,36 @@ function getSerendipityMatchesForUser(userId_1) {
             return true;
         });
         const limitedCandidates = filteredCandidates.slice(0, 50);
-        const candidatePostsList = yield Promise.all(limitedCandidates.map(candidate => db
-            .collection('posts')
-            .find(buildPersonalPostFilter(candidate.id))
-            .project({ hashtags: 1 })
-            .toArray()));
+        const candidateIds = limitedCandidates.map((candidate) => candidate.id).filter((id) => typeof id === 'string');
+        const candidatePostsById = new Map();
+        if (candidateIds.length > 0) {
+            const candidatePosts = yield db
+                .collection('posts')
+                .find({
+                'author.id': { $in: candidateIds },
+                $or: [{ 'author.type': 'user' }, { 'author.type': { $exists: false } }],
+            })
+                .project({ hashtags: 1, 'author.id': 1 })
+                .toArray();
+            for (const post of candidatePosts) {
+                const authorId = (_a = post === null || post === void 0 ? void 0 : post.author) === null || _a === void 0 ? void 0 : _a.id;
+                if (typeof authorId !== 'string')
+                    continue;
+                const existing = candidatePostsById.get(authorId) || [];
+                existing.push(post);
+                candidatePostsById.set(authorId, existing);
+            }
+        }
         const matches = [];
-        limitedCandidates.forEach((candidate, index) => {
-            const candidatePosts = candidatePostsList[index] || [];
+        limitedCandidates.forEach((candidate) => {
+            const candidatePosts = candidatePostsById.get(candidate.id) || [];
             const candidateTags = buildHashtagSet(candidatePosts);
             const hashtagResult = calculateHashtagOverlapScore(currentTags, candidateTags);
             const candidateActivity = calculateActivityLevel(candidatePosts.length);
             const candidateProfileCompleteness = calculateProfileCompleteness(candidate);
             const candidateTrust = getUserTrustScore(candidate);
             const mutualConnections = calculateMutualConnections(currentUser, candidate);
-            const industryResult = calculateIndustryMatchScore(currentUser, candidate);
+            const industryResult = getIndustrySignalStub(currentUser, candidate);
             const trustAverage = (currentTrust + candidateTrust) / 2;
             const trustComponent = clampScore((trustAverage / 100) * 35);
             const activityAverage = (currentActivity + candidateActivity) / 2;
@@ -418,17 +457,90 @@ function getSerendipityMatchesForUser(userId_1) {
 }
 function recalculateAllTrustScores() {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, e_1, _b, _c;
         const db = (0, db_1.getDB)();
-        const users = yield db.collection('users').find({}).project({ id: 1 }).toArray();
-        for (const u of users) {
-            if (!u.id)
-                continue;
+        const usersCollection = db.collection('users');
+        yield Promise.allSettled([
+            usersCollection.createIndex({ lastActiveAt: 1 }, { name: 'idx_users_last_active_at' }),
+            usersCollection.createIndex({ updatedAt: 1 }, { name: 'idx_users_updated_at' }),
+            usersCollection.createIndex({ createdAt: 1 }, { name: 'idx_users_created_at' }),
+            usersCollection.createIndex({ lastLoginAt: 1 }, { name: 'idx_users_last_login_at' }),
+            db.collection('posts').createIndex({ 'author.id': 1 }, { name: 'idx_posts_author_id' }),
+            db
+                .collection('messages')
+                .createIndex({ senderOwnerType: 1, senderOwnerId: 1, receiverOwnerType: 1, receiverOwnerId: 1, timestamp: 1 }, { name: 'idx_messages_sender_receiver_owner' }),
+            db
+                .collection('messages')
+                .createIndex({ receiverOwnerType: 1, receiverOwnerId: 1, senderOwnerType: 1, senderOwnerId: 1, timestamp: 1 }, { name: 'idx_messages_receiver_sender_owner' }),
+            db.collection('messages').createIndex({ senderId: 1, receiverId: 1, timestamp: 1 }, { name: 'idx_messages_legacy' }),
+        ]);
+        const activeUserCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+        const activeUsersFilter = {
+            $or: [
+                { lastActiveAt: { $gte: activeUserCutoff } },
+                { updatedAt: { $gte: activeUserCutoff } },
+                { createdAt: { $gte: activeUserCutoff } },
+                { lastLoginAt: { $gte: activeUserCutoff } },
+            ],
+        };
+        const hasActiveTargets = (yield usersCollection.countDocuments(activeUsersFilter, { limit: 1 })) > 0;
+        const cursor = usersCollection
+            .find(hasActiveTargets ? activeUsersFilter : {}, { projection: { id: 1 } })
+            .batchSize(100);
+        const batchSize = 10;
+        const interBatchDelayMs = 25;
+        let batch = [];
+        const processBatch = (userIds) => __awaiter(this, void 0, void 0, function* () {
+            const updates = [];
+            for (const userId of userIds) {
+                try {
+                    const trust = yield calculateUserTrust(userId, { persist: false });
+                    if (!trust)
+                        continue;
+                    updates.push({
+                        updateOne: {
+                            filter: { id: userId },
+                            update: {
+                                $set: {
+                                    trustScore: trust.total,
+                                    updatedAt: new Date().toISOString(),
+                                },
+                            },
+                        },
+                    });
+                }
+                catch (error) {
+                    console.error('Error recalculating trust for user', userId, error);
+                }
+            }
+            if (updates.length > 0) {
+                yield usersCollection.bulkWrite(updates, { ordered: false });
+            }
+        });
+        try {
+            for (var _d = true, _e = __asyncValues(cursor), _f; _f = yield _e.next(), _a = _f.done, !_a; _d = true) {
+                _c = _f.value;
+                _d = false;
+                const u = _c;
+                if (!(u === null || u === void 0 ? void 0 : u.id))
+                    continue;
+                batch.push(u.id);
+                if (batch.length >= batchSize) {
+                    yield processBatch(batch);
+                    batch = [];
+                    yield new Promise((resolve) => setTimeout(resolve, interBatchDelayMs));
+                }
+            }
+        }
+        catch (e_1_1) { e_1 = { error: e_1_1 }; }
+        finally {
             try {
-                yield calculateUserTrust(u.id);
+                if (!_d && !_a && (_b = _e.return)) yield _b.call(_e);
             }
-            catch (err) {
-                console.error('Error recalculating trust for user', u.id, err);
-            }
+            finally { if (e_1) throw e_1.error; }
+        }
+        if (batch.length > 0) {
+            yield processBatch(batch);
         }
     });
 }

@@ -134,14 +134,17 @@ const s3 = new client_s3_1.S3Client({
     },
     requestChecksumCalculation: "WHEN_REQUIRED",
 });
-router.get("/debug/s3", authMiddleware_1.requireAuth, authMiddleware_1.requireAdmin, (req, res) => {
-    res.json({
-        region: process.env.S3_REGION,
-        bucket: process.env.S3_BUCKET_NAME,
-        hasKey: !!process.env.S3_ACCESS_KEY_ID,
-        hasSecret: !!process.env.S3_SECRET_ACCESS_KEY,
+const isProductionRuntime = process.env.NODE_ENV === "production" || process.env.RENDER === "true" || !!process.env.RENDER;
+if (!isProductionRuntime) {
+    router.get("/debug/s3", authMiddleware_1.requireAuth, authMiddleware_1.requireAdmin, (_req, res) => {
+        res.json({
+            region: process.env.S3_REGION,
+            bucket: process.env.S3_BUCKET_NAME,
+            hasKey: !!process.env.S3_ACCESS_KEY_ID,
+            hasSecret: !!process.env.S3_SECRET_ACCESS_KEY,
+        });
     });
-});
+}
 router.get("/media/view-url", authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     try {

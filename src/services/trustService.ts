@@ -107,43 +107,61 @@ const getMessageTimestampMs = (message: any): number => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
-function calculateResponseRate(messages: any[], userId: string): number {
+export function calculateResponseRate(messages: any[], userId: string): number {
   if (!Array.isArray(messages) || messages.length === 0) return 0;
 
-  const incomingPersonalMessages = messages.filter((message) => {
+  const incomingBySender = new Map<string, number[]>();
+  const outgoingByReceiver = new Map<string, number[]>();
+
+  for (const message of messages) {
     const sender = getMessageParty(message, 'sender');
     const receiver = getMessageParty(message, 'receiver');
     const timestamp = getMessageTimestampMs(message);
-    if (!sender || !receiver || !timestamp) return false;
-    // Trust response rate is personal-only and user<->user only.
-    return receiver.type === 'user' && receiver.id === userId && sender.type === 'user' && sender.id !== userId;
-  });
+    if (!sender || !receiver || !timestamp) continue;
 
-  if (incomingPersonalMessages.length === 0) return 0;
+    // Incoming personal user->user message to current user.
+    if (receiver.type === 'user' && receiver.id === userId && sender.type === 'user' && sender.id !== userId) {
+      const incoming = incomingBySender.get(sender.id) || [];
+      incoming.push(timestamp);
+      incomingBySender.set(sender.id, incoming);
+      continue;
+    }
 
-  let responded = 0;
-
-  for (const incoming of incomingPersonalMessages) {
-    const incomingSender = getMessageParty(incoming, 'sender');
-    if (!incomingSender) continue;
-    const incomingTs = getMessageTimestampMs(incoming);
-    const hasReply = messages.some((candidate) => {
-      const sender = getMessageParty(candidate, 'sender');
-      const receiver = getMessageParty(candidate, 'receiver');
-      const timestamp = getMessageTimestampMs(candidate);
-      if (!sender || !receiver || !timestamp) return false;
-      return (
-        sender.type === 'user' &&
-        sender.id === userId &&
-        receiver.type === 'user' &&
-        receiver.id === incomingSender.id &&
-        timestamp > incomingTs
-      );
-    });
-    if (hasReply) responded += 1;
+    // Outgoing personal user->user message from current user.
+    if (sender.type === 'user' && sender.id === userId && receiver.type === 'user' && receiver.id !== userId) {
+      const outgoing = outgoingByReceiver.get(receiver.id) || [];
+      outgoing.push(timestamp);
+      outgoingByReceiver.set(receiver.id, outgoing);
+    }
   }
 
-  const ratio = responded / incomingPersonalMessages.length;
+  let incomingMessagesTotal = 0;
+  let respondedMessages = 0;
+
+  for (const [senderId, incoming] of incomingBySender) {
+    if (!incoming.length) continue;
+    const outgoing = outgoingByReceiver.get(senderId) || [];
+    const incomingWindow = incoming.length > 200 ? incoming.slice(-200) : [...incoming];
+    const outgoingWindow = outgoing.length > 200 ? outgoing.slice(-200) : [...outgoing];
+    incomingMessagesTotal += incomingWindow.length;
+
+    if (!outgoingWindow.length) continue;
+
+    let outgoingIndex = 0;
+    for (const incomingTurnStart of incomingWindow) {
+      while (outgoingIndex < outgoingWindow.length && outgoingWindow[outgoingIndex] <= incomingTurnStart) {
+        outgoingIndex += 1;
+      }
+
+      if (outgoingIndex < outgoingWindow.length) {
+        respondedMessages += 1;
+        outgoingIndex += 1;
+      }
+    }
+  }
+
+  if (incomingMessagesTotal === 0) return 0;
+  const ratio = respondedMessages / incomingMessagesTotal;
   return clampScore(ratio * 20);
 }
 
@@ -265,13 +283,15 @@ function calculateHashtagOverlapScore(baseTags: Set<string>, candidateTags: Set<
   return { score, shared };
 }
 
-function calculateIndustryMatchScore(currentUser: any, candidate: any): { score: number; match: boolean } {
-  // Industry-based matching for users is deprecated as industry is no longer stored on User objects.
-  // Future implementation will use company memberships.
+function getIndustrySignalStub(_currentUser: any, _candidate: any): { score: number; match: boolean } {
+  // Industry-based matching is intentionally disabled until company-membership scoring lands.
   return { score: 0, match: false };
 }
 
-export async function calculateUserTrust(userId: string): Promise<TrustBreakdown | null> {
+export async function calculateUserTrust(
+  userId: string,
+  options: { persist?: boolean } = {}
+): Promise<TrustBreakdown | null> {
   const db = getDB();
   const user = await db.collection('users').findOne({ id: userId });
   if (!user) return null;
@@ -301,7 +321,7 @@ export async function calculateUserTrust(userId: string): Promise<TrustBreakdown
         receiverOwnerType: { $exists: false },
       },
     ]
-  });
+  }).sort({ timestamp: 1 });
   const messages = await messagesCursor.toArray();
 
   const profileCompleteness = calculateProfileCompleteness(user);
@@ -322,15 +342,17 @@ export async function calculateUserTrust(userId: string): Promise<TrustBreakdown
   const total = clampScore(totalRaw);
   const level = getTrustLevel(total);
 
-  await db.collection('users').updateOne(
-    { id: userId },
-    {
-      $set: {
-        trustScore: total,
-        updatedAt: new Date().toISOString()
+  if (options.persist !== false) {
+    await db.collection('users').updateOne(
+      { id: userId },
+      {
+        $set: {
+          trustScore: total,
+          updatedAt: new Date().toISOString()
+        }
       }
-    }
-  );
+    );
+  }
 
   return {
     profileCompleteness,
@@ -410,28 +432,39 @@ export async function getSerendipityMatchesForUser(userId: string, limit: number
   });
 
   const limitedCandidates = filteredCandidates.slice(0, 50);
+  const candidateIds = limitedCandidates.map((candidate) => candidate.id).filter((id): id is string => typeof id === 'string');
+  const candidatePostsById = new Map<string, any[]>();
 
-  const candidatePostsList = await Promise.all(
-    limitedCandidates.map(candidate =>
-      db
-        .collection('posts')
-        .find(buildPersonalPostFilter(candidate.id))
-        .project({ hashtags: 1 })
-        .toArray()
-    )
-  );
+  if (candidateIds.length > 0) {
+    const candidatePosts = await db
+      .collection('posts')
+      .find({
+        'author.id': { $in: candidateIds },
+        $or: [{ 'author.type': 'user' }, { 'author.type': { $exists: false } }],
+      })
+      .project({ hashtags: 1, 'author.id': 1 })
+      .toArray();
+
+    for (const post of candidatePosts) {
+      const authorId = post?.author?.id;
+      if (typeof authorId !== 'string') continue;
+      const existing = candidatePostsById.get(authorId) || [];
+      existing.push(post);
+      candidatePostsById.set(authorId, existing);
+    }
+  }
 
   const matches: SerendipityMatch[] = [];
 
-  limitedCandidates.forEach((candidate, index) => {
-    const candidatePosts = candidatePostsList[index] || [];
+  limitedCandidates.forEach((candidate) => {
+    const candidatePosts = candidatePostsById.get(candidate.id) || [];
     const candidateTags = buildHashtagSet(candidatePosts);
     const hashtagResult = calculateHashtagOverlapScore(currentTags, candidateTags);
     const candidateActivity = calculateActivityLevel(candidatePosts.length);
     const candidateProfileCompleteness = calculateProfileCompleteness(candidate);
     const candidateTrust = getUserTrustScore(candidate);
     const mutualConnections = calculateMutualConnections(currentUser, candidate);
-    const industryResult = calculateIndustryMatchScore(currentUser, candidate);
+    const industryResult = getIndustrySignalStub(currentUser, candidate);
 
     const trustAverage = (currentTrust + candidateTrust) / 2;
     const trustComponent = clampScore((trustAverage / 100) * 35);
@@ -483,14 +516,84 @@ export async function getSerendipityMatchesForUser(userId: string, limit: number
 
 export async function recalculateAllTrustScores(): Promise<void> {
   const db = getDB();
-  const users = await db.collection('users').find({}).project({ id: 1 }).toArray();
-  for (const u of users) {
-    if (!u.id) continue;
-    try {
-      await calculateUserTrust(u.id);
-    } catch (err) {
-      console.error('Error recalculating trust for user', u.id, err);
+  const usersCollection = db.collection('users');
+  await Promise.allSettled([
+    usersCollection.createIndex({ lastActiveAt: 1 }, { name: 'idx_users_last_active_at' }),
+    usersCollection.createIndex({ updatedAt: 1 }, { name: 'idx_users_updated_at' }),
+    usersCollection.createIndex({ createdAt: 1 }, { name: 'idx_users_created_at' }),
+    usersCollection.createIndex({ lastLoginAt: 1 }, { name: 'idx_users_last_login_at' }),
+    db.collection('posts').createIndex({ 'author.id': 1 }, { name: 'idx_posts_author_id' }),
+    db
+      .collection('messages')
+      .createIndex(
+        { senderOwnerType: 1, senderOwnerId: 1, receiverOwnerType: 1, receiverOwnerId: 1, timestamp: 1 },
+        { name: 'idx_messages_sender_receiver_owner' }
+      ),
+    db
+      .collection('messages')
+      .createIndex(
+        { receiverOwnerType: 1, receiverOwnerId: 1, senderOwnerType: 1, senderOwnerId: 1, timestamp: 1 },
+        { name: 'idx_messages_receiver_sender_owner' }
+      ),
+    db.collection('messages').createIndex({ senderId: 1, receiverId: 1, timestamp: 1 }, { name: 'idx_messages_legacy' }),
+  ]);
+  const activeUserCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const activeUsersFilter = {
+    $or: [
+      { lastActiveAt: { $gte: activeUserCutoff } },
+      { updatedAt: { $gte: activeUserCutoff } },
+      { createdAt: { $gte: activeUserCutoff } },
+      { lastLoginAt: { $gte: activeUserCutoff } },
+    ],
+  };
+  const hasActiveTargets = (await usersCollection.countDocuments(activeUsersFilter, { limit: 1 })) > 0;
+  const cursor = usersCollection
+    .find(hasActiveTargets ? activeUsersFilter : {}, { projection: { id: 1 } })
+    .batchSize(100);
+  const batchSize = 10;
+  const interBatchDelayMs = 25;
+  let batch: string[] = [];
+
+  const processBatch = async (userIds: string[]) => {
+    const updates: Array<{ updateOne: { filter: { id: string }; update: { $set: { trustScore: number; updatedAt: string } } } }> = [];
+    for (const userId of userIds) {
+      try {
+        const trust = await calculateUserTrust(userId, { persist: false });
+        if (!trust) continue;
+
+        updates.push({
+          updateOne: {
+            filter: { id: userId },
+            update: {
+              $set: {
+                trustScore: trust.total,
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          },
+        });
+      } catch (error) {
+        console.error('Error recalculating trust for user', userId, error);
+      }
     }
+
+    if (updates.length > 0) {
+      await usersCollection.bulkWrite(updates, { ordered: false });
+    }
+  };
+
+  for await (const u of cursor as any) {
+    if (!u?.id) continue;
+    batch.push(u.id);
+    if (batch.length >= batchSize) {
+      await processBatch(batch);
+      batch = [];
+      await new Promise((resolve) => setTimeout(resolve, interBatchDelayMs));
+    }
+  }
+
+  if (batch.length > 0) {
+    await processBatch(batch);
   }
 }
 
