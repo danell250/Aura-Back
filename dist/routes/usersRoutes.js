@@ -79,11 +79,6 @@ router.post('/me/images', authMiddleware_1.requireAuth, uploadMiddleware_1.uploa
 ]), usersController_1.usersController.uploadProfileImages);
 // POST /api/users - Create new user (public for registration)
 router.post('/', usersController_1.usersController.createUser);
-// Test route to verify routing works
-router.post('/test-route', (req, res) => {
-    console.log('Test route hit!');
-    res.json({ success: true, message: 'Test route working!' });
-});
 // POST /api/users/:id/purchase-credits - Purchase credits
 console.log('Registering purchase-credits route for pattern /:id/purchase-credits');
 router.post('/:id/purchase-credits', billingWriteLimiter, authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, (req, res) => {

@@ -413,11 +413,6 @@ if (!isProductionRuntime) {
             env: process.env.NODE_ENV
         });
     });
-    // Direct test route for local debugging only
-    app.post('/api/users/direct-test', (_req, res) => {
-        console.log('Direct test route hit!');
-        res.json({ success: true, message: 'Direct route working!' });
-    });
 }
 app.get('/api/credits/history/:userId', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {

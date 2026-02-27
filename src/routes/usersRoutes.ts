@@ -92,12 +92,6 @@ router.post(
 // POST /api/users - Create new user (public for registration)
 router.post('/', usersController.createUser);
 
-// Test route to verify routing works
-router.post('/test-route', (req: Request, res: Response) => {
-  console.log('Test route hit!');
-  res.json({ success: true, message: 'Test route working!' });
-});
-
 // POST /api/users/:id/purchase-credits - Purchase credits
 console.log('Registering purchase-credits route for pattern /:id/purchase-credits');
 router.post('/:id/purchase-credits', billingWriteLimiter, requireAuth, requirePersonalIdentity, requireSelfParam, (req: Request, res: Response) => {

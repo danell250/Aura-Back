@@ -421,11 +421,6 @@ if (!isProductionRuntime) {
     });
   });
 
-  // Direct test route for local debugging only
-  app.post('/api/users/direct-test', (_req, res) => {
-    console.log('Direct test route hit!');
-    res.json({ success: true, message: 'Direct route working!' });
-  });
 }
 
 app.get('/api/credits/history/:userId', requireAuth, async (req, res) => {

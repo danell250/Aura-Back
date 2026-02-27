@@ -23,6 +23,7 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const jwtUtils_1 = require("../utils/jwtUtils");
 const tokenUtils_1 = require("../utils/tokenUtils");
 const emailService_1 = require("../services/emailService");
+const authUserService_1 = require("../services/authUserService");
 const notificationsController_1 = require("../controllers/notificationsController");
 const securityLogger_1 = require("../utils/securityLogger");
 const userUtils_1 = require("../utils/userUtils");
@@ -128,80 +129,10 @@ const consumeAuthReturnTo = (req, res) => {
     }
     return value;
 };
-const normalizeUserHandle = (rawHandle) => {
-    const base = (rawHandle || '').trim().toLowerCase();
-    const withoutAt = base.startsWith('@') ? base.slice(1) : base;
-    const cleaned = withoutAt.replace(/[^a-z0-9_-]/g, '');
-    if (!cleaned)
-        return '';
-    return `@${cleaned}`;
-};
-const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const findUserByEmail = (email) => __awaiter(void 0, void 0, void 0, function* () {
-    const normalizedEmail = String(email || '').trim().toLowerCase();
-    if (!normalizedEmail)
-        return null;
-    const db = (0, db_1.getDB)();
-    return db.collection('users').findOne({
-        email: { $regex: new RegExp(`^${escapeRegex(normalizedEmail)}$`, 'i') }
-    });
-});
-const validateHandleFormat = (handle) => {
-    const normalized = normalizeUserHandle(handle);
-    if (!normalized) {
-        return { ok: false, message: 'Handle is required' };
-    }
-    const core = normalized.slice(1);
-    if (core.length < 3 || core.length > 21) {
-        return { ok: false, message: 'Handle must be between 3 and 21 characters' };
-    }
-    if (!/^[a-z0-9_-]+$/.test(core)) {
-        return { ok: false, message: 'Handle can only use letters, numbers, underscores and hyphens' };
-    }
-    return { ok: true };
-};
-const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
-    const db = (0, db_1.getDB)();
-    const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
-    const lastNameSafe = (lastName || '').toLowerCase().trim().replace(/\s+/g, '');
-    const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
-    try {
-        const existingUser = yield db.collection('users').findOne({ handle: baseHandle });
-        const existingCompany = yield db.collection('companies').findOne({ handle: baseHandle });
-        if (!existingUser && !existingCompany) {
-            console.log('✓ Handle available:', baseHandle);
-            return baseHandle;
-        }
-    }
-    catch (error) {
-        console.error('Error checking base handle:', error);
-    }
-    for (let attempt = 0; attempt < 50; attempt++) {
-        const randomNum = Math.floor(Math.random() * 100000);
-        const candidateHandle = `${baseHandle}${randomNum}`;
-        try {
-            const existingUser = yield db.collection('users').findOne({ handle: candidateHandle });
-            const existingCompany = yield db.collection('companies').findOne({ handle: candidateHandle });
-            if (!existingUser && !existingCompany) {
-                console.log('✓ Handle available:', candidateHandle);
-                return candidateHandle;
-            }
-        }
-        catch (error) {
-            console.error(`Error checking handle ${candidateHandle}:`, error);
-            continue;
-        }
-    }
-    const timestamp = Date.now();
-    const randomStr = Math.random().toString(36).substring(2, 9);
-    const fallbackHandle = `@user${timestamp}${randomStr}`;
-    console.log('⚠ Using fallback handle:', fallbackHandle);
-    return fallbackHandle;
-});
 router.post('/check-handle', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const { handle } = req.body || {};
-        const validation = validateHandleFormat(handle || '');
+        const validation = (0, authUserService_1.validateHandleFormat)(handle || '');
         if (!validation.ok) {
             return res.status(400).json({
                 success: false,
@@ -210,7 +141,7 @@ router.post('/check-handle', (req, res) => __awaiter(void 0, void 0, void 0, fun
                 message: validation.message || 'Invalid handle'
             });
         }
-        const normalizedHandle = normalizeUserHandle(handle);
+        const normalizedHandle = (0, authUserService_1.normalizeUserHandle)(handle);
         const db = (0, db_1.getDB)();
         const existingUser = yield db.collection('users').findOne({
             handle: { $regex: new RegExp(`^${normalizedHandle}$`, 'i') }
@@ -326,7 +257,7 @@ router.get('/google/callback', (req, res, next) => {
             const db = (0, db_1.getDB)();
             console.log('🔍 Google OAuth - Checking for existing user with ID:', userData.id);
             // Identify-First: Check by EMAIL
-            const existingUser = yield findUserByEmail(userData.email);
+            const existingUser = yield (0, authUserService_1.findUserByEmail)(userData.email);
             let userToReturn;
             if (existingUser) {
                 console.log('✓ Found existing user by email:', existingUser.email);
@@ -339,7 +270,7 @@ router.get('/google/callback', (req, res, next) => {
                 // DO NOT update these if they already exist
                 // This keeps the user's chosen identity intact
                 if (!existingUser.handle && userData.handle)
-                    updates.handle = normalizeUserHandle(userData.handle);
+                    updates.handle = (0, authUserService_1.normalizeUserHandle)(userData.handle);
                 if (!existingUser.firstName)
                     updates.firstName = userData.firstName;
                 if (!existingUser.avatar)
@@ -350,7 +281,7 @@ router.get('/google/callback', (req, res, next) => {
             else {
                 console.log('➕ New user from Google OAuth');
                 // NEW USER: Generate unique handle
-                const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
+                const uniqueHandle = yield (0, authUserService_1.generateUniqueHandle)(userData.firstName || 'User', userData.lastName || '');
                 const newUser = Object.assign(Object.assign({}, userData), { email: String(userData.email || '').trim().toLowerCase(), handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: SIGNUP_BONUS_CREDITS, auraCreditsSpent: 0, signupBonusGrantedAt: new Date().toISOString(), trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
                 yield db.collection('users').insertOne(newUser);
                 console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
@@ -410,7 +341,7 @@ router.get('/github/callback', (req, res, next) => {
             const db = (0, db_1.getDB)();
             console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
             // Identify-First: Check by EMAIL
-            const existingUser = yield findUserByEmail(userData.email);
+            const existingUser = yield (0, authUserService_1.findUserByEmail)(userData.email);
             let userToReturn;
             if (existingUser) {
                 console.log('✓ Found existing user by email:', existingUser.email);
@@ -431,7 +362,7 @@ router.get('/github/callback', (req, res, next) => {
             else {
                 console.log('➕ New user from GitHub OAuth');
                 // NEW USER: Generate unique handle
-                const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
+                const uniqueHandle = yield (0, authUserService_1.generateUniqueHandle)(userData.firstName || 'User', userData.lastName || '');
                 const newUser = Object.assign(Object.assign({}, userData), { email: String(userData.email || '').trim().toLowerCase(), handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: SIGNUP_BONUS_CREDITS, auraCreditsSpent: 0, signupBonusGrantedAt: new Date().toISOString(), trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
                 yield db.collection('users').insertOne(newUser);
                 console.log('✓ Created new user after OAuth:', newUser.id, '| Handle:', uniqueHandle);
@@ -539,7 +470,7 @@ router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0,
         const db = (0, db_1.getDB)();
         // 4. Find or Create User
         // Identify-First: Check by EMAIL
-        const existingUser = yield findUserByEmail(profile.email);
+        const existingUser = yield (0, authUserService_1.findUserByEmail)(profile.email);
         let userToReturn;
         if (existingUser) {
             console.log('✓ Found existing user by email:', existingUser.email);
@@ -569,7 +500,7 @@ router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0,
         }
         else {
             console.log('➕ New user from LinkedIn OAuth');
-            const uniqueHandle = yield generateUniqueHandle(profile.given_name || 'User', profile.family_name || '');
+            const uniqueHandle = yield (0, authUserService_1.generateUniqueHandle)(profile.given_name || 'User', profile.family_name || '');
             const newUser = {
                 id: crypto_1.default.randomUUID(),
                 linkedinId: profile.sub,
@@ -693,7 +624,7 @@ router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, 
             const loginPath = buildLoginRedirectPath('discord_email_not_verified', returnTo);
             return res.redirect(`${frontendUrl}${loginPath}`);
         }
-        const existingUser = yield findUserByEmail(email);
+        const existingUser = yield (0, authUserService_1.findUserByEmail)(email);
         // Build Discord avatar URL (optional)
         const discordAvatar = discord.avatar
             ? `https://cdn.discordapp.com/avatars/${discord.id}/${discord.avatar}.png?size=256`
@@ -720,7 +651,7 @@ router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, 
         }
         else {
             const displayName = discord.global_name || discord.username || 'User';
-            const uniqueHandle = yield generateUniqueHandle(displayName, '');
+            const uniqueHandle = yield (0, authUserService_1.generateUniqueHandle)(displayName, '');
             const newUser = {
                 id: crypto_1.default.randomUUID(),
                 discordId: discord.id,
@@ -772,12 +703,12 @@ router.post("/magic-link", magicLinkRateLimiter, (req, res) => __awaiter(void 0,
         const db = (0, db_1.getDB)();
         const normalizedEmail = String(email).toLowerCase().trim();
         console.log('🔍 Searching for user:', normalizedEmail);
-        let user = yield findUserByEmail(normalizedEmail);
+        let user = yield (0, authUserService_1.findUserByEmail)(normalizedEmail);
         // Create user if not exists (Sign Up via Magic Link)
         if (!user) {
             console.log('➕ User not found. Creating new user for email:', normalizedEmail);
             const firstName = normalizedEmail.split('@')[0];
-            const uniqueHandle = yield generateUniqueHandle(firstName, '');
+            const uniqueHandle = yield (0, authUserService_1.generateUniqueHandle)(firstName, '');
             const newUser = {
                 id: crypto_1.default.randomUUID(),
                 email: normalizedEmail,
@@ -811,7 +742,7 @@ router.post("/magic-link", magicLinkRateLimiter, (req, res) => __awaiter(void 0,
         const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
         const updates = {
             magicLinkTokenHash: tokenHash,
-            magicLinkExpiresAt: expiresAt.toISOString(),
+            magicLinkExpiresAt: expiresAt,
             updatedAt: new Date().toISOString(),
         };
         // Store invite token if provided so it can be processed on verify
@@ -843,6 +774,7 @@ router.post("/magic-link", magicLinkRateLimiter, (req, res) => __awaiter(void 0,
     }
 }));
 router.post("/magic-link/verify", magicLinkVerifyRateLimiter, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
     try {
         const { email, token } = req.body || {};
         if (!email || !token) {
@@ -850,33 +782,38 @@ router.post("/magic-link/verify", magicLinkVerifyRateLimiter, (req, res) => __aw
         }
         const db = (0, db_1.getDB)();
         const normalizedEmail = String(email).toLowerCase().trim();
-        const user = yield findUserByEmail(normalizedEmail);
-        if (!(user === null || user === void 0 ? void 0 : user.magicLinkTokenHash) || !(user === null || user === void 0 ? void 0 : user.magicLinkExpiresAt)) {
-            return res.status(401).json({ success: false, message: "Invalid or expired link" });
-        }
-        const expiresAt = new Date(user.magicLinkExpiresAt);
-        if (Date.now() > expiresAt.getTime()) {
-            return res.status(401).json({ success: false, message: "Link expired" });
-        }
         const tokenHash = (0, tokenUtils_1.hashToken)(String(token));
-        if (tokenHash !== user.magicLinkTokenHash) {
+        const now = new Date();
+        const nowIso = now.toISOString();
+        const consumeResult = yield db.collection("users").findOneAndUpdate({
+            email: normalizedEmail,
+            magicLinkTokenHash: tokenHash,
+            magicLinkExpiresAt: { $gt: now }
+        }, {
+            $unset: { magicLinkTokenHash: "", magicLinkExpiresAt: "", pendingInviteToken: "" },
+            $set: { lastLogin: nowIso, updatedAt: nowIso }
+        }, {
+            returnDocument: 'before',
+            collation: { locale: 'en', strength: 2 }
+        });
+        const consumedUser = (_a = consumeResult === null || consumeResult === void 0 ? void 0 : consumeResult.value) !== null && _a !== void 0 ? _a : consumeResult;
+        const consumedUserId = consumedUser && typeof consumedUser === 'object'
+            ? (typeof consumedUser.id === 'string'
+                ? consumedUser.id
+                : (typeof consumedUser._id === 'string' ? consumedUser._id : ''))
+            : '';
+        if (!consumedUser || typeof consumedUser !== 'object' || !consumedUserId) {
             return res.status(401).json({ success: false, message: "Invalid or expired link" });
         }
-        // one-time use
-        const unsetFields = { magicLinkTokenHash: "", magicLinkExpiresAt: "" };
-        if (user.pendingInviteToken) {
-            unsetFields.pendingInviteToken = "";
-        }
-        yield db.collection("users").updateOne({ id: user.id }, {
-            $unset: unsetFields,
-            $set: { lastLogin: new Date().toISOString() }
-        });
+        const pendingInviteToken = typeof consumedUser.pendingInviteToken === 'string'
+            ? consumedUser.pendingInviteToken
+            : '';
         // If there was a pending invite, link it to the user and create a notification
-        if (user.pendingInviteToken) {
-            console.log(`🔗 Linking pending invite ${user.pendingInviteToken} for user ${user.id}`);
+        if (pendingInviteToken) {
+            console.log(`🔗 Linking pending invite ${pendingInviteToken} for user ${consumedUserId}`);
             try {
                 const invite = yield db.collection('company_invites').findOne({
-                    token: user.pendingInviteToken,
+                    token: pendingInviteToken,
                     expiresAt: { $gt: new Date() },
                     status: 'pending'
                 });
@@ -884,7 +821,7 @@ router.post("/magic-link/verify", magicLinkVerifyRateLimiter, (req, res) => __aw
                     // Update invite with targetUserId
                     yield db.collection('company_invites').updateOne({ _id: invite._id }, {
                         $set: {
-                            targetUserId: user.id,
+                            targetUserId: consumedUserId,
                             updatedAt: new Date()
                         }
                     });
@@ -895,24 +832,25 @@ router.post("/magic-link/verify", magicLinkVerifyRateLimiter, (req, res) => __aw
                     });
                     const companyName = (company === null || company === void 0 ? void 0 : company.name) || 'A Company';
                     // Create notification so user sees it in their bell icon
-                    yield (0, notificationsController_1.createNotificationInDB)(user.id, 'company_invite', invite.invitedByUserId, `invited you to join ${companyName} as ${invite.role}`, undefined, undefined, {
+                    yield (0, notificationsController_1.createNotificationInDB)(consumedUserId, 'company_invite', invite.invitedByUserId, `invited you to join ${companyName} as ${invite.role}`, undefined, undefined, {
                         inviteId: invite._id.toString(),
                         companyId: invite.companyId,
                         role: invite.role,
                         token: invite.token
                     });
-                    console.log(`✅ Linked invite and created notification for new user ${user.id}`);
+                    console.log(`✅ Linked invite and created notification for new user ${consumedUserId}`);
                 }
             }
             catch (inviteErr) {
                 console.error('Error processing pending invite for new user:', inviteErr);
             }
         }
-        const accessToken = (0, jwtUtils_1.generateAccessToken)(user);
-        const refreshToken = (0, jwtUtils_1.generateRefreshToken)(user);
-        yield db.collection("users").updateOne({ id: user.id }, { $push: { refreshTokens: refreshToken } });
+        const authenticatedUser = Object.assign(Object.assign({}, consumedUser), { id: consumedUserId, lastLogin: nowIso, updatedAt: nowIso });
+        const accessToken = (0, jwtUtils_1.generateAccessToken)(authenticatedUser);
+        const refreshToken = (0, jwtUtils_1.generateRefreshToken)(authenticatedUser);
+        yield db.collection("users").updateOne({ id: authenticatedUser.id }, { $push: { refreshTokens: refreshToken } });
         (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
-        return res.json({ success: true, user: (0, userUtils_1.transformUser)(user), token: accessToken });
+        return res.json({ success: true, user: (0, userUtils_1.transformUser)(authenticatedUser), token: accessToken });
     }
     catch (e) {
         console.error("magic-link verify error:", e);
@@ -1010,92 +948,6 @@ router.post('/refresh-token', (req, res) => __awaiter(void 0, void 0, void 0, fu
             error: 'Refresh failed',
             message: 'Internal server error'
         });
-    }
-}));
-// ============ GITHUB OAUTH ============
-router.get('/github', (req, res, next) => {
-    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-        return res.status(503).json({
-            success: false,
-            message: 'GitHub login is not configured on the server.'
-        });
-    }
-    rememberAuthReturnTo(req, res);
-    next();
-}, passport_1.default.authenticate('github', { scope: ['user:email'] }));
-router.get('/github/callback', (req, res, next) => {
-    const frontendUrl = resolveTrustedFrontendUrl(req);
-    const returnTo = readAuthReturnTo(req);
-    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-        const loginPath = buildLoginRedirectPath('github_not_configured', returnTo);
-        return res.redirect(`${frontendUrl}${loginPath}`);
-    }
-    next();
-}, (req, res, next) => {
-    const frontendUrl = resolveTrustedFrontendUrl(req);
-    const returnTo = readAuthReturnTo(req);
-    const failurePath = buildLoginRedirectPath('github_auth_failed', returnTo);
-    return passport_1.default.authenticate('github', { failureRedirect: `${frontendUrl}${failurePath}` })(req, res, next);
-}, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    try {
-        const frontendUrl = resolveTrustedFrontendUrl(req);
-        const returnTo = consumeAuthReturnTo(req, res);
-        if (req.user) {
-            const db = (0, db_1.getDB)();
-            const userData = req.user;
-            console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
-            // Identify-First: Check by EMAIL
-            const existingUser = yield findUserByEmail(userData.email);
-            let userToReturn;
-            if (existingUser) {
-                console.log('✓ Found existing user by email:', existingUser.email);
-                const updates = {
-                    lastLogin: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                    // Always link the ID of the current provider
-                    githubId: userData.githubId || existingUser.githubId,
-                };
-                // DO NOT update these if they already exist
-                // This keeps the user's chosen identity intact
-                if (!existingUser.handle && userData.handle)
-                    updates.handle = normalizeUserHandle(userData.handle);
-                if (!existingUser.firstName)
-                    updates.firstName = userData.firstName;
-                if (!existingUser.avatar)
-                    updates.avatar = userData.avatar;
-                yield db.collection('users').updateOne({ id: existingUser.id }, { $set: updates });
-                userToReturn = Object.assign(Object.assign({}, existingUser), updates);
-            }
-            else {
-                console.log('➕ New user from GitHub OAuth');
-                // NEW USER: Generate unique handle
-                const uniqueHandle = yield generateUniqueHandle(userData.firstName || 'User', userData.lastName || '');
-                const newUser = Object.assign(Object.assign({}, userData), { email: String(userData.email || '').trim().toLowerCase(), handle: uniqueHandle, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastLogin: new Date().toISOString(), auraCredits: SIGNUP_BONUS_CREDITS, auraCreditsSpent: 0, signupBonusGrantedAt: new Date().toISOString(), trustScore: 10, activeGlow: 'none', acquaintances: [], blockedUsers: [], refreshTokens: [] });
-                yield db.collection('users').insertOne(newUser);
-                console.log('✓ Created new user after GitHub OAuth:', newUser.id, '| Handle:', uniqueHandle);
-                userToReturn = newUser;
-            }
-            const accessToken = (0, jwtUtils_1.generateAccessToken)(userToReturn);
-            const refreshToken = (0, jwtUtils_1.generateRefreshToken)(userToReturn);
-            yield db.collection('users').updateOne({ id: userToReturn.id }, {
-                $push: { refreshTokens: refreshToken }
-            });
-            (0, jwtUtils_1.setTokenCookies)(res, accessToken, refreshToken);
-            const redirectPath = returnTo || '/feed';
-            console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}${redirectPath}`);
-            return res.redirect(`${frontendUrl}${redirectPath}`);
-        }
-        else {
-            const loginPath = buildLoginRedirectPath('github_auth_failed', returnTo);
-            return res.redirect(`${frontendUrl}${loginPath}`);
-        }
-    }
-    catch (error) {
-        console.error('GitHub OAuth callback error:', error);
-        const frontendUrl = resolveTrustedFrontendUrl(req);
-        const returnTo = consumeAuthReturnTo(req, res);
-        const loginPath = buildLoginRedirectPath('github_callback_error', returnTo);
-        res.redirect(`${frontendUrl}${loginPath}`);
     }
 }));
 // ============ GET CURRENT USER ============
@@ -1323,7 +1175,7 @@ router.post('/complete-oauth-profile', (req, res) => __awaiter(void 0, void 0, v
             });
         }
         const db = (0, db_1.getDB)();
-        const handleValidation = validateHandleFormat(handle);
+        const handleValidation = (0, authUserService_1.validateHandleFormat)(handle);
         if (!handleValidation.ok) {
             return res.status(400).json({
                 success: false,
@@ -1331,7 +1183,7 @@ router.post('/complete-oauth-profile', (req, res) => __awaiter(void 0, void 0, v
                 message: handleValidation.message || 'Invalid handle'
             });
         }
-        const normalizedHandle = normalizeUserHandle(handle);
+        const normalizedHandle = (0, authUserService_1.normalizeUserHandle)(handle);
         const existingHandleUser = yield db.collection('users').findOne({ handle: normalizedHandle });
         if (existingHandleUser) {
             return res.status(409).json({
@@ -1399,7 +1251,7 @@ router.post('/register', registerRateLimiter, (req, res) => __awaiter(void 0, vo
         }
         const db = (0, db_1.getDB)();
         const normalizedEmail = email.toLowerCase().trim();
-        const existingUser = yield findUserByEmail(normalizedEmail);
+        const existingUser = yield (0, authUserService_1.findUserByEmail)(normalizedEmail);
         if (existingUser) {
             return res.status(409).json({
                 success: false,
@@ -1409,7 +1261,7 @@ router.post('/register', registerRateLimiter, (req, res) => __awaiter(void 0, vo
         }
         let normalizedHandle = null;
         if (handle) {
-            const handleValidation = validateHandleFormat(handle);
+            const handleValidation = (0, authUserService_1.validateHandleFormat)(handle);
             if (!handleValidation.ok) {
                 return res.status(400).json({
                     success: false,
@@ -1417,7 +1269,7 @@ router.post('/register', registerRateLimiter, (req, res) => __awaiter(void 0, vo
                     message: handleValidation.message || 'Invalid handle'
                 });
             }
-            normalizedHandle = normalizeUserHandle(handle);
+            normalizedHandle = (0, authUserService_1.normalizeUserHandle)(handle);
             const existingByHandle = yield db.collection('users').findOne({ handle: normalizedHandle });
             if (existingByHandle) {
                 return res.status(409).json({
@@ -1428,7 +1280,7 @@ router.post('/register', registerRateLimiter, (req, res) => __awaiter(void 0, vo
             }
         }
         const passwordHash = yield bcryptjs_1.default.hash(password, 10);
-        const finalHandle = normalizedHandle || (yield generateUniqueHandle(firstName, lastName));
+        const finalHandle = normalizedHandle || (yield (0, authUserService_1.generateUniqueHandle)(firstName, lastName));
         const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         const newUser = {
             id: userId,

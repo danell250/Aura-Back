@@ -15,6 +15,12 @@ import {
 } from '../utils/jwtUtils';
 import { generateMagicToken, hashToken } from '../utils/tokenUtils';
 import { sendMagicLinkEmail } from '../services/emailService';
+import {
+  findUserByEmail,
+  generateUniqueHandle,
+  normalizeUserHandle,
+  validateHandleFormat,
+} from '../services/authUserService';
 import { createNotificationInDB } from '../controllers/notificationsController';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { transformUser } from '../utils/userUtils';
@@ -125,83 +131,6 @@ const consumeAuthReturnTo = (req: Request, res: Response): string | null => {
     });
   }
   return value;
-};
-
-const normalizeUserHandle = (rawHandle: string): string => {
-  const base = (rawHandle || '').trim().toLowerCase();
-  const withoutAt = base.startsWith('@') ? base.slice(1) : base;
-  const cleaned = withoutAt.replace(/[^a-z0-9_-]/g, '');
-  if (!cleaned) return '';
-  return `@${cleaned}`;
-};
-
-const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-const findUserByEmail = async (email: string) => {
-  const normalizedEmail = String(email || '').trim().toLowerCase();
-  if (!normalizedEmail) return null;
-  const db = getDB();
-  return db.collection('users').findOne({
-    email: { $regex: new RegExp(`^${escapeRegex(normalizedEmail)}$`, 'i') }
-  });
-};
-
-const validateHandleFormat = (handle: string): { ok: boolean; message?: string } => {
-  const normalized = normalizeUserHandle(handle);
-  if (!normalized) {
-    return { ok: false, message: 'Handle is required' };
-  }
-  const core = normalized.slice(1);
-  if (core.length < 3 || core.length > 21) {
-    return { ok: false, message: 'Handle must be between 3 and 21 characters' };
-  }
-  if (!/^[a-z0-9_-]+$/.test(core)) {
-    return { ok: false, message: 'Handle can only use letters, numbers, underscores and hyphens' };
-  }
-  return { ok: true };
-};
-
-const generateUniqueHandle = async (firstName: string, lastName: string): Promise<string> => {
-  const db = getDB();
-
-  const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
-  const lastNameSafe = (lastName || '').toLowerCase().trim().replace(/\s+/g, '');
-
-  const baseHandle = `@${firstNameSafe}${lastNameSafe}`;
-
-  try {
-    const existingUser = await db.collection('users').findOne({ handle: baseHandle });
-    const existingCompany = await db.collection('companies').findOne({ handle: baseHandle });
-    if (!existingUser && !existingCompany) {
-      console.log('✓ Handle available:', baseHandle);
-      return baseHandle;
-    }
-  } catch (error) {
-    console.error('Error checking base handle:', error);
-  }
-
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const randomNum = Math.floor(Math.random() * 100000);
-    const candidateHandle = `${baseHandle}${randomNum}`;
-
-    try {
-      const existingUser = await db.collection('users').findOne({ handle: candidateHandle });
-      const existingCompany = await db.collection('companies').findOne({ handle: candidateHandle });
-      if (!existingUser && !existingCompany) {
-        console.log('✓ Handle available:', candidateHandle);
-        return candidateHandle;
-      }
-    } catch (error) {
-      console.error(`Error checking handle ${candidateHandle}:`, error);
-      continue;
-    }
-  }
-
-  const timestamp = Date.now();
-  const randomStr = Math.random().toString(36).substring(2, 9);
-  const fallbackHandle = `@user${timestamp}${randomStr}`;
-  console.log('⚠ Using fallback handle:', fallbackHandle);
-  return fallbackHandle;
 };
 
 router.post('/check-handle', async (req: Request, res: Response) => {
@@ -1010,7 +939,7 @@ router.post("/magic-link", magicLinkRateLimiter, async (req: Request, res: Respo
 
     const updates: any = {
       magicLinkTokenHash: tokenHash,
-      magicLinkExpiresAt: expiresAt.toISOString(),
+      magicLinkExpiresAt: expiresAt,
       updatedAt: new Date().toISOString(),
     };
 
@@ -1058,42 +987,45 @@ router.post("/magic-link/verify", magicLinkVerifyRateLimiter, async (req: Reques
 
     const db = getDB();
     const normalizedEmail = String(email).toLowerCase().trim();
-    const user = await findUserByEmail(normalizedEmail) as any;
-
-    if (!user?.magicLinkTokenHash || !user?.magicLinkExpiresAt) {
-      return res.status(401).json({ success: false, message: "Invalid or expired link" });
-    }
-
-    const expiresAt = new Date(user.magicLinkExpiresAt);
-    if (Date.now() > expiresAt.getTime()) {
-      return res.status(401).json({ success: false, message: "Link expired" });
-    }
-
     const tokenHash = hashToken(String(token));
-    if (tokenHash !== user.magicLinkTokenHash) {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const consumeResult: any = await db.collection("users").findOneAndUpdate(
+      {
+        email: normalizedEmail,
+        magicLinkTokenHash: tokenHash,
+        magicLinkExpiresAt: { $gt: now }
+      },
+      {
+        $unset: { magicLinkTokenHash: "", magicLinkExpiresAt: "", pendingInviteToken: "" },
+        $set: { lastLogin: nowIso, updatedAt: nowIso }
+      },
+      {
+        returnDocument: 'before',
+        collation: { locale: 'en', strength: 2 }
+      }
+    ) as any;
+
+    const consumedUser = consumeResult?.value ?? consumeResult;
+    const consumedUserId = consumedUser && typeof consumedUser === 'object'
+      ? (typeof consumedUser.id === 'string'
+        ? consumedUser.id
+        : (typeof consumedUser._id === 'string' ? consumedUser._id : ''))
+      : '';
+    if (!consumedUser || typeof consumedUser !== 'object' || !consumedUserId) {
       return res.status(401).json({ success: false, message: "Invalid or expired link" });
     }
 
-    // one-time use
-    const unsetFields: any = { magicLinkTokenHash: "", magicLinkExpiresAt: "" };
-    if (user.pendingInviteToken) {
-      unsetFields.pendingInviteToken = "";
-    }
-
-    await db.collection("users").updateOne(
-      { id: user.id },
-      { 
-        $unset: unsetFields,
-        $set: { lastLogin: new Date().toISOString() }
-      }
-    );
+    const pendingInviteToken = typeof consumedUser.pendingInviteToken === 'string'
+      ? consumedUser.pendingInviteToken
+      : '';
 
     // If there was a pending invite, link it to the user and create a notification
-    if (user.pendingInviteToken) {
-      console.log(`🔗 Linking pending invite ${user.pendingInviteToken} for user ${user.id}`);
+    if (pendingInviteToken) {
+      console.log(`🔗 Linking pending invite ${pendingInviteToken} for user ${consumedUserId}`);
       try {
         const invite = await db.collection('company_invites').findOne({
-          token: user.pendingInviteToken,
+          token: pendingInviteToken,
           expiresAt: { $gt: new Date() },
           status: 'pending'
         });
@@ -1104,7 +1036,7 @@ router.post("/magic-link/verify", magicLinkVerifyRateLimiter, async (req: Reques
             { _id: invite._id },
             { 
               $set: { 
-                targetUserId: user.id,
+                targetUserId: consumedUserId,
                 updatedAt: new Date()
               } 
             }
@@ -1119,7 +1051,7 @@ router.post("/magic-link/verify", magicLinkVerifyRateLimiter, async (req: Reques
 
           // Create notification so user sees it in their bell icon
           await createNotificationInDB(
-            user.id,
+            consumedUserId,
             'company_invite',
             invite.invitedByUserId,
             `invited you to join ${companyName} as ${invite.role}`,
@@ -1133,24 +1065,31 @@ router.post("/magic-link/verify", magicLinkVerifyRateLimiter, async (req: Reques
             }
           );
           
-          console.log(`✅ Linked invite and created notification for new user ${user.id}`);
+          console.log(`✅ Linked invite and created notification for new user ${consumedUserId}`);
         }
       } catch (inviteErr) {
         console.error('Error processing pending invite for new user:', inviteErr);
       }
     }
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
+    const authenticatedUser = {
+      ...consumedUser,
+      id: consumedUserId,
+      lastLogin: nowIso,
+      updatedAt: nowIso
+    } as User;
+
+    const accessToken = generateAccessToken(authenticatedUser);
+    const refreshToken = generateRefreshToken(authenticatedUser);
 
     await db.collection("users").updateOne(
-      { id: user.id },
+      { id: authenticatedUser.id },
       { $push: { refreshTokens: refreshToken } as any }
     );
 
     setTokenCookies(res, accessToken, refreshToken);
     
-    return res.json({ success: true, user: transformUser(user), token: accessToken });
+    return res.json({ success: true, user: transformUser(authenticatedUser), token: accessToken });
   } catch (e) {
     console.error("magic-link verify error:", e);
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -1267,136 +1206,6 @@ router.post('/refresh-token', async (req: Request, res: Response) => {
     });
   }
 });
-
-// ============ GITHUB OAUTH ============
-router.get('/github',
-  (req, res, next) => {
-    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-      return res.status(503).json({
-        success: false,
-        message: 'GitHub login is not configured on the server.'
-      });
-    }
-    rememberAuthReturnTo(req as Request, res as Response);
-    next();
-  },
-  passport.authenticate('github', { scope: ['user:email'] })
-);
-
-router.get('/github/callback',
-  (req, res, next) => {
-    const frontendUrl = resolveTrustedFrontendUrl(req as Request);
-    const returnTo = readAuthReturnTo(req as Request);
-    if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-      const loginPath = buildLoginRedirectPath('github_not_configured', returnTo);
-      return res.redirect(`${frontendUrl}${loginPath}`);
-    }
-    next();
-  },
-  (req, res, next) => {
-    const frontendUrl = resolveTrustedFrontendUrl(req as Request);
-    const returnTo = readAuthReturnTo(req as Request);
-    const failurePath = buildLoginRedirectPath('github_auth_failed', returnTo);
-    return passport.authenticate('github', { failureRedirect: `${frontendUrl}${failurePath}` })(req, res, next);
-  },
-  async (req: Request, res: Response) => {
-    try {
-      const frontendUrl = resolveTrustedFrontendUrl(req);
-      const returnTo = consumeAuthReturnTo(req, res);
-
-      if (req.user) {
-        const db = getDB();
-        const userData = req.user as any;
-
-        console.log('🔍 GitHub OAuth - Checking for existing user with ID:', userData.id);
-
-        // Identify-First: Check by EMAIL
-        const existingUser = await findUserByEmail(userData.email);
-
-        let userToReturn: User;
-
-        if (existingUser) {
-          console.log('✓ Found existing user by email:', existingUser.email);
-          
-          const updates: any = {
-            lastLogin: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            // Always link the ID of the current provider
-            githubId: userData.githubId || existingUser.githubId,
-          };
-
-          // DO NOT update these if they already exist
-          // This keeps the user's chosen identity intact
-          if (!existingUser.handle && userData.handle) updates.handle = normalizeUserHandle(userData.handle);
-          if (!existingUser.firstName) updates.firstName = userData.firstName;
-          if (!existingUser.avatar) updates.avatar = userData.avatar;
-
-          await db.collection('users').updateOne(
-            { id: existingUser.id },
-            { $set: updates }
-          );
-          
-          userToReturn = { ...existingUser, ...updates } as User;
-        } else {
-          console.log('➕ New user from GitHub OAuth');
-          // NEW USER: Generate unique handle
-          const uniqueHandle = await generateUniqueHandle(
-            userData.firstName || 'User',
-            userData.lastName || ''
-          );
-
-          const newUser = {
-            ...userData,
-            email: String(userData.email || '').trim().toLowerCase(),
-            handle: uniqueHandle,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastLogin: new Date().toISOString(),
-            auraCredits: SIGNUP_BONUS_CREDITS,
-            auraCreditsSpent: 0,
-            signupBonusGrantedAt: new Date().toISOString(),
-            trustScore: 10,
-            activeGlow: 'none',
-            acquaintances: [],
-            blockedUsers: [],
-            refreshTokens: []
-          };
-
-          await db.collection('users').insertOne(newUser);
-          console.log('✓ Created new user after GitHub OAuth:', newUser.id, '| Handle:', uniqueHandle);
-          userToReturn = newUser as User;
-        }
-
-        const accessToken = generateAccessToken(userToReturn);
-        const refreshToken = generateRefreshToken(userToReturn);
-
-        await db.collection('users').updateOne(
-          { id: userToReturn.id },
-          {
-            $push: { refreshTokens: refreshToken } as any
-          }
-        );
-
-        setTokenCookies(res, accessToken, refreshToken);
-
-        const redirectPath = returnTo || '/feed';
-        console.log('[OAuth:GitHub] Redirecting to:', `${frontendUrl}${redirectPath}`);
-        return res.redirect(`${frontendUrl}${redirectPath}`);
-      } else {
-        const loginPath = buildLoginRedirectPath('github_auth_failed', returnTo);
-        return res.redirect(`${frontendUrl}${loginPath}`);
-      }
-    } catch (error) {
-      console.error('GitHub OAuth callback error:', error);
-      const frontendUrl = resolveTrustedFrontendUrl(req);
-      const returnTo = consumeAuthReturnTo(req, res);
-      const loginPath = buildLoginRedirectPath('github_callback_error', returnTo);
-      res.redirect(`${frontendUrl}${loginPath}`);
-    }
-  }
-);
-
-
 
 // ============ GET CURRENT USER ============
 router.get('/user', requireAuth, (req: Request, res: Response) => {
