@@ -24,9 +24,10 @@ import privacyRoutes from './routes/privacyRoutes';
 import shareRoutes from './routes/shareRoutes';
 import mediaRoutes from './routes/mediaRoutes';
 import companyRoutes from './routes/companyRoutes';
-import reportsRoutes from './routes/reportsRoutes';
+import reportsRoutes, { startReportScheduleWorker } from './routes/reportsRoutes';
 import ownerControlRoutes from './routes/ownerControlRoutes';
 import jobsRoutes from './routes/jobsRoutes';
+import { startNotificationCleanupWorker } from './controllers/notificationsController';
 import { attachUser, requireAuth } from './middleware/authMiddleware';
 import { createCsrfProtection } from './middleware/csrfMiddleware';
 import path from 'path';
@@ -634,7 +635,16 @@ async function bootstrapServerRuntime() {
     runtimeServer = server;
 
     initSocketRuntime({ app, server, allowedOrigins });
-    await initializeDatabaseRuntime({ loadDemoPostsIfEmpty, loadDemoAdsIfEmpty });
+    await initializeDatabaseRuntime({
+      loadDemoPostsIfEmpty,
+      loadDemoAdsIfEmpty,
+      onDatabaseReady: async () => {
+        startReportScheduleWorker();
+        console.log('📬 Scheduled report worker started');
+        startNotificationCleanupWorker();
+        console.log('🧹 Notification cleanup worker started');
+      },
+    });
     startRecurringRuntimeJobs();
     registerGracefulShutdownHandlers(server);
   } catch (error) {

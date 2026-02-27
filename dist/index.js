@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -39,9 +72,10 @@ const privacyRoutes_1 = __importDefault(require("./routes/privacyRoutes"));
 const shareRoutes_1 = __importDefault(require("./routes/shareRoutes"));
 const mediaRoutes_1 = __importDefault(require("./routes/mediaRoutes"));
 const companyRoutes_1 = __importDefault(require("./routes/companyRoutes"));
-const reportsRoutes_1 = __importDefault(require("./routes/reportsRoutes"));
+const reportsRoutes_1 = __importStar(require("./routes/reportsRoutes"));
 const ownerControlRoutes_1 = __importDefault(require("./routes/ownerControlRoutes"));
 const jobsRoutes_1 = __importDefault(require("./routes/jobsRoutes"));
+const notificationsController_1 = require("./controllers/notificationsController");
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const csrfMiddleware_1 = require("./middleware/csrfMiddleware");
 const path_1 = __importDefault(require("path"));
@@ -570,7 +604,16 @@ function bootstrapServerRuntime() {
             });
             runtimeServer = server;
             (0, bootstrapRuntime_1.initSocketRuntime)({ app, server, allowedOrigins });
-            yield (0, bootstrapRuntime_1.initializeDatabaseRuntime)({ loadDemoPostsIfEmpty: demoBootstrap_1.loadDemoPostsIfEmpty, loadDemoAdsIfEmpty: demoBootstrap_1.loadDemoAdsIfEmpty });
+            yield (0, bootstrapRuntime_1.initializeDatabaseRuntime)({
+                loadDemoPostsIfEmpty: demoBootstrap_1.loadDemoPostsIfEmpty,
+                loadDemoAdsIfEmpty: demoBootstrap_1.loadDemoAdsIfEmpty,
+                onDatabaseReady: () => __awaiter(this, void 0, void 0, function* () {
+                    (0, reportsRoutes_1.startReportScheduleWorker)();
+                    console.log('📬 Scheduled report worker started');
+                    (0, notificationsController_1.startNotificationCleanupWorker)();
+                    console.log('🧹 Notification cleanup worker started');
+                }),
+            });
             (0, bootstrapRuntime_1.startRecurringRuntimeJobs)();
             (0, bootstrapRuntime_1.registerGracefulShutdownHandlers)(server);
         }

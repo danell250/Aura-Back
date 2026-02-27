@@ -7,8 +7,6 @@ import { registerSocketServer } from '../realtime/socketHub';
 import { CallType, getCallLogsCollection } from '../models/CallLog';
 import { connectDB, isDBConnected } from '../db';
 import { migrateLegacyCompanies } from '../services/migrationService';
-import { startReportScheduleWorker } from '../routes/reportsRoutes';
-import { startNotificationCleanupWorker } from '../controllers/notificationsController';
 import { startRuntimeRecurringJobs } from './recurringJobs';
 
 type HttpServerInstance = ReturnType<express.Application['listen']>;
@@ -47,6 +45,7 @@ type SocketRuntimeConfig = {
 let databaseRuntimeState: DatabaseRuntimeState = 'idle';
 let databaseRuntimeReadyPromise: Promise<'ready' | 'failed'> | null = null;
 let resolveDatabaseRuntimeState: ((state: 'ready' | 'failed') => void) | null = null;
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const beginDatabaseRuntimeInitialization = () => {
   databaseRuntimeState = 'initializing';
@@ -62,41 +61,37 @@ const completeDatabaseRuntimeInitialization = (state: 'ready' | 'failed') => {
 };
 
 const waitForDatabaseRuntimeInitialization = async (timeoutMs = 3000) => {
-  if (databaseRuntimeState === 'ready' || isDBConnected()) {
-    return true;
-  }
-  if (databaseRuntimeState === 'failed') {
-    return false;
-  }
-  if (!databaseRuntimeReadyPromise) {
-    return false;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (isDBConnected()) {
+      return true;
+    }
+    if (databaseRuntimeState === 'failed') {
+      return false;
+    }
+
+    if (databaseRuntimeReadyPromise) {
+      try {
+        const waitResult = await Promise.race<'ready' | 'failed' | 'timeout'>([
+          databaseRuntimeReadyPromise,
+          new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 100)),
+        ]);
+        if (waitResult === 'ready') return true;
+        if (waitResult === 'failed') return false;
+      } catch {
+        return false;
+      }
+    } else {
+      await wait(100);
+    }
   }
 
-  const waitResult = await Promise.race<'ready' | 'failed' | 'timeout'>([
-    databaseRuntimeReadyPromise,
-    new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), timeoutMs)),
-  ]);
-
-  return waitResult === 'ready' || isDBConnected();
+  return isDBConnected();
 };
 
 const waitForDatabaseRuntimeReadyOrFailure = async () => {
-  if (databaseRuntimeState === 'ready' || isDBConnected()) {
-    return true;
-  }
-  if (databaseRuntimeState === 'failed') {
-    return false;
-  }
-  if (!databaseRuntimeReadyPromise) {
-    return false;
-  }
-
-  try {
-    const state = await databaseRuntimeReadyPromise;
-    return state === 'ready' || isDBConnected();
-  } catch {
-    return false;
-  }
+  return waitForDatabaseRuntimeInitialization(15000);
 };
 
 const registerRoomMembershipHandlers = ({
@@ -695,10 +690,7 @@ export function initSocketRuntime(
 
   io.use(async (socket, next) => {
     if (!isDBConnected()) {
-      const databaseReady =
-        databaseRuntimeState === 'initializing'
-          ? await waitForDatabaseRuntimeReadyOrFailure()
-          : await waitForDatabaseRuntimeInitialization(5000);
+      const databaseReady = await waitForDatabaseRuntimeReadyOrFailure();
       if (!databaseReady) {
         return next(new Error('Service unavailable: database is not ready'));
       }
@@ -732,9 +724,11 @@ export function initSocketRuntime(
 export const initializeDatabaseRuntime = async ({
   loadDemoPostsIfEmpty,
   loadDemoAdsIfEmpty,
+  onDatabaseReady,
 }: {
   loadDemoPostsIfEmpty: () => Promise<void>;
   loadDemoAdsIfEmpty: () => Promise<void>;
+  onDatabaseReady?: () => Promise<void> | void;
 }) => {
   beginDatabaseRuntimeInitialization();
   console.log('🔄 Attempting database connection...');
@@ -749,10 +743,7 @@ export const initializeDatabaseRuntime = async ({
       console.warn('⚠️  Database connection not available. Some features will be unavailable until DB reconnects.');
     } else {
       console.log('✅ Database connection established');
-      startReportScheduleWorker();
-      console.log('📬 Scheduled report worker started');
-      startNotificationCleanupWorker();
-      console.log('🧹 Notification cleanup worker started');
+      await onDatabaseReady?.();
 
       const shouldLoadDemoData =
         process.env.NODE_ENV !== 'production' &&

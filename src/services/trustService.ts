@@ -33,6 +33,9 @@ interface SerendipityMatch {
   };
 }
 
+const MAX_RESPONSE_THREADS = 100;
+const MAX_MESSAGES_PER_THREAD = 200;
+
 function clampScore(score: number): number {
   if (Number.isNaN(score) || !Number.isFinite(score)) return 0;
   return Math.max(0, Math.min(100, Math.round(score)));
@@ -107,6 +110,57 @@ const getMessageTimestampMs = (message: any): number => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+const ensureChronologicalTimestamps = (timestamps: number[]): number[] => {
+  for (let index = 1; index < timestamps.length; index += 1) {
+    if (timestamps[index] < timestamps[index - 1]) {
+      timestamps.sort((a, b) => a - b);
+      break;
+    }
+  }
+  return timestamps;
+};
+
+const getLatestTimestamp = (timestamps: number[]): number => {
+  let latest = 0;
+  for (const timestamp of timestamps) {
+    if (timestamp > latest) {
+      latest = timestamp;
+    }
+  }
+  return latest;
+};
+
+const buildTrustBreakdown = (user: any, posts: any[], messages: any[], userId: string): TrustBreakdown => {
+  const profileCompleteness = calculateProfileCompleteness(user);
+  const activityLevel = calculateActivityLevel(posts.length);
+  const responseRate = calculateResponseRate(messages, userId);
+  const positiveInteractions = calculatePositiveInteractions(posts);
+  const accountAge = calculateAccountAgeScore(user);
+  const negativeFlags = calculateNegativeFlags(user);
+
+  const totalRaw =
+    profileCompleteness +
+    activityLevel +
+    responseRate +
+    positiveInteractions +
+    accountAge +
+    negativeFlags;
+
+  const total = clampScore(totalRaw);
+  const level = getTrustLevel(total);
+
+  return {
+    profileCompleteness,
+    activityLevel,
+    responseRate,
+    positiveInteractions,
+    accountAge,
+    negativeFlags,
+    total,
+    level,
+  };
+};
+
 export function calculateResponseRate(messages: any[], userId: string): number {
   if (!Array.isArray(messages) || messages.length === 0) return 0;
 
@@ -138,15 +192,24 @@ export function calculateResponseRate(messages: any[], userId: string): number {
   let incomingMessagesTotal = 0;
   let respondedMessages = 0;
 
-  for (const [senderId, incoming] of incomingBySender) {
+  const senderEntries = Array.from(incomingBySender.entries())
+    .sort((a, b) => getLatestTimestamp(b[1]) - getLatestTimestamp(a[1]))
+    .slice(0, MAX_RESPONSE_THREADS);
+
+  for (const [senderId, incoming] of senderEntries) {
     if (!incoming.length) continue;
     const outgoing = outgoingByReceiver.get(senderId) || [];
-    const incomingWindow = incoming.length > 200 ? incoming.slice(-200) : [...incoming];
-    const outgoingWindow = outgoing.length > 200 ? outgoing.slice(-200) : [...outgoing];
+    const incomingWindow = ensureChronologicalTimestamps(
+      incoming.length > MAX_MESSAGES_PER_THREAD ? incoming.slice(-MAX_MESSAGES_PER_THREAD) : [...incoming]
+    );
+    const outgoingWindow = ensureChronologicalTimestamps(
+      outgoing.length > MAX_MESSAGES_PER_THREAD ? outgoing.slice(-MAX_MESSAGES_PER_THREAD) : [...outgoing]
+    );
     incomingMessagesTotal += incomingWindow.length;
 
     if (!outgoingWindow.length) continue;
 
+    // Message-level response rate: each incoming message can match at most one later outgoing message.
     let outgoingIndex = 0;
     for (const incomingTurnStart of incomingWindow) {
       while (outgoingIndex < outgoingWindow.length && outgoingWindow[outgoingIndex] <= incomingTurnStart) {
@@ -324,47 +387,143 @@ export async function calculateUserTrust(
   }).sort({ timestamp: 1 });
   const messages = await messagesCursor.toArray();
 
-  const profileCompleteness = calculateProfileCompleteness(user);
-  const activityLevel = calculateActivityLevel(posts.length);
-  const responseRate = calculateResponseRate(messages, userId);
-  const positiveInteractions = calculatePositiveInteractions(posts);
-  const accountAge = calculateAccountAgeScore(user);
-  const negativeFlags = calculateNegativeFlags(user);
-
-  const totalRaw =
-    profileCompleteness +
-    activityLevel +
-    responseRate +
-    positiveInteractions +
-    accountAge +
-    negativeFlags;
-
-  const total = clampScore(totalRaw);
-  const level = getTrustLevel(total);
+  const breakdown = buildTrustBreakdown(user, posts, messages, userId);
+  const calculatedAt = new Date().toISOString();
 
   if (options.persist !== false) {
     await db.collection('users').updateOne(
       { id: userId },
       {
         $set: {
-          trustScore: total,
-          updatedAt: new Date().toISOString()
+          trustScore: breakdown.total,
+          trustCalculatedAt: calculatedAt,
+          updatedAt: calculatedAt
         }
       }
     );
   }
 
-  return {
-    profileCompleteness,
-    activityLevel,
-    responseRate,
-    positiveInteractions,
-    accountAge,
-    negativeFlags,
-    total,
-    level
-  };
+  return breakdown;
 }
+
+type SerendipityEligibilityContext = {
+  userId: string;
+  currentAcquaintances: Set<string>;
+  currentBlockedUsers: Set<string>;
+  currentBlockedBy: Set<string>;
+  recentlySkippedTargets: Set<string>;
+};
+
+type SerendipityScoringContext = {
+  currentUser: any;
+  currentTags: Set<string>;
+  currentActivity: number;
+  currentProfileCompleteness: number;
+  currentTrust: number;
+};
+
+const buildSerendipityEligibilityContext = (currentUser: any, userId: string): SerendipityEligibilityContext => {
+  const currentAcquaintances = new Set<string>(Array.isArray(currentUser.acquaintances) ? currentUser.acquaintances : []);
+  const currentBlockedUsers = new Set<string>(Array.isArray(currentUser.blockedUsers) ? currentUser.blockedUsers : []);
+  const currentBlockedBy = new Set<string>(Array.isArray(currentUser.blockedBy) ? currentUser.blockedBy : []);
+
+  const recentlySkippedTargets = new Set<string>();
+  const serendipitySkips: any[] = Array.isArray((currentUser as any).serendipitySkips)
+    ? (currentUser as any).serendipitySkips
+    : [];
+  const skipCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  for (const skip of serendipitySkips) {
+    const targetUserId = typeof skip?.targetUserId === 'string' ? skip.targetUserId : '';
+    if (!targetUserId) continue;
+    const lastTime = new Date(skip.lastSkippedAt).getTime();
+    if (!Number.isNaN(lastTime) && lastTime > skipCutoff) {
+      recentlySkippedTargets.add(targetUserId);
+    }
+  }
+
+  return {
+    userId,
+    currentAcquaintances,
+    currentBlockedUsers,
+    currentBlockedBy,
+    recentlySkippedTargets,
+  };
+};
+
+const isSerendipityCandidateEligible = (candidate: any, context: SerendipityEligibilityContext): boolean => {
+  if (!candidate || typeof candidate.id !== 'string') return false;
+  const candidateId = candidate.id;
+  if (candidateId === context.userId) return false;
+
+  const candidateAcquaintances: string[] = Array.isArray(candidate.acquaintances) ? candidate.acquaintances : [];
+  const candidateBlockedUsers: string[] = Array.isArray(candidate.blockedUsers) ? candidate.blockedUsers : [];
+  const candidateBlockedBy: string[] = Array.isArray(candidate.blockedBy) ? candidate.blockedBy : [];
+
+  if (context.currentAcquaintances.has(candidateId)) return false;
+  if (candidateAcquaintances.includes(context.userId)) return false;
+  if (context.currentBlockedUsers.has(candidateId)) return false;
+  if (context.currentBlockedBy.has(candidateId)) return false;
+  if (candidateBlockedUsers.includes(context.userId)) return false;
+  if (candidateBlockedBy.includes(context.userId)) return false;
+  if (context.recentlySkippedTargets.has(candidateId)) return false;
+  return true;
+};
+
+const buildSerendipityMatch = (
+  candidate: any,
+  candidatePosts: any[],
+  scoring: SerendipityScoringContext
+): SerendipityMatch => {
+  const candidateTags = buildHashtagSet(candidatePosts);
+  const hashtagResult = calculateHashtagOverlapScore(scoring.currentTags, candidateTags);
+  const candidateActivity = calculateActivityLevel(candidatePosts.length);
+  const candidateProfileCompleteness = calculateProfileCompleteness(candidate);
+  const candidateTrust = getUserTrustScore(candidate);
+  const mutualConnections = calculateMutualConnections(scoring.currentUser, candidate);
+  const industryResult = getIndustrySignalStub(scoring.currentUser, candidate);
+
+  const trustAverage = (scoring.currentTrust + candidateTrust) / 2;
+  const trustComponent = clampScore((trustAverage / 100) * 35);
+
+  const activityAverage = (scoring.currentActivity + candidateActivity) / 2;
+  const activityComponent = clampScore((activityAverage / 20) * 8);
+
+  const profileAverage = (scoring.currentProfileCompleteness + candidateProfileCompleteness) / 2;
+  const profileComponent = clampScore((profileAverage / 25) * 7);
+
+  const mutualNormalized = Math.min(mutualConnections, 5) / 5;
+  const mutualComponent = clampScore(mutualNormalized * 20);
+
+  const total =
+    trustComponent +
+    industryResult.score +
+    hashtagResult.score +
+    mutualComponent +
+    activityComponent +
+    profileComponent;
+
+  const compatibilityScore = clampScore(total);
+  const trustLevel = getTrustLevel(candidateTrust);
+
+  return {
+    user: candidate,
+    compatibilityScore,
+    trustScore: candidateTrust,
+    trustLevel,
+    mutualConnections,
+    sharedHashtags: hashtagResult.shared,
+    industryMatch: industryResult.match,
+    profileCompleteness: {
+      currentUser: scoring.currentProfileCompleteness,
+      candidate: candidateProfileCompleteness
+    },
+    activityLevel: {
+      currentUser: scoring.currentActivity,
+      candidate: candidateActivity
+    }
+  };
+};
 
 export async function getSerendipityMatchesForUser(userId: string, limit: number = 20): Promise<SerendipityMatch[] | null> {
   const db = getDB();
@@ -395,41 +554,16 @@ export async function getSerendipityMatchesForUser(userId: string, limit: number
     .project({ hashtags: 1 })
     .toArray();
 
-  const currentTags = buildHashtagSet(currentUserPosts);
-  const currentActivity = calculateActivityLevel(currentUserPosts.length);
-  const currentProfileCompleteness = calculateProfileCompleteness(currentUser);
-  const currentTrust = getUserTrustScore(currentUser);
-  const currentAcquaintances: string[] = Array.isArray(currentUser.acquaintances) ? currentUser.acquaintances : [];
-  const currentBlockedUsers: string[] = Array.isArray(currentUser.blockedUsers) ? currentUser.blockedUsers : [];
-  const currentBlockedBy: string[] = Array.isArray(currentUser.blockedBy) ? currentUser.blockedBy : [];
-  const serendipitySkips: any[] = Array.isArray((currentUser as any).serendipitySkips)
-    ? (currentUser as any).serendipitySkips
-    : [];
-  const skipCooldownMs = 7 * 24 * 60 * 60 * 1000;
-  const skipCutoff = Date.now() - skipCooldownMs;
+  const scoringContext: SerendipityScoringContext = {
+    currentUser,
+    currentTags: buildHashtagSet(currentUserPosts),
+    currentActivity: calculateActivityLevel(currentUserPosts.length),
+    currentProfileCompleteness: calculateProfileCompleteness(currentUser),
+    currentTrust: getUserTrustScore(currentUser),
+  };
+  const eligibilityContext = buildSerendipityEligibilityContext(currentUser, userId);
 
-  const filteredCandidates = candidates.filter(candidate => {
-    if (!candidate || !candidate.id) return false;
-    const candidateId = candidate.id as string;
-    if (candidateId === userId) return false;
-    const candidateAcquaintances: string[] = Array.isArray(candidate.acquaintances) ? candidate.acquaintances : [];
-    const candidateBlockedUsers: string[] = Array.isArray(candidate.blockedUsers) ? candidate.blockedUsers : [];
-    const candidateBlockedBy: string[] = Array.isArray(candidate.blockedBy) ? candidate.blockedBy : [];
-    if (currentAcquaintances.includes(candidateId)) return false;
-    if (candidateAcquaintances.includes(userId)) return false;
-    if (currentBlockedUsers.includes(candidateId)) return false;
-    if (currentBlockedBy.includes(candidateId)) return false;
-    if (candidateBlockedUsers.includes(userId)) return false;
-    if (candidateBlockedBy.includes(userId)) return false;
-    const skipEntry = serendipitySkips.find(s => s && s.targetUserId === candidateId);
-    if (skipEntry) {
-      const lastTime = new Date(skipEntry.lastSkippedAt).getTime();
-      if (!Number.isNaN(lastTime) && lastTime > skipCutoff) {
-        return false;
-      }
-    }
-    return true;
-  });
+  const filteredCandidates = candidates.filter((candidate) => isSerendipityCandidateEligible(candidate, eligibilityContext));
 
   const limitedCandidates = filteredCandidates.slice(0, 50);
   const candidateIds = limitedCandidates.map((candidate) => candidate.id).filter((id): id is string => typeof id === 'string');
@@ -454,58 +588,9 @@ export async function getSerendipityMatchesForUser(userId: string, limit: number
     }
   }
 
-  const matches: SerendipityMatch[] = [];
-
-  limitedCandidates.forEach((candidate) => {
+  const matches: SerendipityMatch[] = limitedCandidates.map((candidate) => {
     const candidatePosts = candidatePostsById.get(candidate.id) || [];
-    const candidateTags = buildHashtagSet(candidatePosts);
-    const hashtagResult = calculateHashtagOverlapScore(currentTags, candidateTags);
-    const candidateActivity = calculateActivityLevel(candidatePosts.length);
-    const candidateProfileCompleteness = calculateProfileCompleteness(candidate);
-    const candidateTrust = getUserTrustScore(candidate);
-    const mutualConnections = calculateMutualConnections(currentUser, candidate);
-    const industryResult = getIndustrySignalStub(currentUser, candidate);
-
-    const trustAverage = (currentTrust + candidateTrust) / 2;
-    const trustComponent = clampScore((trustAverage / 100) * 35);
-
-    const activityAverage = (currentActivity + candidateActivity) / 2;
-    const activityComponent = clampScore((activityAverage / 20) * 8);
-
-    const profileAverage = (currentProfileCompleteness + candidateProfileCompleteness) / 2;
-    const profileComponent = clampScore((profileAverage / 25) * 7);
-
-    const mutualNormalized = Math.min(mutualConnections, 5) / 5;
-    const mutualComponent = clampScore(mutualNormalized * 20);
-
-    const total =
-      trustComponent +
-      industryResult.score +
-      hashtagResult.score +
-      mutualComponent +
-      activityComponent +
-      profileComponent;
-
-    const compatibilityScore = clampScore(total);
-    const trustLevel = getTrustLevel(candidateTrust);
-
-    matches.push({
-      user: candidate,
-      compatibilityScore,
-      trustScore: candidateTrust,
-      trustLevel,
-      mutualConnections,
-      sharedHashtags: hashtagResult.shared,
-      industryMatch: industryResult.match,
-      profileCompleteness: {
-        currentUser: currentProfileCompleteness,
-        candidate: candidateProfileCompleteness
-      },
-      activityLevel: {
-        currentUser: currentActivity,
-        candidate: candidateActivity
-      }
-    });
+    return buildSerendipityMatch(candidate, candidatePosts, scoringContext);
   });
 
   matches.sort((a, b) => b.compatibilityScore - a.compatibilityScore);
@@ -547,6 +632,7 @@ export async function recalculateAllTrustScores(): Promise<void> {
     ],
   };
   const hasActiveTargets = (await usersCollection.countDocuments(activeUsersFilter, { limit: 1 })) > 0;
+  const batchRunStartedAt = new Date().toISOString();
   const cursor = usersCollection
     .find(hasActiveTargets ? activeUsersFilter : {}, { projection: { id: 1 } })
     .batchSize(100);
@@ -555,27 +641,39 @@ export async function recalculateAllTrustScores(): Promise<void> {
   let batch: string[] = [];
 
   const processBatch = async (userIds: string[]) => {
-    const updates: Array<{ updateOne: { filter: { id: string }; update: { $set: { trustScore: number; updatedAt: string } } } }> = [];
-    for (const userId of userIds) {
-      try {
-        const trust = await calculateUserTrust(userId, { persist: false });
-        if (!trust) continue;
+    const calculations = await Promise.all(
+      userIds.map(async (userId) => {
+        try {
+          const trust = await calculateUserTrust(userId, { persist: false });
+          if (!trust) return null;
+          return { userId, trust };
+        } catch (error) {
+          console.error('Error recalculating trust for user', userId, error);
+          return null;
+        }
+      })
+    );
 
-        updates.push({
-          updateOne: {
-            filter: { id: userId },
-            update: {
-              $set: {
-                trustScore: trust.total,
-                updatedAt: new Date().toISOString(),
-              },
+    const updates: Array<{ updateOne: { filter: any; update: any } }> = calculations
+      .filter((entry): entry is { userId: string; trust: TrustBreakdown } => !!entry)
+      .map(({ userId, trust }) => ({
+        updateOne: {
+          filter: {
+            id: userId,
+            $or: [
+              { trustCalculatedAt: { $exists: false } },
+              { trustCalculatedAt: { $lte: batchRunStartedAt } },
+            ],
+          },
+          update: {
+            $set: {
+              trustScore: trust.total,
+              trustCalculatedAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
             },
           },
-        });
-      } catch (error) {
-        console.error('Error recalculating trust for user', userId, error);
-      }
-    }
+        },
+      }));
 
     if (updates.length > 0) {
       await usersCollection.bulkWrite(updates, { ordered: false });

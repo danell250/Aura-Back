@@ -19,12 +19,11 @@ const socketHub_1 = require("../realtime/socketHub");
 const CallLog_1 = require("../models/CallLog");
 const db_1 = require("../db");
 const migrationService_1 = require("../services/migrationService");
-const reportsRoutes_1 = require("../routes/reportsRoutes");
-const notificationsController_1 = require("../controllers/notificationsController");
 const recurringJobs_1 = require("./recurringJobs");
 let databaseRuntimeState = 'idle';
 let databaseRuntimeReadyPromise = null;
 let resolveDatabaseRuntimeState = null;
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const beginDatabaseRuntimeInitialization = () => {
     databaseRuntimeState = 'initializing';
     databaseRuntimeReadyPromise = new Promise((resolve) => {
@@ -37,38 +36,37 @@ const completeDatabaseRuntimeInitialization = (state) => {
     resolveDatabaseRuntimeState = null;
 };
 const waitForDatabaseRuntimeInitialization = (...args_1) => __awaiter(void 0, [...args_1], void 0, function* (timeoutMs = 3000) {
-    if (databaseRuntimeState === 'ready' || (0, db_1.isDBConnected)()) {
-        return true;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if ((0, db_1.isDBConnected)()) {
+            return true;
+        }
+        if (databaseRuntimeState === 'failed') {
+            return false;
+        }
+        if (databaseRuntimeReadyPromise) {
+            try {
+                const waitResult = yield Promise.race([
+                    databaseRuntimeReadyPromise,
+                    new Promise((resolve) => setTimeout(() => resolve('timeout'), 100)),
+                ]);
+                if (waitResult === 'ready')
+                    return true;
+                if (waitResult === 'failed')
+                    return false;
+            }
+            catch (_a) {
+                return false;
+            }
+        }
+        else {
+            yield wait(100);
+        }
     }
-    if (databaseRuntimeState === 'failed') {
-        return false;
-    }
-    if (!databaseRuntimeReadyPromise) {
-        return false;
-    }
-    const waitResult = yield Promise.race([
-        databaseRuntimeReadyPromise,
-        new Promise((resolve) => setTimeout(() => resolve('timeout'), timeoutMs)),
-    ]);
-    return waitResult === 'ready' || (0, db_1.isDBConnected)();
+    return (0, db_1.isDBConnected)();
 });
 const waitForDatabaseRuntimeReadyOrFailure = () => __awaiter(void 0, void 0, void 0, function* () {
-    if (databaseRuntimeState === 'ready' || (0, db_1.isDBConnected)()) {
-        return true;
-    }
-    if (databaseRuntimeState === 'failed') {
-        return false;
-    }
-    if (!databaseRuntimeReadyPromise) {
-        return false;
-    }
-    try {
-        const state = yield databaseRuntimeReadyPromise;
-        return state === 'ready' || (0, db_1.isDBConnected)();
-    }
-    catch (_a) {
-        return false;
-    }
+    return waitForDatabaseRuntimeInitialization(15000);
 });
 const registerRoomMembershipHandlers = ({ socket, user, identityRooms, identityRoom, joinIdentity, }) => {
     socket.on('join_user_room', (userId, ack) => {
@@ -547,9 +545,7 @@ function initSocketRuntime(configOrServer, legacyApp, legacyAllowedOrigins) {
     io.use((socket, next) => __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c;
         if (!(0, db_1.isDBConnected)()) {
-            const databaseReady = databaseRuntimeState === 'initializing'
-                ? yield waitForDatabaseRuntimeReadyOrFailure()
-                : yield waitForDatabaseRuntimeInitialization(5000);
+            const databaseReady = yield waitForDatabaseRuntimeReadyOrFailure();
             if (!databaseReady) {
                 return next(new Error('Service unavailable: database is not ready'));
             }
@@ -573,7 +569,7 @@ function initSocketRuntime(configOrServer, legacyApp, legacyAllowedOrigins) {
     registerRealtimeConnectionHandlers(io);
 }
 ;
-const initializeDatabaseRuntime = (_a) => __awaiter(void 0, [_a], void 0, function* ({ loadDemoPostsIfEmpty, loadDemoAdsIfEmpty, }) {
+const initializeDatabaseRuntime = (_a) => __awaiter(void 0, [_a], void 0, function* ({ loadDemoPostsIfEmpty, loadDemoAdsIfEmpty, onDatabaseReady, }) {
     beginDatabaseRuntimeInitialization();
     console.log('🔄 Attempting database connection...');
     try {
@@ -587,10 +583,7 @@ const initializeDatabaseRuntime = (_a) => __awaiter(void 0, [_a], void 0, functi
         }
         else {
             console.log('✅ Database connection established');
-            (0, reportsRoutes_1.startReportScheduleWorker)();
-            console.log('📬 Scheduled report worker started');
-            (0, notificationsController_1.startNotificationCleanupWorker)();
-            console.log('🧹 Notification cleanup worker started');
+            yield (onDatabaseReady === null || onDatabaseReady === void 0 ? void 0 : onDatabaseReady());
             const shouldLoadDemoData = process.env.NODE_ENV !== 'production' &&
                 process.env.DISABLE_DEMO_BOOTSTRAP !== 'true';
             if (shouldLoadDemoData) {
