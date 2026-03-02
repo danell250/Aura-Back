@@ -110,8 +110,7 @@ const parseEnvOriginList = (value: string | undefined): string[] => {
 };
 
 const STATIC_ALLOWED_ORIGINS = [
-  "https://www.aura.net.za",
-  "https://aura.net.za",
+  "https://aurasocial.world",
   "https://auraso.vercel.app",
   "https://www.auraso.vercel.app",
   "https://auraradiance.vercel.app",

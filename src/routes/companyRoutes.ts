@@ -1047,7 +1047,7 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
     const inviteId = insertResult.insertedId.toString();
 
     const companyName = company.name || 'A Company';
-    const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${token}`;
+    const inviteUrl = `${process.env.FRONTEND_URL || 'https://aurasocial.world'}/?invite=${token}`;
     let emailDelivered = false;
     let emailDeliveryIssue: string | undefined;
 
@@ -1232,7 +1232,7 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
     );
 
     const companyName = company.name || 'A Company';
-    const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${invite.token}`;
+    const inviteUrl = `${process.env.FRONTEND_URL || 'https://aurasocial.world'}/?invite=${invite.token}`;
     let emailDelivered = false;
     let emailDeliveryIssue: string | undefined;
 

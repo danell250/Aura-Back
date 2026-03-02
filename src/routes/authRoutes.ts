@@ -41,11 +41,10 @@ const parseFrontendUrlList = (value: string | undefined): string[] => {
 
 const DEFAULT_FRONTEND_URL = process.env.NODE_ENV === 'development'
   ? 'http://localhost:5003'
-  : 'https://www.aura.net.za';
+  : 'https://aurasocial.world';
 
 const TRUSTED_FRONTEND_URLS = new Set<string>([
-  'https://www.aura.net.za',
-  'https://aura.net.za',
+  'https://aurasocial.world',
   'https://auraso.vercel.app',
   'https://www.auraso.vercel.app',
   'https://auraradiance.vercel.app',
@@ -527,7 +526,7 @@ res.cookie('linkedin_auth_state', state, {
 });
 
 // 3. Construct the authorization URL
-const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
+const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://aurasocial.world/api/auth/linkedin/callback';
 const clientId = process.env.LINKEDIN_CLIENT_ID;
 const scope = 'openid profile email';
 
@@ -567,7 +566,7 @@ if (!state || !storedState || state !== storedState) {
 res.clearCookie('linkedin_auth_state');
 
 try {
-  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
+  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://aurasocial.world/api/auth/linkedin/callback';
   
   // 2. Exchange code for access token
   const tokenResponse = await axios.post('https://www.linkedin.com/oauth/v2/accessToken', null, {

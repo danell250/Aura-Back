@@ -25,7 +25,7 @@ export const shareController = {
       const frontendUrl = (
         process.env.VITE_FRONTEND_URL ||
         process.env.FRONTEND_URL ||
-        'https://www.aura.net.za'
+        'https://aurasocial.world'
       ).replace(/\/$/, '');
 
       if (!post) {
