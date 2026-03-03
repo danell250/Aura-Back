@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.isPlacementAllowedForPlan = exports.getPlanEntitlements = exports.getPlanByName = exports.getPlanById = exports.DEFAULT_AD_PLAN_ID = exports.AD_PLANS = void 0;
+exports.isPlacementAllowedForPlanSafe = exports.isPlacementAllowedForPlan = exports.getPlanEntitlements = exports.getPlanByName = exports.getPlanById = exports.DEFAULT_AD_PLAN_ID = exports.AD_PLANS = void 0;
 exports.AD_PLANS = {
     'pkg-starter': {
         id: 'pkg-starter',
@@ -115,21 +115,32 @@ exports.AD_PLANS = {
 };
 exports.DEFAULT_AD_PLAN_ID = 'pkg-starter';
 const getPlanById = (planId) => {
-    return exports.AD_PLANS[planId] || null;
+    if (typeof planId === 'string' && planId in exports.AD_PLANS) {
+        return exports.AD_PLANS[planId];
+    }
+    return null;
 };
 exports.getPlanById = getPlanById;
 const getPlanByName = (planName) => {
-    return Object.values(exports.AD_PLANS).find((plan) => plan.name === planName) || null;
+    return (Object.values(exports.AD_PLANS).find((plan) => plan.name.toLowerCase() === planName.toLowerCase()) || null);
 };
 exports.getPlanByName = getPlanByName;
 const getPlanEntitlements = (planId) => {
-    if (planId && exports.AD_PLANS[planId]) {
-        return exports.AD_PLANS[planId].entitlements;
-    }
-    return exports.AD_PLANS[exports.DEFAULT_AD_PLAN_ID].entitlements;
+    var _a;
+    const plan = (0, exports.getPlanById)(planId !== null && planId !== void 0 ? planId : exports.DEFAULT_AD_PLAN_ID);
+    return (_a = plan === null || plan === void 0 ? void 0 : plan.entitlements) !== null && _a !== void 0 ? _a : exports.AD_PLANS[exports.DEFAULT_AD_PLAN_ID].entitlements;
 };
 exports.getPlanEntitlements = getPlanEntitlements;
 const isPlacementAllowedForPlan = (planId, placement) => {
-    return (0, exports.getPlanEntitlements)(planId).allowedPlacements.includes(placement);
+    const entitlements = (0, exports.getPlanEntitlements)(planId);
+    return entitlements.allowedPlacements.includes(placement);
 };
 exports.isPlacementAllowedForPlan = isPlacementAllowedForPlan;
+const VALID_AD_PLACEMENTS = ['feed', 'search', 'profile'];
+const isPlacementAllowedForPlanSafe = (planId, placement) => {
+    if (!VALID_AD_PLACEMENTS.includes(placement)) {
+        return false;
+    }
+    return (0, exports.isPlacementAllowedForPlan)(planId, placement);
+};
+exports.isPlacementAllowedForPlanSafe = isPlacementAllowedForPlanSafe;

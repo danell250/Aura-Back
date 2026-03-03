@@ -151,24 +151,42 @@ export const AD_PLANS: Record<AdPlanId, AdPlan> = {
 
 export const DEFAULT_AD_PLAN_ID: AdPlanId = 'pkg-starter';
 
-export const getPlanById = (planId: string) => {
-  return AD_PLANS[planId as AdPlanId] || null;
+export const getPlanById = (planId: unknown): AdPlan | null => {
+  if (typeof planId === 'string' && planId in AD_PLANS) {
+    return AD_PLANS[planId as AdPlanId];
+  }
+  return null;
 };
 
 export const getPlanByName = (planName: string) => {
-  return Object.values(AD_PLANS).find((plan) => plan.name === planName) || null;
+  return (
+    Object.values(AD_PLANS).find(
+      (plan) => plan.name.toLowerCase() === planName.toLowerCase()
+    ) || null
+  );
 };
 
 export const getPlanEntitlements = (planId?: string | null): AdPlanEntitlements => {
-  if (planId && AD_PLANS[planId as AdPlanId]) {
-    return AD_PLANS[planId as AdPlanId].entitlements;
-  }
-  return AD_PLANS[DEFAULT_AD_PLAN_ID].entitlements;
+  const plan = getPlanById(planId ?? DEFAULT_AD_PLAN_ID);
+  return plan?.entitlements ?? AD_PLANS[DEFAULT_AD_PLAN_ID].entitlements;
 };
 
 export const isPlacementAllowedForPlan = (
   planId: string | null | undefined,
   placement: AdPlanPlacement
 ): boolean => {
-  return getPlanEntitlements(planId).allowedPlacements.includes(placement);
+  const entitlements = getPlanEntitlements(planId);
+  return entitlements.allowedPlacements.includes(placement);
+};
+
+const VALID_AD_PLACEMENTS: readonly AdPlanPlacement[] = ['feed', 'search', 'profile'];
+
+export const isPlacementAllowedForPlanSafe = (
+  planId: string | null | undefined,
+  placement: string
+): boolean => {
+  if (!VALID_AD_PLACEMENTS.includes(placement as AdPlanPlacement)) {
+    return false;
+  }
+  return isPlacementAllowedForPlan(planId, placement as AdPlanPlacement);
 };
