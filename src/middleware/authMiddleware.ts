@@ -16,6 +16,28 @@ const logFirebaseTokenVerificationError = (context: string, error: unknown) => {
   console.error(`[Auth] ${context} Firebase token verification failed`, { errorInfo });
 };
 
+const isTokenRevokedForUser = (
+  user: { authInvalidBefore?: string } | null | undefined,
+  decoded: { iat?: number } | null
+): boolean => {
+  const invalidBeforeRaw = user?.authInvalidBefore;
+  if (typeof invalidBeforeRaw !== 'string' || invalidBeforeRaw.trim().length === 0) {
+    return false;
+  }
+
+  const invalidBeforeMs = Date.parse(invalidBeforeRaw);
+  if (!Number.isFinite(invalidBeforeMs)) {
+    return false;
+  }
+
+  if (typeof decoded?.iat !== 'number') {
+    // Legacy tokens without iat are treated as non-revokable here and will expire naturally.
+    return false;
+  }
+
+  return decoded.iat * 1000 <= invalidBeforeMs;
+};
+
 // Middleware to check if user is authenticated via JWT or Firebase
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   // Check database connection first
@@ -29,7 +51,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
 
   // 1. Check JWT Token (Cookie or Header)
   let token: string | null = null;
-  let decoded: { id: string; email?: string; name?: string } | null = null;
+  let decoded: { id: string; email?: string; name?: string; iat?: number } | null = null;
   
   if (req.cookies && req.cookies.accessToken) {
     token = req.cookies.accessToken;
@@ -55,6 +77,14 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
       const user = await db.collection('users').findOne({ id: decoded.id });
       
       if (user) {
+        if (isTokenRevokedForUser(user as any, decoded)) {
+          return res.status(401).json({
+            success: false,
+            error: 'Session invalidated',
+            message: 'Your session has been signed out. Please log in again.'
+          });
+        }
+
         if (user.isSuspended) {
           return res.status(403).json({
             success: false,
@@ -160,8 +190,10 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
         const user = await db.collection('users').findOne({ id: decoded.id });
         
         if (user) {
-          req.user = transformUser(user) as unknown as User;
-          req.isAuthenticated = (() => true) as any;
+          if (!isTokenRevokedForUser(user as any, decoded)) {
+            req.user = transformUser(user) as unknown as User;
+            req.isAuthenticated = (() => true) as any;
+          }
         }
       } catch (error) {
         console.error('Error retrieving user from database in optional auth:', error);
@@ -217,9 +249,10 @@ export const attachUser = async (req: Request, res: Response, next: NextFunction
         const user = await db.collection('users').findOne({ id: decoded.id });
         
         if (user) {
-          req.user = transformUser(user) as unknown as User;
-          
-          req.isAuthenticated = (() => true) as any;
+          if (!isTokenRevokedForUser(user as any, decoded)) {
+            req.user = transformUser(user) as unknown as User;
+            req.isAuthenticated = (() => true) as any;
+          }
         }
       }
     }

@@ -41,6 +41,7 @@ export interface User {
   createdAt?: string;
   updatedAt?: string;
   lastLogin?: string;
+  authInvalidBefore?: string; // ISO timestamp; access tokens issued at/before this are rejected
   privacySettings?: PrivacySettings;
   archivedChats?: string[];
   refreshTokens?: string[]; // Array of valid refresh tokens

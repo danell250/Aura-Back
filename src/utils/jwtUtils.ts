@@ -26,6 +26,15 @@ const REFRESH_TOKEN_SECRET: Secret = getRequiredJwtSecret('REFRESH_TOKEN_SECRET'
 const ACCESS_TOKEN_EXPIRES_IN = (process.env.ACCESS_TOKEN_EXPIRES_IN || '15m') as SignOptions['expiresIn'];
 const REFRESH_TOKEN_EXPIRES_IN = (process.env.REFRESH_TOKEN_EXPIRES_IN || '7d') as SignOptions['expiresIn'];
 
+export interface AccessTokenPayload {
+  id: string;
+  email?: string;
+  name?: string;
+  type?: 'access';
+  iat?: number;
+  exp?: number;
+}
+
 // Generate Access Token (Short-lived)
 export const generateAccessToken = (user: User): string => {
   const payload = {
@@ -55,9 +64,9 @@ export const generateRefreshToken = (user: User): string => {
 };
 
 // Verify Access Token
-export const verifyAccessToken = (token: string): { id: string; email: string; name: string } | null => {
+export const verifyAccessToken = (token: string): AccessTokenPayload | null => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as any;
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as AccessTokenPayload;
     if (decoded.type !== 'access' && decoded.type !== undefined) return null; // Ensure it's an access token (or legacy token without type)
     return decoded;
   } catch (error) {

@@ -33,7 +33,7 @@ exports.shareController = {
             const post = yield db.collection('posts').findOne({ id });
             const frontendUrl = (process.env.VITE_FRONTEND_URL ||
                 process.env.FRONTEND_URL ||
-                'https://www.aura.net.za').replace(/\/$/, '');
+                'https://www.aurasocial.world').replace(/\/$/, '');
             if (!post) {
                 // Fallback to generic metadata if post not found
                 return res.redirect(frontendUrl);

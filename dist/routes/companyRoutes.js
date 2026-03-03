@@ -55,6 +55,12 @@ const normalizeUniqueIds = (input) => {
 };
 const MAX_PROFILE_LINKS = 8;
 const MAX_FEATURED_POSTS = 3;
+const INVITE_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const INVITE_RATE_LIMIT_MAX_INVITES = 5;
+const COMPANY_NAME_MAX_LENGTH = 120;
+const COMPANY_NAME_ALLOWED_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}\s.,&'()\-+_!/]*$/u;
+const COMPANY_NAME_URL_PATTERN = /(https?:\/\/|www\.)/i;
+const COMPANY_NAME_HTML_TAG_PATTERN = /<[^>]*>/;
 const normalizeFeaturedPostIds = (input) => {
     if (!Array.isArray(input))
         return null;
@@ -103,6 +109,40 @@ const sanitizeProfileLinks = (value) => {
     }
     return cleaned;
 };
+const normalizeCompanyName = (value) => {
+    if (typeof value !== 'string')
+        return null;
+    const cleaned = value.replace(/\s+/g, ' ').trim();
+    if (!cleaned || cleaned.length > COMPANY_NAME_MAX_LENGTH)
+        return null;
+    if (COMPANY_NAME_URL_PATTERN.test(cleaned))
+        return null;
+    if (COMPANY_NAME_HTML_TAG_PATTERN.test(cleaned))
+        return null;
+    if (!COMPANY_NAME_ALLOWED_PATTERN.test(cleaned))
+        return null;
+    return cleaned;
+};
+const checkInviteRateLimit = (db, userId) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    const windowStart = new Date(Date.now() - INVITE_RATE_LIMIT_WINDOW_MS);
+    const recentInvites = yield db
+        .collection('company_invites')
+        .find({
+        invitedByUserId: userId,
+        createdAt: { $gte: windowStart }
+    }, { projection: { createdAt: 1 } })
+        .sort({ createdAt: -1 })
+        .limit(INVITE_RATE_LIMIT_MAX_INVITES)
+        .toArray();
+    if (recentInvites.length < INVITE_RATE_LIMIT_MAX_INVITES) {
+        return { limited: false, retryAfterSeconds: 0 };
+    }
+    const oldestInWindow = (_a = recentInvites[recentInvites.length - 1]) === null || _a === void 0 ? void 0 : _a.createdAt;
+    const oldestMs = oldestInWindow instanceof Date ? oldestInWindow.getTime() : Date.now();
+    const retryAfterMs = Math.max(1000, oldestMs + INVITE_RATE_LIMIT_WINDOW_MS - Date.now());
+    return { limited: true, retryAfterSeconds: Math.ceil(retryAfterMs / 1000) };
+});
 const PERSONAL_ONLY_COMPANY_FIELDS = [
     'firstName',
     'lastName',
@@ -534,9 +574,13 @@ router.post('/', authMiddleware_1.requireAuth, (req, res) => __awaiter(void 0, v
         const currentUser = req.user;
         const { name, industry, bio, website, location, employeeCount, email, foundedYear, handle: providedHandle } = req.body;
         const db = (0, db_1.getDB)();
-        const normalizedName = typeof name === 'string' ? name.trim() : '';
+        const normalizedName = normalizeCompanyName(name);
         if (!normalizedName) {
-            return res.status(400).json({ success: false, error: 'Identity name is required' });
+            return res.status(400).json({
+                success: false,
+                error: 'Identity name is invalid',
+                message: 'Use 1-120 characters with letters, numbers, spaces, and standard punctuation only.'
+            });
         }
         const normalizedEmployeeCount = Number.isFinite(Number(employeeCount)) && Number(employeeCount) > 0
             ? Math.floor(Number(employeeCount))
@@ -738,6 +782,17 @@ router.patch('/:companyId', authMiddleware_1.requireAuth, (req, res) => __awaite
             }
             updates.coverCrop = normalizedCoverCrop;
         }
+        if (updates.name !== undefined) {
+            const normalizedName = normalizeCompanyName(updates.name);
+            if (!normalizedName) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Identity name is invalid',
+                    message: 'Use 1-120 characters with letters, numbers, spaces, and standard punctuation only.'
+                });
+            }
+            updates.name = normalizedName;
+        }
         // Preserve existing verification behavior when a website is supplied.
         if (typeof updates.website === 'string' && updates.website.trim().length > 0) {
             updates.isVerified = true;
@@ -867,6 +922,16 @@ router.post('/:companyId/invites', authMiddleware_1.requireAuth, (req, res) => _
         if (!member && company.ownerId !== currentUser.id) {
             return res.status(403).json({ success: false, error: 'Unauthorized to invite' });
         }
+        const inviteRateLimit = yield checkInviteRateLimit(db, currentUser.id);
+        if (inviteRateLimit.limited) {
+            res.setHeader('Retry-After', String(inviteRateLimit.retryAfterSeconds));
+            return res.status(429).json({
+                success: false,
+                error: 'Too many invites',
+                message: `Invite limit reached. You can send up to ${INVITE_RATE_LIMIT_MAX_INVITES} invites per minute.`,
+                retryAfterSeconds: inviteRateLimit.retryAfterSeconds
+            });
+        }
         const token = crypto_1.default.randomBytes(32).toString('hex');
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiry
@@ -887,7 +952,7 @@ router.post('/:companyId/invites', authMiddleware_1.requireAuth, (req, res) => _
         const insertResult = yield db.collection('company_invites').insertOne(invite);
         const inviteId = insertResult.insertedId.toString();
         const companyName = company.name || 'A Company';
-        const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${token}`;
+        const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aurasocial.world'}/?invite=${token}`;
         let emailDelivered = false;
         let emailDeliveryIssue;
         if (invitedUser) {
@@ -1011,6 +1076,16 @@ router.post('/:companyId/invites/:inviteId/resend', authMiddleware_1.requireAuth
         if (!requester && company.ownerId !== currentUser.id) {
             return res.status(403).json({ success: false, error: 'Unauthorized' });
         }
+        const inviteRateLimit = yield checkInviteRateLimit(db, currentUser.id);
+        if (inviteRateLimit.limited) {
+            res.setHeader('Retry-After', String(inviteRateLimit.retryAfterSeconds));
+            return res.status(429).json({
+                success: false,
+                error: 'Too many invites',
+                message: `Invite limit reached. You can send up to ${INVITE_RATE_LIMIT_MAX_INVITES} invites per minute.`,
+                retryAfterSeconds: inviteRateLimit.retryAfterSeconds
+            });
+        }
         let query = {};
         try {
             query._id = new ObjectId(inviteId);
@@ -1033,7 +1108,7 @@ router.post('/:companyId/invites/:inviteId/resend', authMiddleware_1.requireAuth
             }
         });
         const companyName = company.name || 'A Company';
-        const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aura.net.za'}/?invite=${invite.token}`;
+        const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aurasocial.world'}/?invite=${invite.token}`;
         let emailDelivered = false;
         let emailDeliveryIssue;
         if (invite.targetUserId) {
@@ -1501,7 +1576,7 @@ router.post('/:companyId/subscribers/:subscriberId/report', authMiddleware_1.req
         const toEmail = process.env.ADMIN_EMAIL ||
             process.env.SUPPORT_EMAIL ||
             process.env.SENDGRID_FROM_EMAIL ||
-            'support@aura.net.za';
+            'aurasocialradiate@gmail.com';
         const subject = `Aura company subscriber report: ${targetUser.name || targetUser.handle || subscriberId}`;
         const body = [
             `Reporter Company: ${company.name || company.handle || companyId}`,

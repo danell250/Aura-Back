@@ -130,6 +130,7 @@ function connectDB() {
                     yield db.collection('company_invites').createIndex({ token: 1 }, { unique: true });
                     yield db.collection('company_invites').createIndex({ email: 1 });
                     yield db.collection('company_invites').createIndex({ companyId: 1 });
+                    yield db.collection('company_invites').createIndex({ invitedByUserId: 1, createdAt: -1 });
                     console.log("✅ Company and Invite indexes initialized");
                 }
                 catch (companyIndexError) {

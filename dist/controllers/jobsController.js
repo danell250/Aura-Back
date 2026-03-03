@@ -107,7 +107,7 @@ const getReviewLinkTtlHours = () => {
 const getReviewPortalBaseUrl = () => {
     const configured = readString(process.env.FRONTEND_URL || '', 300) ||
         readString(process.env.VITE_FRONTEND_URL || '', 300);
-    return configured ? configured.replace(/\/$/, '') : 'https://www.aura.net.za';
+    return configured ? configured.replace(/\/$/, '') : 'https://www.aurasocial.world';
 };
 const buildReviewPortalUrl = (rawToken) => {
     const baseUrl = getReviewPortalBaseUrl();

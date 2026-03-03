@@ -49,6 +49,12 @@ const normalizeUniqueIds = (input: unknown): string[] => {
 
 const MAX_PROFILE_LINKS = 8;
 const MAX_FEATURED_POSTS = 3;
+const INVITE_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const INVITE_RATE_LIMIT_MAX_INVITES = 5;
+const COMPANY_NAME_MAX_LENGTH = 120;
+const COMPANY_NAME_ALLOWED_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}\s.,&'()\-+_!/]*$/u;
+const COMPANY_NAME_URL_PATTERN = /(https?:\/\/|www\.)/i;
+const COMPANY_NAME_HTML_TAG_PATTERN = /<[^>]*>/;
 
 const normalizeFeaturedPostIds = (input: unknown): string[] | null => {
   if (!Array.isArray(input)) return null;
@@ -97,6 +103,44 @@ const sanitizeProfileLinks = (value: unknown): Array<{ id: string; label: string
   }
 
   return cleaned;
+};
+
+const normalizeCompanyName = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const cleaned = value.replace(/\s+/g, ' ').trim();
+  if (!cleaned || cleaned.length > COMPANY_NAME_MAX_LENGTH) return null;
+  if (COMPANY_NAME_URL_PATTERN.test(cleaned)) return null;
+  if (COMPANY_NAME_HTML_TAG_PATTERN.test(cleaned)) return null;
+  if (!COMPANY_NAME_ALLOWED_PATTERN.test(cleaned)) return null;
+  return cleaned;
+};
+
+const checkInviteRateLimit = async (
+  db: ReturnType<typeof getDB>,
+  userId: string
+): Promise<{ limited: boolean; retryAfterSeconds: number }> => {
+  const windowStart = new Date(Date.now() - INVITE_RATE_LIMIT_WINDOW_MS);
+  const recentInvites = await db
+    .collection('company_invites')
+    .find(
+      {
+        invitedByUserId: userId,
+        createdAt: { $gte: windowStart }
+      },
+      { projection: { createdAt: 1 } }
+    )
+    .sort({ createdAt: -1 })
+    .limit(INVITE_RATE_LIMIT_MAX_INVITES)
+    .toArray();
+
+  if (recentInvites.length < INVITE_RATE_LIMIT_MAX_INVITES) {
+    return { limited: false, retryAfterSeconds: 0 };
+  }
+
+  const oldestInWindow = recentInvites[recentInvites.length - 1]?.createdAt;
+  const oldestMs = oldestInWindow instanceof Date ? oldestInWindow.getTime() : Date.now();
+  const retryAfterMs = Math.max(1000, oldestMs + INVITE_RATE_LIMIT_WINDOW_MS - Date.now());
+  return { limited: true, retryAfterSeconds: Math.ceil(retryAfterMs / 1000) };
 };
 
 const PERSONAL_ONLY_COMPANY_FIELDS = [
@@ -621,9 +665,13 @@ router.post('/', requireAuth, async (req, res) => {
     const { name, industry, bio, website, location, employeeCount, email, foundedYear, handle: providedHandle } = req.body;
     const db = getDB();
 
-    const normalizedName = typeof name === 'string' ? name.trim() : '';
+    const normalizedName = normalizeCompanyName(name);
     if (!normalizedName) {
-      return res.status(400).json({ success: false, error: 'Identity name is required' });
+      return res.status(400).json({
+        success: false,
+        error: 'Identity name is invalid',
+        message: 'Use 1-120 characters with letters, numbers, spaces, and standard punctuation only.'
+      });
     }
 
     const normalizedEmployeeCount = Number.isFinite(Number(employeeCount)) && Number(employeeCount) > 0
@@ -856,6 +904,18 @@ router.patch('/:companyId', requireAuth, async (req, res) => {
       updates.coverCrop = normalizedCoverCrop;
     }
 
+    if (updates.name !== undefined) {
+      const normalizedName = normalizeCompanyName(updates.name);
+      if (!normalizedName) {
+        return res.status(400).json({
+          success: false,
+          error: 'Identity name is invalid',
+          message: 'Use 1-120 characters with letters, numbers, spaces, and standard punctuation only.'
+        });
+      }
+      updates.name = normalizedName;
+    }
+
     // Preserve existing verification behavior when a website is supplied.
     if (typeof updates.website === 'string' && updates.website.trim().length > 0) {
       updates.isVerified = true;
@@ -1023,6 +1083,17 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
       return res.status(403).json({ success: false, error: 'Unauthorized to invite' });
     }
 
+    const inviteRateLimit = await checkInviteRateLimit(db, currentUser.id);
+    if (inviteRateLimit.limited) {
+      res.setHeader('Retry-After', String(inviteRateLimit.retryAfterSeconds));
+      return res.status(429).json({
+        success: false,
+        error: 'Too many invites',
+        message: `Invite limit reached. You can send up to ${INVITE_RATE_LIMIT_MAX_INVITES} invites per minute.`,
+        retryAfterSeconds: inviteRateLimit.retryAfterSeconds
+      });
+    }
+
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7); // 7 days expiry
@@ -1047,7 +1118,7 @@ router.post('/:companyId/invites', requireAuth, async (req, res) => {
     const inviteId = insertResult.insertedId.toString();
 
     const companyName = company.name || 'A Company';
-    const inviteUrl = `${process.env.FRONTEND_URL || 'https://aurasocial.world'}/?invite=${token}`;
+    const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aurasocial.world'}/?invite=${token}`;
     let emailDelivered = false;
     let emailDeliveryIssue: string | undefined;
 
@@ -1203,6 +1274,17 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
       return res.status(403).json({ success: false, error: 'Unauthorized' });
     }
 
+    const inviteRateLimit = await checkInviteRateLimit(db, currentUser.id);
+    if (inviteRateLimit.limited) {
+      res.setHeader('Retry-After', String(inviteRateLimit.retryAfterSeconds));
+      return res.status(429).json({
+        success: false,
+        error: 'Too many invites',
+        message: `Invite limit reached. You can send up to ${INVITE_RATE_LIMIT_MAX_INVITES} invites per minute.`,
+        retryAfterSeconds: inviteRateLimit.retryAfterSeconds
+      });
+    }
+
     let query: any = {};
     try {
       query._id = new ObjectId(inviteId);
@@ -1232,7 +1314,7 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
     );
 
     const companyName = company.name || 'A Company';
-    const inviteUrl = `${process.env.FRONTEND_URL || 'https://aurasocial.world'}/?invite=${invite.token}`;
+    const inviteUrl = `${process.env.FRONTEND_URL || 'https://www.aurasocial.world'}/?invite=${invite.token}`;
     let emailDelivered = false;
     let emailDeliveryIssue: string | undefined;
 
@@ -1834,7 +1916,7 @@ router.post('/:companyId/subscribers/:subscriberId/report', requireAuth, async (
       process.env.ADMIN_EMAIL ||
       process.env.SUPPORT_EMAIL ||
       process.env.SENDGRID_FROM_EMAIL ||
-      'support@aura.net.za';
+      'aurasocialradiate@gmail.com';
 
     const subject = `Aura company subscriber report: ${targetUser.name || targetUser.handle || subscriberId}`;
     const body = [

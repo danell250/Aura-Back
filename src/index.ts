@@ -34,6 +34,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { checkDBHealth, isDBConnected, getDB } from './db';
 import { transformUser } from './utils/userUtils';
+import { clearLogoutCookies, invalidateUserAuthSessions, resolveLogoutUserId } from './utils/sessionInvalidation';
 import { resolveSessionCookiePolicy } from './config/sessionPolicy';
 import { requiresRelaxedCrossOriginPolicy } from './config/crossOriginPolicy';
 import { configurePassportStrategies } from './config/passportConfig';
@@ -110,7 +111,7 @@ const parseEnvOriginList = (value: string | undefined): string[] => {
 };
 
 const STATIC_ALLOWED_ORIGINS = [
-  "https://aurasocial.world",
+  "https://www.aurasocial.world",
   "https://auraso.vercel.app",
   "https://www.auraso.vercel.app",
   "https://auraradiance.vercel.app",
@@ -193,6 +194,11 @@ app.use((req, res, next) => {
 
 // Security & Optimization Middleware
 app.use(helmet({
+  xFrameOptions: { action: 'sameorigin' },
+  noSniff: true,
+  hsts: (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER)
+    ? { maxAge: 31536000 }
+    : false,
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
@@ -351,7 +357,18 @@ app.use('/api/users', (req, res, next) => {
 }, usersRoutes);
 
 // Logout route (legacy - moved to /auth)
-app.get('/api/auth/logout', (req, res) => {
+app.get('/api/auth/logout', async (req, res) => {
+  try {
+    const userId = resolveLogoutUserId(req);
+    if (userId) {
+      await invalidateUserAuthSessions(userId);
+    }
+  } catch (error) {
+    console.error('Legacy logout token invalidation error:', error);
+  }
+
+  clearLogoutCookies(res);
+
   req.logout((err) => {
     if (err) {
       console.error('Error during logout:', err);

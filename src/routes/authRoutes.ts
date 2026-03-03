@@ -24,6 +24,7 @@ import {
 import { createNotificationInDB } from '../controllers/notificationsController';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { transformUser } from '../utils/userUtils';
+import { clearLogoutCookies, invalidateUserAuthSessions, resolveLogoutUserId } from '../utils/sessionInvalidation';
 import { User } from '../types';
 
 const router = Router();
@@ -41,10 +42,10 @@ const parseFrontendUrlList = (value: string | undefined): string[] => {
 
 const DEFAULT_FRONTEND_URL = process.env.NODE_ENV === 'development'
   ? 'http://localhost:5003'
-  : 'https://aurasocial.world';
+  : 'https://www.aurasocial.world';
 
 const TRUSTED_FRONTEND_URLS = new Set<string>([
-  'https://aurasocial.world',
+  'https://www.aurasocial.world',
   'https://auraso.vercel.app',
   'https://www.auraso.vercel.app',
   'https://auraradiance.vercel.app',
@@ -526,7 +527,7 @@ res.cookie('linkedin_auth_state', state, {
 });
 
 // 3. Construct the authorization URL
-const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://aurasocial.world/api/auth/linkedin/callback';
+const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aurasocial.world/api/auth/linkedin/callback';
 const clientId = process.env.LINKEDIN_CLIENT_ID;
 const scope = 'openid profile email';
 
@@ -566,7 +567,7 @@ if (!state || !storedState || state !== storedState) {
 res.clearCookie('linkedin_auth_state');
 
 try {
-  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://aurasocial.world/api/auth/linkedin/callback';
+  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aurasocial.world/api/auth/linkedin/callback';
   
   // 2. Exchange code for access token
   const tokenResponse = await axios.post('https://www.linkedin.com/oauth/v2/accessToken', null, {
@@ -1224,47 +1225,30 @@ router.get('/user', requireAuth, (req: Request, res: Response) => {
 // ============ LOGOUT ============
 router.post('/logout', attachUser, async (req: Request, res: Response) => {
   try {
-    const refreshToken = req.cookies.refreshToken;
-    const user = (req as any).user as User | undefined;
-
-    if (refreshToken) {
-      const db = getDB();
-      
-      // Try to find user ID from token or request
-      let userId = user?.id;
-
-      if (!userId) {
-        const decoded = verifyRefreshToken(refreshToken);
-        if (decoded) {
-          userId = decoded.id;
-        }
-      }
-
-      if (userId) {
-        await db.collection('users').updateOne(
-          { id: userId },
-          { 
-            $set: { 
-              refreshTokens: [],
-              lastActive: new Date().toISOString() 
-            }
-          }
-        );
-      }
+    const userId = resolveLogoutUserId(req);
+    if (userId) {
+      await invalidateUserAuthSessions(userId);
     }
 
-    clearTokenCookies(res);
+    clearLogoutCookies(res);
 
     req.logout((err) => {
       if (err) {
         console.error('Error during passport logout:', err);
       }
 
-      req.session.destroy((err) => {
-        if (err) {
-          console.error('Error destroying session:', err);
+      if (!req.session) {
+        return res.json({
+          success: true,
+          message: 'Logged out successfully'
+        });
+      }
+
+      req.session.destroy((destroyError) => {
+        if (destroyError) {
+          console.error('Error destroying session:', destroyError);
         }
-        res.json({
+        return res.json({
           success: true,
           message: 'Logged out successfully'
         });

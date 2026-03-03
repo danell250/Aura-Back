@@ -132,6 +132,7 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('company_invites').createIndex({ token: 1 }, { unique: true });
         await db.collection('company_invites').createIndex({ email: 1 });
         await db.collection('company_invites').createIndex({ companyId: 1 });
+        await db.collection('company_invites').createIndex({ invitedByUserId: 1, createdAt: -1 });
         console.log("✅ Company and Invite indexes initialized");
       } catch (companyIndexError) {
         console.warn("⚠️  Warning: Could not initialize company indexes:", companyIndexError);

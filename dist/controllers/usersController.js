@@ -1452,7 +1452,7 @@ exports.usersController = {
             const toEmail = process.env.ADMIN_EMAIL ||
                 process.env.SUPPORT_EMAIL ||
                 process.env.SENDGRID_FROM_EMAIL ||
-                'support@aura.net.za';
+                'aurasocialradiate@gmail.com';
             const subject = `Aura Social User Report: ${target.name || target.handle || targetUserId}`;
             const body = [
                 `Reporter: ${reporter.name || reporter.handle || reporter.id} (${reporter.id})`,

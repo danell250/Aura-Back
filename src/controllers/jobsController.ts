@@ -126,7 +126,7 @@ const getReviewPortalBaseUrl = (): string => {
   const configured =
     readString(process.env.FRONTEND_URL || '', 300) ||
     readString(process.env.VITE_FRONTEND_URL || '', 300);
-  return configured ? configured.replace(/\/$/, '') : 'https://aurasocial.world';
+  return configured ? configured.replace(/\/$/, '') : 'https://www.aurasocial.world';
 };
 
 const buildReviewPortalUrl = (rawToken: string): string => {

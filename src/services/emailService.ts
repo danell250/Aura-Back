@@ -11,6 +11,19 @@ export interface EmailDeliveryResult {
 export const isEmailDeliveryConfigured = () =>
   typeof process.env.SENDGRID_API_KEY === 'string' && process.env.SENDGRID_API_KEY.trim().length > 0;
 
+const sanitizeEmailSubjectText = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+};
+
+const escapeEmailHtmlText = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 export async function sendMagicLinkEmail(to: string, magicLink: string) {
   // Configured as per request: using SENDGRID_FROM_NAME and SENDGRID_FROM_EMAIL
   const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
@@ -54,12 +67,15 @@ export async function sendMagicLinkEmail(to: string, magicLink: string) {
 
 export async function sendCompanyInviteEmail(to: string, companyName: string, inviteUrl: string): Promise<EmailDeliveryResult> {
   const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+  const subjectCompanyName = sanitizeEmailSubjectText(companyName) || 'Aura Company';
+  const htmlCompanyName = escapeEmailHtmlText(subjectCompanyName);
+  const htmlInviteUrl = escapeEmailHtmlText(inviteUrl);
   
   if (!isEmailDeliveryConfigured()) {
     console.warn('⚠️ SendGrid credentials not found. Company invite will be logged to console only.');
     console.log('--- COMPANY INVITE ---');
     console.log(`To: ${to}`);
-    console.log(`Company: ${companyName}`);
+    console.log(`Company: ${subjectCompanyName}`);
     console.log(`URL: ${inviteUrl}`);
     console.log('----------------------');
     return {
@@ -73,13 +89,13 @@ export async function sendCompanyInviteEmail(to: string, companyName: string, in
     await sgMail.send({
       to,
       from,
-      subject: `Invite to join ${companyName} on Aura©`,
+      subject: `Invite to join ${subjectCompanyName} on Aura©`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px;">
-          <h2 style="color: #1e293b; margin-top: 0;">Join ${companyName}</h2>
-          <p style="color: #475569; line-height: 1.6;">You've been invited to join the team for <strong>${companyName}</strong> on Aura©.</p>
+          <h2 style="color: #1e293b; margin-top: 0;">Join ${htmlCompanyName}</h2>
+          <p style="color: #475569; line-height: 1.6;">You've been invited to join the team for <strong>${htmlCompanyName}</strong> on Aura©.</p>
           <p style="margin: 32px 0;">
-            <a href="${inviteUrl}"
+            <a href="${htmlInviteUrl}"
                style="display:inline-block;padding:12px 24px;background:#10b981;color:#fff;border-radius:12px;text-decoration:none;font-weight:bold;text-transform:uppercase;letter-spacing:0.05em;font-size:14px;">
                Accept Invitation
             </a>

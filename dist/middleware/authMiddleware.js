@@ -26,6 +26,21 @@ const logFirebaseTokenVerificationError = (context, error) => {
     };
     console.error(`[Auth] ${context} Firebase token verification failed`, { errorInfo });
 };
+const isTokenRevokedForUser = (user, decoded) => {
+    const invalidBeforeRaw = user === null || user === void 0 ? void 0 : user.authInvalidBefore;
+    if (typeof invalidBeforeRaw !== 'string' || invalidBeforeRaw.trim().length === 0) {
+        return false;
+    }
+    const invalidBeforeMs = Date.parse(invalidBeforeRaw);
+    if (!Number.isFinite(invalidBeforeMs)) {
+        return false;
+    }
+    if (typeof (decoded === null || decoded === void 0 ? void 0 : decoded.iat) !== 'number') {
+        // Legacy tokens without iat are treated as non-revokable here and will expire naturally.
+        return false;
+    }
+    return decoded.iat * 1000 <= invalidBeforeMs;
+};
 // Middleware to check if user is authenticated via JWT or Firebase
 const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     // Check database connection first
@@ -60,6 +75,13 @@ const requireAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, functi
             const db = (0, db_1.getDB)();
             const user = yield db.collection('users').findOne({ id: decoded.id });
             if (user) {
+                if (isTokenRevokedForUser(user, decoded)) {
+                    return res.status(401).json({
+                        success: false,
+                        error: 'Session invalidated',
+                        message: 'Your session has been signed out. Please log in again.'
+                    });
+                }
                 if (user.isSuspended) {
                     return res.status(403).json({
                         success: false,
@@ -158,8 +180,10 @@ const optionalAuth = (req, res, next) => __awaiter(void 0, void 0, void 0, funct
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decoded.id });
                 if (user) {
-                    req.user = (0, userUtils_1.transformUser)(user);
-                    req.isAuthenticated = (() => true);
+                    if (!isTokenRevokedForUser(user, decoded)) {
+                        req.user = (0, userUtils_1.transformUser)(user);
+                        req.isAuthenticated = (() => true);
+                    }
                 }
             }
             catch (error) {
@@ -209,8 +233,10 @@ const attachUser = (req, res, next) => __awaiter(void 0, void 0, void 0, functio
                 const db = (0, db_1.getDB)();
                 const user = yield db.collection('users').findOne({ id: decoded.id });
                 if (user) {
-                    req.user = (0, userUtils_1.transformUser)(user);
-                    req.isAuthenticated = (() => true);
+                    if (!isTokenRevokedForUser(user, decoded)) {
+                        req.user = (0, userUtils_1.transformUser)(user);
+                        req.isAuthenticated = (() => true);
+                    }
                 }
             }
         }

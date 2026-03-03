@@ -1110,7 +1110,7 @@ const buildDataAdDocument = (
     mediaUrl: `https://picsum.photos/1280/720?random=${encodeURIComponent(`${adId}-media`)}`,
     mediaType: 'image',
     ctaText: pickOne(rng, AD_CTA_TEXTS),
-    ctaLink: `https://aurasocial.world/campaigns/${owner.type}/${campaignToken}`,
+    ctaLink: `https://www.aurasocial.world/campaigns/${owner.type}/${campaignToken}`,
     ctaPositionX: randomInt(rng, 24, 76),
     ctaPositionY: randomInt(rng, 68, 90),
     campaignWhy,

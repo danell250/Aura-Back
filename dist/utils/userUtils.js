@@ -28,6 +28,7 @@ const transformUser = (user) => {
     delete transformed.password;
     delete transformed.passwordHash;
     delete transformed.refreshTokens;
+    delete transformed.authInvalidBefore;
     delete transformed.magicLinkTokenHash;
     delete transformed.magicLinkExpiresAt;
     delete transformed.pendingInviteToken;

@@ -82,6 +82,7 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = require("fs");
 const db_1 = require("./db");
 const userUtils_1 = require("./utils/userUtils");
+const sessionInvalidation_1 = require("./utils/sessionInvalidation");
 const sessionPolicy_1 = require("./config/sessionPolicy");
 const crossOriginPolicy_1 = require("./config/crossOriginPolicy");
 const passportConfig_1 = require("./config/passportConfig");
@@ -144,8 +145,7 @@ const parseEnvOriginList = (value) => {
         .map(normalizeOrigin);
 };
 const STATIC_ALLOWED_ORIGINS = [
-    "https://www.aura.net.za",
-    "https://aura.net.za",
+    "https://www.aurasocial.world",
     "https://auraso.vercel.app",
     "https://www.auraso.vercel.app",
     "https://auraradiance.vercel.app",
@@ -218,6 +218,11 @@ app.use((req, res, next) => {
 });
 // Security & Optimization Middleware
 app.use((0, helmet_1.default)({
+    xFrameOptions: { action: 'sameorigin' },
+    noSniff: true,
+    hsts: (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER)
+        ? { maxAge: 31536000 }
+        : false,
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
@@ -351,7 +356,17 @@ app.use('/api/users', (req, res, next) => {
     next();
 }, usersRoutes_1.default);
 // Logout route (legacy - moved to /auth)
-app.get('/api/auth/logout', (req, res) => {
+app.get('/api/auth/logout', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const userId = (0, sessionInvalidation_1.resolveLogoutUserId)(req);
+        if (userId) {
+            yield (0, sessionInvalidation_1.invalidateUserAuthSessions)(userId);
+        }
+    }
+    catch (error) {
+        console.error('Legacy logout token invalidation error:', error);
+    }
+    (0, sessionInvalidation_1.clearLogoutCookies)(res);
     req.logout((err) => {
         if (err) {
             console.error('Error during logout:', err);
@@ -370,7 +385,7 @@ app.get('/api/auth/logout', (req, res) => {
         }
         finishLogout();
     });
-});
+}));
 // Get current user info (legacy - moved to /auth)
 app.get('/auth/user', (req, res) => {
     if (req.isAuthenticated && req.isAuthenticated()) {

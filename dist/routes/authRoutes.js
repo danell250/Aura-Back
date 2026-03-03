@@ -27,6 +27,7 @@ const authUserService_1 = require("../services/authUserService");
 const notificationsController_1 = require("../controllers/notificationsController");
 const securityLogger_1 = require("../utils/securityLogger");
 const userUtils_1 = require("../utils/userUtils");
+const sessionInvalidation_1 = require("../utils/sessionInvalidation");
 const router = (0, express_1.Router)();
 const SIGNUP_BONUS_CREDITS = 100;
 const normalizeFrontendUrl = (value) => value.trim().replace(/\/$/, '');
@@ -41,10 +42,9 @@ const parseFrontendUrlList = (value) => {
 };
 const DEFAULT_FRONTEND_URL = process.env.NODE_ENV === 'development'
     ? 'http://localhost:5003'
-    : 'https://www.aura.net.za';
+    : 'https://www.aurasocial.world';
 const TRUSTED_FRONTEND_URLS = new Set([
-    'https://www.aura.net.za',
-    'https://aura.net.za',
+    'https://www.aurasocial.world',
     'https://auraso.vercel.app',
     'https://www.auraso.vercel.app',
     'https://auraradiance.vercel.app',
@@ -408,7 +408,7 @@ router.get('/linkedin', (req, res) => {
         maxAge: 5 * 60 * 1000 // 5 minutes
     });
     // 3. Construct the authorization URL
-    const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
+    const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aurasocial.world/api/auth/linkedin/callback';
     const clientId = process.env.LINKEDIN_CLIENT_ID;
     const scope = 'openid profile email';
     const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(scope)}`;
@@ -440,7 +440,7 @@ router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0,
     // Clear the state cookie once used
     res.clearCookie('linkedin_auth_state');
     try {
-        const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aura.net.za/api/auth/linkedin/callback';
+        const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aurasocial.world/api/auth/linkedin/callback';
         // 2. Exchange code for access token
         const tokenResponse = yield axios_1.default.post('https://www.linkedin.com/oauth/v2/accessToken', null, {
             params: {
@@ -967,37 +967,26 @@ router.get('/user', authMiddleware_1.requireAuth, (req, res) => {
 // ============ LOGOUT ============
 router.post('/logout', authMiddleware_1.attachUser, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
-        const refreshToken = req.cookies.refreshToken;
-        const user = req.user;
-        if (refreshToken) {
-            const db = (0, db_1.getDB)();
-            // Try to find user ID from token or request
-            let userId = user === null || user === void 0 ? void 0 : user.id;
-            if (!userId) {
-                const decoded = (0, jwtUtils_1.verifyRefreshToken)(refreshToken);
-                if (decoded) {
-                    userId = decoded.id;
-                }
-            }
-            if (userId) {
-                yield db.collection('users').updateOne({ id: userId }, {
-                    $set: {
-                        refreshTokens: [],
-                        lastActive: new Date().toISOString()
-                    }
-                });
-            }
+        const userId = (0, sessionInvalidation_1.resolveLogoutUserId)(req);
+        if (userId) {
+            yield (0, sessionInvalidation_1.invalidateUserAuthSessions)(userId);
         }
-        (0, jwtUtils_1.clearTokenCookies)(res);
+        (0, sessionInvalidation_1.clearLogoutCookies)(res);
         req.logout((err) => {
             if (err) {
                 console.error('Error during passport logout:', err);
             }
-            req.session.destroy((err) => {
-                if (err) {
-                    console.error('Error destroying session:', err);
+            if (!req.session) {
+                return res.json({
+                    success: true,
+                    message: 'Logged out successfully'
+                });
+            }
+            req.session.destroy((destroyError) => {
+                if (destroyError) {
+                    console.error('Error destroying session:', destroyError);
                 }
-                res.json({
+                return res.json({
                     success: true,
                     message: 'Logged out successfully'
                 });

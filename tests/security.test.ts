@@ -190,4 +190,42 @@ describe('Security Integration Tests', () => {
       expect(response.status).toBe(403);
     });
   });
+
+  describe('Session Invalidation', () => {
+    test('rejects JWT access token when authInvalidBefore is newer than token issue time', async () => {
+      await createUser({
+        ...userA,
+        authInvalidBefore: new Date(Date.now() + 5_000).toISOString()
+      });
+
+      const tokenA = generateAccessToken(userA as any);
+      const response = await request(app)
+        .get('/api/auth/user')
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(response.status).toBe(401);
+      expect(response.body.error).toBe('Session invalidated');
+    });
+
+    test('logout revokes server-side refresh tokens even when refresh cookie is absent', async () => {
+      await createUser({
+        ...userA,
+        refreshTokens: ['refresh-token-a', 'refresh-token-b']
+      });
+      const tokenA = generateAccessToken(userA as any);
+
+      const response = await request(app)
+        .post('/api/auth/logout')
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+
+      const db = getDB();
+      const updatedUser = await db.collection('users').findOne({ id: userA.id });
+      expect(Array.isArray(updatedUser?.refreshTokens)).toBe(true);
+      expect(updatedUser?.refreshTokens).toHaveLength(0);
+      expect(typeof updatedUser?.authInvalidBefore).toBe('string');
+    });
+  });
 });
