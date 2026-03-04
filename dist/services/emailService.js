@@ -35,7 +35,7 @@ const escapeEmailHtmlText = (value) => value
 function sendMagicLinkEmail(to, magicLink) {
     return __awaiter(this, void 0, void 0, function* () {
         // Configured as per request: using SENDGRID_FROM_NAME and SENDGRID_FROM_EMAIL
-        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
         if (!process.env.SENDGRID_API_KEY) {
             console.warn('⚠️ SendGrid credentials not found. Magic link will be logged to console only.');
             console.log('--- MAGIC LINK ---');
@@ -75,7 +75,7 @@ function sendMagicLinkEmail(to, magicLink) {
 }
 function sendCompanyInviteEmail(to, companyName, inviteUrl) {
     return __awaiter(this, void 0, void 0, function* () {
-        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
         const subjectCompanyName = sanitizeEmailSubjectText(companyName) || 'Aura Company';
         const htmlCompanyName = escapeEmailHtmlText(subjectCompanyName);
         const htmlInviteUrl = escapeEmailHtmlText(inviteUrl);
@@ -239,7 +239,7 @@ const REPORT_EMAIL_MAX_CAMPAIGN_ROWS = 10000;
 function sendReportPreviewEmail(to, payload) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o;
-        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
         const metricReach = Number(((_a = payload.metrics) === null || _a === void 0 ? void 0 : _a.reach) || 0).toLocaleString();
         const metricCtr = safeNumber((_b = payload.metrics) === null || _b === void 0 ? void 0 : _b.ctr, 2);
         const metricClicks = Number(((_c = payload.metrics) === null || _c === void 0 ? void 0 : _c.clicks) || 0).toLocaleString();
@@ -423,7 +423,7 @@ function sendReportPreviewEmail(to, payload) {
 }
 function sendJobApplicationReviewEmail(to, payload) {
     return __awaiter(this, void 0, void 0, function* () {
-        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
         const reviewerName = safeText(payload.reviewerName, 'Team');
         const companyName = safeText(payload.companyName, 'Aura Company');
         const jobTitle = safeText(payload.jobTitle, 'Open role');

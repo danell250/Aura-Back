@@ -26,7 +26,7 @@ const escapeEmailHtmlText = (value: string): string =>
 
 export async function sendMagicLinkEmail(to: string, magicLink: string) {
   // Configured as per request: using SENDGRID_FROM_NAME and SENDGRID_FROM_EMAIL
-  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
   
   if (!process.env.SENDGRID_API_KEY) {
     console.warn('⚠️ SendGrid credentials not found. Magic link will be logged to console only.');
@@ -66,7 +66,7 @@ export async function sendMagicLinkEmail(to: string, magicLink: string) {
 }
 
 export async function sendCompanyInviteEmail(to: string, companyName: string, inviteUrl: string): Promise<EmailDeliveryResult> {
-  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
   const subjectCompanyName = sanitizeEmailSubjectText(companyName) || 'Aura Company';
   const htmlCompanyName = escapeEmailHtmlText(subjectCompanyName);
   const htmlInviteUrl = escapeEmailHtmlText(inviteUrl);
@@ -297,7 +297,7 @@ const buildDistributionBarsHtml = (
 const REPORT_EMAIL_MAX_CAMPAIGN_ROWS = 10000;
 
 export async function sendReportPreviewEmail(to: string, payload: ReportPreviewPayload): Promise<EmailDeliveryResult> {
-  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
 
   const metricReach = Number(payload.metrics?.reach || 0).toLocaleString();
   const metricCtr = safeNumber(payload.metrics?.ctr, 2);
@@ -503,7 +503,7 @@ export async function sendJobApplicationReviewEmail(
   to: string,
   payload: JobApplicationReviewEmailPayload,
 ): Promise<EmailDeliveryResult> {
-  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+  const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
 
   const reviewerName = safeText(payload.reviewerName, 'Team');
   const companyName = safeText(payload.companyName, 'Aura Company');

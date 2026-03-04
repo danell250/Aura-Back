@@ -51,7 +51,7 @@ dotenv.config();
 
 // Debug: Check SendGrid Config
   if (process.env.SENDGRID_API_KEY) {
-    const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aura.net.za'}>`;
+    const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
     console.log(`✅ SendGrid configured with API Key and From: "${from}"`);
   } else {
   console.warn('⚠️ SendGrid NOT configured:');
@@ -427,7 +427,7 @@ if (!isProductionRuntime) {
 
   app.get('/api/debug/sendgrid', (_req, res) => {
     const apiKey = process.env.SENDGRID_API_KEY;
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM || 'no-reply@aura.net.za';
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_FROM || 'no-reply@aurasocila.world';
 
     res.json({
       hasApiKey: !!apiKey,
