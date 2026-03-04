@@ -249,5 +249,6 @@ export interface AdAnalytics {
   engagement: number;
   conversions: number;
   spend: number;
+  roas?: number;
   lastUpdated: number;
 }

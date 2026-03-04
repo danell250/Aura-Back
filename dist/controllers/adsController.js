@@ -19,6 +19,7 @@ const identityUtils_1 = require("../utils/identityUtils");
 const adPlans_1 = require("../constants/adPlans");
 const companyAccess_1 = require("../utils/companyAccess");
 const adPlanAccess_1 = require("../utils/adPlanAccess");
+const adAnalyticsWriteService_1 = require("../services/adAnalyticsWriteService");
 const crypto_1 = __importDefault(require("crypto"));
 const AD_UPDATE_ALLOWLIST = new Set([
     'headline',
@@ -1183,7 +1184,7 @@ exports.adsController = {
         }
     }),
     getAdAnalytics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e;
+        var _a, _b, _c, _d, _e, _f;
         try {
             const { id } = req.params;
             const db = (0, db_1.getDB)();
@@ -1219,7 +1220,11 @@ exports.adsController = {
             const clicks = (_b = analytics === null || analytics === void 0 ? void 0 : analytics.clicks) !== null && _b !== void 0 ? _b : 0;
             const engagement = canViewFullMetrics ? ((_c = analytics === null || analytics === void 0 ? void 0 : analytics.engagement) !== null && _c !== void 0 ? _c : 0) : 0;
             const conversions = canViewFullMetrics ? ((_d = analytics === null || analytics === void 0 ? void 0 : analytics.conversions) !== null && _d !== void 0 ? _d : 0) : 0;
-            const lastUpdated = (_e = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _e !== void 0 ? _e : Date.now();
+            const spend = (_e = analytics === null || analytics === void 0 ? void 0 : analytics.spend) !== null && _e !== void 0 ? _e : 0;
+            const roas = canViewFullMetrics
+                ? ((analytics === null || analytics === void 0 ? void 0 : analytics.roas) == null ? undefined : Number(analytics.roas))
+                : undefined;
+            const lastUpdated = (_f = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _f !== void 0 ? _f : Date.now();
             // Calculate unique reach for the last 7 days
             const days = 7;
             const startDate = new Date();
@@ -1246,7 +1251,8 @@ exports.adsController = {
                 reach,
                 engagement,
                 conversions,
-                spend: 0,
+                spend,
+                roas,
                 lastUpdated
             };
             if (isEnterprise) {
@@ -1301,15 +1307,19 @@ exports.adsController = {
                 analyticsMap.set(doc.adId, doc);
             });
             const data = ads.map((ad) => {
-                var _a, _b, _c, _d, _e, _f;
+                var _a, _b, _c, _d, _e, _f, _g;
                 const analytics = analyticsMap.get(ad.id);
                 const impressions = (_a = analytics === null || analytics === void 0 ? void 0 : analytics.impressions) !== null && _a !== void 0 ? _a : 0;
                 const clicks = (_b = analytics === null || analytics === void 0 ? void 0 : analytics.clicks) !== null && _b !== void 0 ? _b : 0;
                 const engagement = canViewFullMetrics ? ((_c = analytics === null || analytics === void 0 ? void 0 : analytics.engagement) !== null && _c !== void 0 ? _c : 0) : 0;
                 const conversions = canViewFullMetrics ? ((_d = analytics === null || analytics === void 0 ? void 0 : analytics.conversions) !== null && _d !== void 0 ? _d : 0) : 0;
-                const reach = canViewFullMetrics ? ((_e = analytics === null || analytics === void 0 ? void 0 : analytics.reach) !== null && _e !== void 0 ? _e : impressions) : 0;
+                const spend = (_e = analytics === null || analytics === void 0 ? void 0 : analytics.spend) !== null && _e !== void 0 ? _e : 0;
+                const roas = canViewFullMetrics
+                    ? ((analytics === null || analytics === void 0 ? void 0 : analytics.roas) == null ? undefined : Number(analytics.roas))
+                    : undefined;
+                const reach = canViewFullMetrics ? ((_f = analytics === null || analytics === void 0 ? void 0 : analytics.reach) !== null && _f !== void 0 ? _f : impressions) : 0;
                 const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-                const lastUpdated = (_f = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _f !== void 0 ? _f : ad.timestamp;
+                const lastUpdated = (_g = analytics === null || analytics === void 0 ? void 0 : analytics.lastUpdated) !== null && _g !== void 0 ? _g : ad.timestamp;
                 return {
                     adId: ad.id,
                     adName: ad.headline,
@@ -1318,7 +1328,8 @@ exports.adsController = {
                     clicks,
                     ctr,
                     engagement,
-                    spend: 0,
+                    spend,
+                    roas,
                     reach,
                     conversions,
                     lastUpdated,
@@ -1387,6 +1398,7 @@ exports.adsController = {
             let totalConversions = 0;
             let activeAds = 0;
             let totalReach = 0;
+            let totalSpend = 0;
             const adIds = ads.map((ad) => ad.id);
             const analyticsDocs = yield db
                 .collection('adAnalytics')
@@ -1397,17 +1409,18 @@ exports.adsController = {
                 analyticsMap.set(doc.adId, doc);
             });
             ads.forEach((ad) => {
-                var _a, _b, _c, _d, _e, _f;
+                var _a, _b, _c, _d, _e, _f, _g;
                 if (ad.status === 'active')
                     activeAds++;
                 const analytics = analyticsMap.get(ad.id);
                 if (analytics) {
                     totalImpressions += ((_a = analytics.impressions) !== null && _a !== void 0 ? _a : 0);
                     totalClicks += ((_b = analytics.clicks) !== null && _b !== void 0 ? _b : 0);
+                    totalSpend += ((_c = analytics.spend) !== null && _c !== void 0 ? _c : 0);
                     if (canViewFullMetrics) {
-                        totalEngagement += ((_c = analytics.engagement) !== null && _c !== void 0 ? _c : 0);
-                        totalConversions += ((_d = analytics.conversions) !== null && _d !== void 0 ? _d : 0);
-                        totalReach += ((_f = (_e = analytics.reach) !== null && _e !== void 0 ? _e : analytics.impressions) !== null && _f !== void 0 ? _f : 0);
+                        totalEngagement += ((_d = analytics.engagement) !== null && _d !== void 0 ? _d : 0);
+                        totalConversions += ((_e = analytics.conversions) !== null && _e !== void 0 ? _e : 0);
+                        totalReach += ((_g = (_f = analytics.reach) !== null && _f !== void 0 ? _f : analytics.impressions) !== null && _g !== void 0 ? _g : 0);
                     }
                 }
             });
@@ -1459,7 +1472,7 @@ exports.adsController = {
                     row.impressions += doc.impressions || 0;
                     row.clicks += doc.clicks || 0;
                     row.engagement += canViewFullMetrics ? (doc.engagement || 0) : 0;
-                    row.spend = 0;
+                    row.spend += doc.spend || 0;
                 }
                 return Array.from(map.values());
             });
@@ -1469,7 +1482,7 @@ exports.adsController = {
                 totalClicks,
                 totalReach: canViewFullMetrics ? totalReach : 0,
                 totalEngagement: canViewFullMetrics ? totalEngagement : 0,
-                totalSpend: 0,
+                totalSpend,
                 totalConversions: canViewFullMetrics ? totalConversions : 0,
                 averageCTR,
                 activeAds,
@@ -1552,35 +1565,24 @@ exports.adsController = {
             if (dedupeReserve.upsertedCount === 0) {
                 return res.status(200).json({ success: true, message: 'Duplicate impression, not tracked.' });
             }
-            // Increment uniqueReach in adAnalyticsDaily
-            yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: todayKey }, { $inc: { uniqueReach: 1 } }, { upsert: true });
             // 5. Determine Cost Per Impression (CPI)
             let cpi = 0;
             if (plan && plan.impressionLimit > 0 && plan.numericPrice) {
                 cpi = plan.numericPrice / plan.impressionLimit;
             }
-            // 6. Atomically Update Ad Analytics and Subscription Usage
-            // Update adAnalytics
-            yield db.collection('adAnalytics').updateOne({ adId: id }, {
-                $inc: {
-                    impressions: 1,
-                    spend: cpi
-                },
-                $set: {
-                    lastUpdated: now,
-                    ownerId: ad.ownerId,
-                    ownerType: ad.ownerType || 'user'
-                }
-            }, { upsert: true });
+            const ownerType = ad.ownerType || 'user';
+            yield (0, adAnalyticsWriteService_1.recordImpressionAnalytics)(db, {
+                adId: id,
+                ownerId: ad.ownerId,
+                ownerType,
+                dateKey: todayKey,
+                now,
+                cpi
+            });
             if (!hasComplimentaryAccess && (subscription === null || subscription === void 0 ? void 0 : subscription._id)) {
                 yield db.collection('adSubscriptions').updateOne({ _id: subscription._id }, // Use _id for direct document update
                 { $inc: { impressionsUsed: 1 }, $set: { updatedAt: now } });
             }
-            // 7. Update Daily Rollup (for trends and accurate CTR calculation)
-            yield db.collection('adDailyRollups').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: todayKey }, {
-                $inc: { impressions: 1 },
-                $set: { lastUpdated: now }
-            }, { upsert: true });
             // 8. Recalculate CTR (optional, can be done in a separate job or on analytics fetch)
             // For now, we'll update it directly here for immediate accuracy
             const updatedAnalytics = yield db.collection('adAnalytics').findOne({ adId: id });
