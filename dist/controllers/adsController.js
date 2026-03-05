@@ -8,9 +8,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.adsController = exports.emitAdAnalyticsUpdate = void 0;
 const db_1 = require("../db");
@@ -20,7 +17,7 @@ const adPlans_1 = require("../constants/adPlans");
 const companyAccess_1 = require("../utils/companyAccess");
 const adPlanAccess_1 = require("../utils/adPlanAccess");
 const adAnalyticsWriteService_1 = require("../services/adAnalyticsWriteService");
-const crypto_1 = __importDefault(require("crypto"));
+const requestFingerprint_1 = require("../utils/requestFingerprint");
 const AD_UPDATE_ALLOWLIST = new Set([
     'headline',
     'description',
@@ -316,17 +313,12 @@ const sanitizeAdCreatePayload = (incoming) => {
 function dateKeyUTC(ts = Date.now()) {
     return new Date(ts).toISOString().slice(0, 10); // YYYY-MM-DD
 }
-function fingerprint(req) {
-    var _a, _b;
-    const ip = ((_b = (_a = req.headers['x-forwarded-for']) === null || _a === void 0 ? void 0 : _a.split(',')[0]) === null || _b === void 0 ? void 0 : _b.trim()) || req.ip || '';
-    const ua = String(req.headers['user-agent'] || '');
-    return crypto_1.default.createHash('sha256').update(`${ip}|${ua}`).digest('hex');
-}
 const emitAdAnalyticsUpdate = (app_1, adId_1, ownerId_1, ...args_1) => __awaiter(void 0, [app_1, adId_1, ownerId_1, ...args_1], void 0, function* (app, adId, ownerId, ownerType = 'user') {
+    var _a;
     try {
         if (!adId || !ownerId)
             return;
-        const io = (app === null || app === void 0 ? void 0 : app.get) && app.get('io');
+        const io = (typeof (app === null || app === void 0 ? void 0 : app.get) === 'function' ? app.get('io') : undefined) || ((_a = app === null || app === void 0 ? void 0 : app.locals) === null || _a === void 0 ? void 0 : _a.io);
         if (!io || typeof io.to !== 'function') {
             console.warn('⚠️ Cannot emit ad analytics update: Socket.IO (io) not found on app');
             return;
@@ -365,7 +357,12 @@ const emitAdAnalyticsUpdate = (app_1, adId_1, ownerId_1, ...args_1) => __awaiter
     }
 });
 exports.emitAdAnalyticsUpdate = emitAdAnalyticsUpdate;
-exports.adsController = {
+const emitAdAnalyticsUpdateNonBlocking = (app, adId, ownerId, ownerType = 'user') => {
+    void (0, exports.emitAdAnalyticsUpdate)(app, adId, ownerId, ownerType).catch((err) => {
+        console.error('emitAdAnalyticsUpdateNonBlocking error', err);
+    });
+};
+const adLifecycleController = {
     // GET /api/ads/me - Get ads for the current user
     getMyAds: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
@@ -1175,14 +1172,16 @@ exports.adsController = {
             }
             const result = yield db.collection('ads').findOneAndUpdate({ id }, { $set: { status } }, { returnDocument: 'after' });
             // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
+            emitAdAnalyticsUpdateNonBlocking(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true, data: result });
         }
         catch (error) {
             console.error('Error updating ad status:', error);
             res.status(500).json({ success: false, error: 'Failed to update ad status' });
         }
-    }),
+    })
+};
+const adAnalyticsController = {
     getAdAnalytics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a, _b, _c, _d, _e, _f;
         try {
@@ -1271,9 +1270,11 @@ exports.adsController = {
     }),
     getUserAdPerformance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
-            const { userId } = req.params;
+            const ownerId = req.params.ownerId || req.params.userId;
+            if (!ownerId) {
+                return res.status(400).json({ success: false, error: 'Missing owner identifier' });
+            }
             const ownerType = req.query.ownerType || 'user';
-            const ownerId = userId; // In this route, the param is named userId but could be companyId
             const db = (0, db_1.getDB)();
             const currentUser = req.user;
             const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
@@ -1350,9 +1351,11 @@ exports.adsController = {
     getCampaignPerformance: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         try {
-            const { userId } = req.params;
+            const ownerId = req.params.ownerId || req.params.userId;
+            if (!ownerId) {
+                return res.status(400).json({ success: false, error: 'Missing owner identifier' });
+            }
             const ownerType = req.query.ownerType || 'user';
-            const ownerId = userId;
             const db = (0, db_1.getDB)();
             const currentUser = req.user;
             const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.isAdmin === true);
@@ -1506,7 +1509,7 @@ exports.adsController = {
             const db = (0, db_1.getDB)();
             const now = Date.now();
             const todayKey = dateKeyUTC(now);
-            const userFingerprint = fingerprint(req);
+            const userFingerprint = (0, requestFingerprint_1.requestFingerprint)(req);
             // 1. Get Ad to find owner and current status
             const ad = yield db.collection('ads').findOne({ id });
             if (!ad) {
@@ -1565,6 +1568,18 @@ exports.adsController = {
             if (dedupeReserve.upsertedCount === 0) {
                 return res.status(200).json({ success: true, message: 'Duplicate impression, not tracked.' });
             }
+            const uniqueReachKey = `${id}-${userFingerprint}`;
+            const uniqueReachReserve = yield db.collection('adUniqueReachDedupes').updateOne({ key: uniqueReachKey }, {
+                $setOnInsert: {
+                    key: uniqueReachKey,
+                    adId: id,
+                    ownerId: ad.ownerId,
+                    ownerType: ad.ownerType || 'user',
+                    fingerprint: userFingerprint,
+                    createdAt: now
+                }
+            }, { upsert: true });
+            const incrementUniqueReach = uniqueReachReserve.upsertedCount > 0;
             // 5. Determine Cost Per Impression (CPI)
             let cpi = 0;
             if (plan && plan.impressionLimit > 0 && plan.numericPrice) {
@@ -1577,22 +1592,15 @@ exports.adsController = {
                 ownerType,
                 dateKey: todayKey,
                 now,
-                cpi
+                cpi,
+                incrementUniqueReach
             });
             if (!hasComplimentaryAccess && (subscription === null || subscription === void 0 ? void 0 : subscription._id)) {
                 yield db.collection('adSubscriptions').updateOne({ _id: subscription._id }, // Use _id for direct document update
                 { $inc: { impressionsUsed: 1 }, $set: { updatedAt: now } });
             }
-            // 8. Recalculate CTR (optional, can be done in a separate job or on analytics fetch)
-            // For now, we'll update it directly here for immediate accuracy
-            const updatedAnalytics = yield db.collection('adAnalytics').findOne({ adId: id });
-            if (updatedAnalytics && updatedAnalytics.impressions > 0) {
-                const newCtr = (updatedAnalytics.clicks / updatedAnalytics.impressions) * 100;
-                yield db.collection('adAnalytics').updateOne({ adId: id }, { $set: { ctr: newCtr, lastUpdated: now } });
-            }
-            // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true, message: 'Impression tracked successfully.' });
+            emitAdAnalyticsUpdateNonBlocking(req.app, id, ad.ownerId, ad.ownerType || 'user');
         }
         catch (error) {
             console.error('Error tracking impression:', error);
@@ -1608,7 +1616,7 @@ exports.adsController = {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
             const now = Date.now();
             const dKey = dateKeyUTC(now);
-            const fp = fingerprint(req);
+            const fp = (0, requestFingerprint_1.requestFingerprint)(req);
             const dedupe = yield db.collection('adEventDedupes').updateOne({ adId: id, eventType: 'click', fingerprint: fp, dateKey: dKey }, { $setOnInsert: { adId: id, ownerId: ad.ownerId, eventType: 'click', fingerprint: fp, dateKey: dKey, createdAt: now } }, { upsert: true });
             if (dedupe.upsertedCount === 0)
                 return res.json({ success: true, deduped: true });
@@ -1628,7 +1636,7 @@ exports.adsController = {
             ], { upsert: true });
             yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey }, { $inc: { clicks: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
             // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
+            emitAdAnalyticsUpdateNonBlocking(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true });
         }
         catch (error) {
@@ -1646,7 +1654,7 @@ exports.adsController = {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
             const now = Date.now();
             const dKey = dateKeyUTC(now);
-            const fp = fingerprint(req);
+            const fp = (0, requestFingerprint_1.requestFingerprint)(req);
             // dedupe engagement per day per type
             const dedupe = yield db.collection('adEventDedupes').updateOne({ adId: id, eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey }, { $setOnInsert: { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', eventType: `engagement:${engagementType || 'unknown'}`, fingerprint: fp, dateKey: dKey, createdAt: now } }, { upsert: true });
             if (dedupe.upsertedCount === 0) {
@@ -1678,7 +1686,7 @@ exports.adsController = {
                 }
             }
             // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
+            emitAdAnalyticsUpdateNonBlocking(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true });
         }
         catch (error) {
@@ -1695,7 +1703,7 @@ exports.adsController = {
                 return res.status(404).json({ success: false, error: 'Ad not found' });
             const now = Date.now();
             const dKey = dateKeyUTC(now);
-            const fp = fingerprint(req);
+            const fp = (0, requestFingerprint_1.requestFingerprint)(req);
             const dedupe = yield db.collection('adEventDedupes').updateOne({ adId: id, eventType: 'conversion', fingerprint: fp, dateKey: dKey }, { $setOnInsert: { adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', eventType: 'conversion', fingerprint: fp, dateKey: dKey, createdAt: now } }, { upsert: true });
             if (dedupe.upsertedCount === 0)
                 return res.json({ success: true, deduped: true });
@@ -1709,7 +1717,7 @@ exports.adsController = {
             }, { upsert: true });
             yield db.collection('adAnalyticsDaily').updateOne({ adId: id, ownerId: ad.ownerId, ownerType: ad.ownerType || 'user', dateKey: dKey }, { $inc: { conversions: 1 }, $set: { updatedAt: now }, $setOnInsert: { createdAt: now } }, { upsert: true });
             // Emit real-time update
-            (0, exports.emitAdAnalyticsUpdate)(req.app, id, ad.ownerId, ad.ownerType || 'user');
+            emitAdAnalyticsUpdateNonBlocking(req.app, id, ad.ownerId, ad.ownerType || 'user');
             res.json({ success: true });
         }
         catch (error) {
@@ -1718,3 +1726,4 @@ exports.adsController = {
         }
     })
 };
+exports.adsController = Object.assign(Object.assign({}, adLifecycleController), adAnalyticsController);

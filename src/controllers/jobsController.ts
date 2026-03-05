@@ -134,11 +134,207 @@ const buildReviewPortalUrl = (rawToken: string): string => {
   return `${baseUrl}/company/manage?applicationReviewToken=${encodeURIComponent(rawToken)}`;
 };
 
+const escapeRegexPattern = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const sanitizeSearchRegex = (raw: string): RegExp | null => {
   const trimmed = readString(raw, 100);
   if (!trimmed) return null;
-  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegexPattern(trimmed);
   return new RegExp(escaped, 'i');
+};
+
+const normalizeSlugValue = (value: unknown, maxLength = 220): string => {
+  const raw = readString(String(value || ''), maxLength)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  if (!raw) return '';
+  return raw
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+};
+
+const parseDelimitedAllowedValues = (raw: string, allowed: Set<string>): string[] =>
+  raw
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0 && allowed.has(item));
+
+type PublicJobsSortOption = 'latest' | 'salary_desc' | 'salary_asc';
+
+type PublicJobsQuerySpec = {
+  filter: Record<string, unknown>;
+  sort: Record<string, unknown>;
+  usesTextSearch: boolean;
+  searchText: string;
+};
+
+let jobsTextIndexEnsured = false;
+
+const ensureJobsTextIndex = async (db: any): Promise<boolean> => {
+  if (jobsTextIndexEnsured) return true;
+  try {
+    await db.collection(JOBS_COLLECTION).createIndex(
+      {
+        title: 'text',
+        summary: 'text',
+        description: 'text',
+        locationText: 'text',
+        companyName: 'text',
+        companyHandle: 'text',
+        tags: 'text',
+      },
+      {
+        name: 'jobs_public_search_text_idx',
+        weights: {
+          title: 10,
+          companyName: 8,
+          tags: 6,
+          summary: 4,
+          description: 2,
+          locationText: 2,
+          companyHandle: 1,
+        },
+      },
+    );
+    jobsTextIndexEnsured = true;
+    return true;
+  } catch (error: any) {
+    const message = String(error?.message || '').toLowerCase();
+    if (
+      message.includes('already exists') ||
+      message.includes('index with name') ||
+      message.includes('equivalent index already exists')
+    ) {
+      jobsTextIndexEnsured = true;
+      return true;
+    }
+    console.error('Failed to ensure jobs text index:', error);
+    return false;
+  }
+};
+
+const buildPublicJobsQuerySpec = (params: {
+  status: string;
+  workModelRaw: string;
+  employmentTypeRaw: string;
+  locationRaw: string;
+  searchRaw: string;
+  minSalary: number;
+  sortBy: string;
+  allowTextSearch: boolean;
+}): PublicJobsQuerySpec => {
+  const workModels = params.workModelRaw
+    ? parseDelimitedAllowedValues(params.workModelRaw, ALLOWED_WORK_MODELS)
+    : [];
+  const employmentTypes = params.employmentTypeRaw
+    ? parseDelimitedAllowedValues(params.employmentTypeRaw, ALLOWED_EMPLOYMENT_TYPES)
+    : [];
+  const locationRegex = sanitizeSearchRegex(params.locationRaw);
+  const searchText = readString(params.searchRaw, 120);
+
+  const andClauses: Record<string, unknown>[] = [];
+  if (params.status === 'all') {
+    andClauses.push({ status: { $ne: 'archived' } });
+  } else {
+    andClauses.push({ status: params.status });
+  }
+  if (workModels.length > 0) {
+    andClauses.push({ workModel: { $in: workModels } });
+  }
+  if (employmentTypes.length > 0) {
+    andClauses.push({ employmentType: { $in: employmentTypes } });
+  }
+  if (locationRegex) {
+    andClauses.push({ locationText: locationRegex });
+  }
+  if (Number.isFinite(params.minSalary) && params.minSalary > 0) {
+    andClauses.push({
+      $or: [
+        { salaryMax: { $gte: params.minSalary } },
+        { salaryMin: { $gte: params.minSalary } },
+      ],
+    });
+  }
+  const usesTextSearch = searchText.length > 0 && params.allowTextSearch;
+
+  if (usesTextSearch) {
+    andClauses.push({ $text: { $search: searchText } });
+  }
+
+  const filter =
+    andClauses.length === 1
+      ? andClauses[0]
+      : andClauses.length > 1
+        ? { $and: andClauses }
+        : {};
+
+  const sortByNormalized = readString(params.sortBy, 40).toLowerCase() as PublicJobsSortOption;
+  const sort: Record<string, unknown> =
+    sortByNormalized === 'salary_desc'
+      ? { salaryMax: -1, salaryMin: -1, ...(usesTextSearch ? { score: { $meta: 'textScore' } } : {}), publishedAt: -1, createdAt: -1 }
+      : sortByNormalized === 'salary_asc'
+        ? { salaryMin: 1, salaryMax: 1, ...(usesTextSearch ? { score: { $meta: 'textScore' } } : {}), publishedAt: -1, createdAt: -1 }
+        : usesTextSearch
+          ? { score: { $meta: 'textScore' }, publishedAt: -1, createdAt: -1 }
+          : { publishedAt: -1, createdAt: -1 };
+
+  return {
+    filter: filter as Record<string, unknown>,
+    sort,
+    usesTextSearch,
+    searchText,
+  };
+};
+
+const slugifySegment = (value: unknown, maxLength = 80): string => {
+  const normalized = readString(String(value || ''), 240)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized.slice(0, maxLength).replace(/-+$/g, '');
+};
+
+const buildJobSlug = (job: any): string => {
+  const titlePart = slugifySegment(job?.title, 90);
+  const locationPart = slugifySegment(job?.locationText, 70);
+  const companyPart = slugifySegment(job?.companyName || job?.companyHandle, 70);
+  const parts = [titlePart, locationPart || companyPart].filter((part) => part.length > 0);
+  return parts.join('-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+};
+
+const buildPersistentJobSlug = (job: any): string => {
+  if (!job || typeof job !== 'object') return 'job';
+  const stored = normalizeSlugValue(job?.slug, 220);
+  if (stored) return stored;
+
+  const baseSlug = buildJobSlug(job) || 'job';
+  const idSlug = slugifySegment(job?.id, 120);
+  const rawSlug = idSlug ? `${baseSlug}--${idSlug}` : baseSlug;
+  return normalizeSlugValue(rawSlug, 220) || 'job';
+};
+
+const normalizeExternalUrl = (value: unknown): string | null => {
+  const raw = readString(String(value || ''), 600);
+  if (!raw) return null;
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
+const normalizeEmailAddress = (value: unknown): string | null => {
+  const raw = readString(String(value || ''), 200).toLowerCase();
+  if (!raw) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return null;
+  return raw;
 };
 
 const toAnnouncementTag = (tag: string) => tag.replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -357,9 +553,13 @@ const sendApplicationReviewEmails = async (
 
 const toJobResponse = (job: any) => ({
   id: String(job?.id || ''),
+  slug: buildPersistentJobSlug(job),
   companyId: String(job?.companyId || ''),
   companyName: String(job?.companyName || ''),
   companyHandle: String(job?.companyHandle || ''),
+  companyIsVerified: Boolean(job?.companyIsVerified),
+  companyWebsite: readStringOrNull(job?.companyWebsite, 600),
+  companyEmail: readStringOrNull(job?.companyEmail, 200),
   title: String(job?.title || ''),
   summary: String(job?.summary || ''),
   description: String(job?.description || ''),
@@ -377,6 +577,8 @@ const toJobResponse = (job: any) => ({
   updatedAt: job?.updatedAt || null,
   publishedAt: job?.publishedAt || null,
   announcementPostId: job?.announcementPostId || null,
+  applicationUrl: readStringOrNull(job?.applicationUrl, 600),
+  applicationEmail: readStringOrNull(job?.applicationEmail, 200),
   applicationCount: Number.isFinite(job?.applicationCount) ? Number(job.applicationCount) : 0,
 });
 
@@ -474,6 +676,122 @@ export const jobsController = {
     }
   },
 
+  // GET /api/jobs
+  listPublicJobs: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: [],
+          pagination: { page: 1, limit: 20, total: 0, pages: 0 },
+        });
+      }
+
+      const db = getDB();
+      const statusRaw = readString((req.query as any).status, 40).toLowerCase() || 'open';
+      const status = statusRaw === 'all' ? 'all' : statusRaw;
+      if (status !== 'all' && !ALLOWED_JOB_STATUSES.has(status)) {
+        return res.status(400).json({ success: false, error: 'Invalid status filter' });
+      }
+
+      const workModelRaw = readString((req.query as any).workModel, 80).toLowerCase();
+      const employmentTypeRaw = readString((req.query as any).employmentType, 80).toLowerCase();
+      const locationRaw = readString((req.query as any).location, 100);
+      const searchRaw = readString((req.query as any).q, 120);
+      const minSalary = Number((req.query as any).salaryMin);
+      const sortBy = readString((req.query as any).sort, 40).toLowerCase() || 'latest';
+      const pagination = getPagination(req.query as Record<string, unknown>);
+
+      const allowTextSearch = await ensureJobsTextIndex(db);
+      if (searchRaw && !allowTextSearch) {
+        return res.status(503).json({
+          success: false,
+          error: 'Search index is warming up. Please retry in a moment.',
+        });
+      }
+      const querySpec = buildPublicJobsQuerySpec({
+        status,
+        workModelRaw,
+        employmentTypeRaw,
+        locationRaw,
+        searchRaw,
+        minSalary,
+        sortBy,
+        allowTextSearch,
+      });
+
+      const [items, total] = await Promise.all([
+        db.collection(JOBS_COLLECTION)
+          .find(
+            querySpec.filter,
+            querySpec.usesTextSearch
+              ? {
+                  projection: { score: { $meta: 'textScore' } },
+                }
+              : undefined,
+          )
+          .sort(querySpec.sort as any)
+          .skip(pagination.skip)
+          .limit(pagination.limit)
+          .toArray(),
+        db.collection(JOBS_COLLECTION).countDocuments(querySpec.filter),
+      ]);
+
+      return res.json({
+        success: true,
+        data: items.map(toJobResponse),
+        pagination: {
+          page: pagination.page,
+          limit: pagination.limit,
+          total,
+          pages: Math.ceil(total / pagination.limit),
+        },
+      });
+    } catch (error) {
+      console.error('List public jobs error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch jobs' });
+    }
+  },
+
+  // GET /api/jobs/slug/:jobSlug
+  getJobBySlug: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.status(503).json({ success: false, error: 'Database service unavailable' });
+      }
+
+      const rawRequestedSlug = readString(req.params.jobSlug, 220).toLowerCase();
+      const requestedSlug = normalizeSlugValue(rawRequestedSlug, 220);
+      if (!requestedSlug) {
+        return res.status(400).json({ success: false, error: 'Invalid job slug' });
+      }
+
+      const db = getDB();
+
+      const slugIdMatch = rawRequestedSlug.match(/(?:^|--)(job-[a-z0-9-]+)$/i);
+      const slugJobId = slugIdMatch?.[1] || '';
+      if (slugJobId) {
+        const byId = await db.collection(JOBS_COLLECTION).findOne({ id: slugJobId, status: { $ne: 'archived' } });
+        if (byId) {
+          return res.json({ success: true, data: toJobResponse(byId) });
+        }
+      }
+
+      const bySlug = await db.collection(JOBS_COLLECTION).findOne({
+        slug: requestedSlug,
+        status: { $ne: 'archived' },
+      });
+      if (!bySlug) {
+        return res.status(404).json({ success: false, error: 'Job not found' });
+      }
+
+      return res.json({ success: true, data: toJobResponse(bySlug) });
+    } catch (error) {
+      console.error('Get job by slug error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch job' });
+    }
+  },
+
   // GET /api/jobs/:jobId
   getJobById: async (req: Request, res: Response) => {
     try {
@@ -555,6 +873,10 @@ export const jobsController = {
       const salaryMax = Number.isFinite(Number(salaryMaxRaw)) ? Number(salaryMaxRaw) : null;
       const salaryCurrency = readString((req.body as any)?.salaryCurrency, 10).toUpperCase();
       const applicationDeadline = parseIsoOrNull((req.body as any)?.applicationDeadline);
+      const hasApplicationUrlPayload = (req.body as any)?.applicationUrl !== undefined;
+      const hasApplicationEmailPayload = (req.body as any)?.applicationEmail !== undefined;
+      const applicationUrl = normalizeExternalUrl((req.body as any)?.applicationUrl);
+      const applicationEmail = normalizeEmailAddress((req.body as any)?.applicationEmail);
       const announceInFeed = Boolean((req.body as any)?.announceInFeed);
 
       if (salaryMin != null && salaryMin < 0) {
@@ -566,13 +888,24 @@ export const jobsController = {
       if (salaryMin != null && salaryMax != null && salaryMax < salaryMin) {
         return res.status(400).json({ success: false, error: 'salaryMax cannot be less than salaryMin' });
       }
+      if (hasApplicationUrlPayload && !applicationUrl) {
+        return res.status(400).json({ success: false, error: 'applicationUrl must be a valid http(s) URL' });
+      }
+      if (hasApplicationEmailPayload && !applicationEmail) {
+        return res.status(400).json({ success: false, error: 'applicationEmail must be a valid email address' });
+      }
 
       const nowIso = new Date().toISOString();
+      const jobId = `job-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
       const job = {
-        id: `job-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+        id: jobId,
+        slug: '',
         companyId: actor.id,
         companyName: readString(access.company?.name, 120) || 'Company',
         companyHandle: readString(access.company?.handle, 80),
+        companyIsVerified: Boolean(access.company?.isVerified),
+        companyWebsite: normalizeExternalUrl(access.company?.website),
+        companyEmail: normalizeEmailAddress(access.company?.email),
         title,
         summary,
         description,
@@ -590,8 +923,11 @@ export const jobsController = {
         updatedAt: nowIso,
         publishedAt: nowIso,
         announcementPostId: null as string | null,
+        applicationUrl,
+        applicationEmail,
         applicationCount: 0,
       };
+      job.slug = buildPersistentJobSlug(job);
 
       const db = getDB();
       let announcementPostId: string | null = null;
@@ -780,12 +1116,34 @@ export const jobsController = {
         updates.applicationDeadline = parsed;
       }
 
+      if ((req.body as any).applicationUrl !== undefined) {
+        const parsedUrl = normalizeExternalUrl((req.body as any).applicationUrl);
+        const raw = readString(String((req.body as any).applicationUrl || ''), 600);
+        if (raw && !parsedUrl) {
+          return res.status(400).json({ success: false, error: 'applicationUrl must be a valid http(s) URL' });
+        }
+        updates.applicationUrl = parsedUrl;
+      }
+
+      if ((req.body as any).applicationEmail !== undefined) {
+        const parsedEmail = normalizeEmailAddress((req.body as any).applicationEmail);
+        const raw = readString(String((req.body as any).applicationEmail || ''), 200);
+        if (raw && !parsedEmail) {
+          return res.status(400).json({ success: false, error: 'applicationEmail must be a valid email address' });
+        }
+        updates.applicationEmail = parsedEmail;
+      }
+
       if ((req.body as any).tags !== undefined) {
         updates.tags = readStringList((req.body as any).tags, 10, 40);
       }
 
       if (Object.keys(updates).length === 0) {
         return res.status(400).json({ success: false, error: 'No valid fields to update' });
+      }
+
+      if (!normalizeSlugValue(existingJob?.slug, 220)) {
+        updates.slug = buildPersistentJobSlug({ ...existingJob, ...updates, id: existingJob.id });
       }
 
       updates.updatedAt = new Date().toISOString();

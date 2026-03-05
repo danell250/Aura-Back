@@ -113,12 +113,173 @@ const buildReviewPortalUrl = (rawToken) => {
     const baseUrl = getReviewPortalBaseUrl();
     return `${baseUrl}/company/manage?applicationReviewToken=${encodeURIComponent(rawToken)}`;
 };
+const escapeRegexPattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const sanitizeSearchRegex = (raw) => {
     const trimmed = readString(raw, 100);
     if (!trimmed)
         return null;
-    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escaped = escapeRegexPattern(trimmed);
     return new RegExp(escaped, 'i');
+};
+const normalizeSlugValue = (value, maxLength = 220) => {
+    const raw = readString(String(value || ''), maxLength)
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+    if (!raw)
+        return '';
+    return raw
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+};
+const parseDelimitedAllowedValues = (raw, allowed) => raw
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0 && allowed.has(item));
+let jobsTextIndexEnsured = false;
+const ensureJobsTextIndex = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    if (jobsTextIndexEnsured)
+        return true;
+    try {
+        yield db.collection(JOBS_COLLECTION).createIndex({
+            title: 'text',
+            summary: 'text',
+            description: 'text',
+            locationText: 'text',
+            companyName: 'text',
+            companyHandle: 'text',
+            tags: 'text',
+        }, {
+            name: 'jobs_public_search_text_idx',
+            weights: {
+                title: 10,
+                companyName: 8,
+                tags: 6,
+                summary: 4,
+                description: 2,
+                locationText: 2,
+                companyHandle: 1,
+            },
+        });
+        jobsTextIndexEnsured = true;
+        return true;
+    }
+    catch (error) {
+        const message = String((error === null || error === void 0 ? void 0 : error.message) || '').toLowerCase();
+        if (message.includes('already exists') ||
+            message.includes('index with name') ||
+            message.includes('equivalent index already exists')) {
+            jobsTextIndexEnsured = true;
+            return true;
+        }
+        console.error('Failed to ensure jobs text index:', error);
+        return false;
+    }
+});
+const buildPublicJobsQuerySpec = (params) => {
+    const workModels = params.workModelRaw
+        ? parseDelimitedAllowedValues(params.workModelRaw, ALLOWED_WORK_MODELS)
+        : [];
+    const employmentTypes = params.employmentTypeRaw
+        ? parseDelimitedAllowedValues(params.employmentTypeRaw, ALLOWED_EMPLOYMENT_TYPES)
+        : [];
+    const locationRegex = sanitizeSearchRegex(params.locationRaw);
+    const searchText = readString(params.searchRaw, 120);
+    const andClauses = [];
+    if (params.status === 'all') {
+        andClauses.push({ status: { $ne: 'archived' } });
+    }
+    else {
+        andClauses.push({ status: params.status });
+    }
+    if (workModels.length > 0) {
+        andClauses.push({ workModel: { $in: workModels } });
+    }
+    if (employmentTypes.length > 0) {
+        andClauses.push({ employmentType: { $in: employmentTypes } });
+    }
+    if (locationRegex) {
+        andClauses.push({ locationText: locationRegex });
+    }
+    if (Number.isFinite(params.minSalary) && params.minSalary > 0) {
+        andClauses.push({
+            $or: [
+                { salaryMax: { $gte: params.minSalary } },
+                { salaryMin: { $gte: params.minSalary } },
+            ],
+        });
+    }
+    const usesTextSearch = searchText.length > 0 && params.allowTextSearch;
+    if (usesTextSearch) {
+        andClauses.push({ $text: { $search: searchText } });
+    }
+    const filter = andClauses.length === 1
+        ? andClauses[0]
+        : andClauses.length > 1
+            ? { $and: andClauses }
+            : {};
+    const sortByNormalized = readString(params.sortBy, 40).toLowerCase();
+    const sort = sortByNormalized === 'salary_desc'
+        ? Object.assign(Object.assign({ salaryMax: -1, salaryMin: -1 }, (usesTextSearch ? { score: { $meta: 'textScore' } } : {})), { publishedAt: -1, createdAt: -1 }) : sortByNormalized === 'salary_asc'
+        ? Object.assign(Object.assign({ salaryMin: 1, salaryMax: 1 }, (usesTextSearch ? { score: { $meta: 'textScore' } } : {})), { publishedAt: -1, createdAt: -1 }) : usesTextSearch
+        ? { score: { $meta: 'textScore' }, publishedAt: -1, createdAt: -1 }
+        : { publishedAt: -1, createdAt: -1 };
+    return {
+        filter: filter,
+        sort,
+        usesTextSearch,
+        searchText,
+    };
+};
+const slugifySegment = (value, maxLength = 80) => {
+    const normalized = readString(String(value || ''), 240)
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    return normalized.slice(0, maxLength).replace(/-+$/g, '');
+};
+const buildJobSlug = (job) => {
+    const titlePart = slugifySegment(job === null || job === void 0 ? void 0 : job.title, 90);
+    const locationPart = slugifySegment(job === null || job === void 0 ? void 0 : job.locationText, 70);
+    const companyPart = slugifySegment((job === null || job === void 0 ? void 0 : job.companyName) || (job === null || job === void 0 ? void 0 : job.companyHandle), 70);
+    const parts = [titlePart, locationPart || companyPart].filter((part) => part.length > 0);
+    return parts.join('-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+};
+const buildPersistentJobSlug = (job) => {
+    if (!job || typeof job !== 'object')
+        return 'job';
+    const stored = normalizeSlugValue(job === null || job === void 0 ? void 0 : job.slug, 220);
+    if (stored)
+        return stored;
+    const baseSlug = buildJobSlug(job) || 'job';
+    const idSlug = slugifySegment(job === null || job === void 0 ? void 0 : job.id, 120);
+    const rawSlug = idSlug ? `${baseSlug}--${idSlug}` : baseSlug;
+    return normalizeSlugValue(rawSlug, 220) || 'job';
+};
+const normalizeExternalUrl = (value) => {
+    const raw = readString(String(value || ''), 600);
+    if (!raw)
+        return null;
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    try {
+        const parsed = new URL(withProtocol);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+            return null;
+        return parsed.toString();
+    }
+    catch (_a) {
+        return null;
+    }
+};
+const normalizeEmailAddress = (value) => {
+    const raw = readString(String(value || ''), 200).toLowerCase();
+    if (!raw)
+        return null;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw))
+        return null;
+    return raw;
 };
 const toAnnouncementTag = (tag) => tag.replace(/[^a-z0-9]/gi, '').toLowerCase();
 const buildJobAnnouncementContent = (job) => {
@@ -268,9 +429,13 @@ const sendApplicationReviewEmails = (db, params) => __awaiter(void 0, void 0, vo
 });
 const toJobResponse = (job) => ({
     id: String((job === null || job === void 0 ? void 0 : job.id) || ''),
+    slug: buildPersistentJobSlug(job),
     companyId: String((job === null || job === void 0 ? void 0 : job.companyId) || ''),
     companyName: String((job === null || job === void 0 ? void 0 : job.companyName) || ''),
     companyHandle: String((job === null || job === void 0 ? void 0 : job.companyHandle) || ''),
+    companyIsVerified: Boolean(job === null || job === void 0 ? void 0 : job.companyIsVerified),
+    companyWebsite: readStringOrNull(job === null || job === void 0 ? void 0 : job.companyWebsite, 600),
+    companyEmail: readStringOrNull(job === null || job === void 0 ? void 0 : job.companyEmail, 200),
     title: String((job === null || job === void 0 ? void 0 : job.title) || ''),
     summary: String((job === null || job === void 0 ? void 0 : job.summary) || ''),
     description: String((job === null || job === void 0 ? void 0 : job.description) || ''),
@@ -288,6 +453,8 @@ const toJobResponse = (job) => ({
     updatedAt: (job === null || job === void 0 ? void 0 : job.updatedAt) || null,
     publishedAt: (job === null || job === void 0 ? void 0 : job.publishedAt) || null,
     announcementPostId: (job === null || job === void 0 ? void 0 : job.announcementPostId) || null,
+    applicationUrl: readStringOrNull(job === null || job === void 0 ? void 0 : job.applicationUrl, 600),
+    applicationEmail: readStringOrNull(job === null || job === void 0 ? void 0 : job.applicationEmail, 200),
     applicationCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.applicationCount) ? Number(job.applicationCount) : 0,
 });
 const toApplicationResponse = (application) => ({
@@ -377,6 +544,109 @@ exports.jobsController = {
             return res.status(500).json({ success: false, error: 'Failed to fetch jobs' });
         }
     }),
+    // GET /api/jobs
+    listPublicJobs: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({
+                    success: true,
+                    data: [],
+                    pagination: { page: 1, limit: 20, total: 0, pages: 0 },
+                });
+            }
+            const db = (0, db_1.getDB)();
+            const statusRaw = readString(req.query.status, 40).toLowerCase() || 'open';
+            const status = statusRaw === 'all' ? 'all' : statusRaw;
+            if (status !== 'all' && !ALLOWED_JOB_STATUSES.has(status)) {
+                return res.status(400).json({ success: false, error: 'Invalid status filter' });
+            }
+            const workModelRaw = readString(req.query.workModel, 80).toLowerCase();
+            const employmentTypeRaw = readString(req.query.employmentType, 80).toLowerCase();
+            const locationRaw = readString(req.query.location, 100);
+            const searchRaw = readString(req.query.q, 120);
+            const minSalary = Number(req.query.salaryMin);
+            const sortBy = readString(req.query.sort, 40).toLowerCase() || 'latest';
+            const pagination = getPagination(req.query);
+            const allowTextSearch = yield ensureJobsTextIndex(db);
+            if (searchRaw && !allowTextSearch) {
+                return res.status(503).json({
+                    success: false,
+                    error: 'Search index is warming up. Please retry in a moment.',
+                });
+            }
+            const querySpec = buildPublicJobsQuerySpec({
+                status,
+                workModelRaw,
+                employmentTypeRaw,
+                locationRaw,
+                searchRaw,
+                minSalary,
+                sortBy,
+                allowTextSearch,
+            });
+            const [items, total] = yield Promise.all([
+                db.collection(JOBS_COLLECTION)
+                    .find(querySpec.filter, querySpec.usesTextSearch
+                    ? {
+                        projection: { score: { $meta: 'textScore' } },
+                    }
+                    : undefined)
+                    .sort(querySpec.sort)
+                    .skip(pagination.skip)
+                    .limit(pagination.limit)
+                    .toArray(),
+                db.collection(JOBS_COLLECTION).countDocuments(querySpec.filter),
+            ]);
+            return res.json({
+                success: true,
+                data: items.map(toJobResponse),
+                pagination: {
+                    page: pagination.page,
+                    limit: pagination.limit,
+                    total,
+                    pages: Math.ceil(total / pagination.limit),
+                },
+            });
+        }
+        catch (error) {
+            console.error('List public jobs error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to fetch jobs' });
+        }
+    }),
+    // GET /api/jobs/slug/:jobSlug
+    getJobBySlug: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({ success: false, error: 'Database service unavailable' });
+            }
+            const rawRequestedSlug = readString(req.params.jobSlug, 220).toLowerCase();
+            const requestedSlug = normalizeSlugValue(rawRequestedSlug, 220);
+            if (!requestedSlug) {
+                return res.status(400).json({ success: false, error: 'Invalid job slug' });
+            }
+            const db = (0, db_1.getDB)();
+            const slugIdMatch = rawRequestedSlug.match(/(?:^|--)(job-[a-z0-9-]+)$/i);
+            const slugJobId = (slugIdMatch === null || slugIdMatch === void 0 ? void 0 : slugIdMatch[1]) || '';
+            if (slugJobId) {
+                const byId = yield db.collection(JOBS_COLLECTION).findOne({ id: slugJobId, status: { $ne: 'archived' } });
+                if (byId) {
+                    return res.json({ success: true, data: toJobResponse(byId) });
+                }
+            }
+            const bySlug = yield db.collection(JOBS_COLLECTION).findOne({
+                slug: requestedSlug,
+                status: { $ne: 'archived' },
+            });
+            if (!bySlug) {
+                return res.status(404).json({ success: false, error: 'Job not found' });
+            }
+            return res.json({ success: true, data: toJobResponse(bySlug) });
+        }
+        catch (error) {
+            console.error('Get job by slug error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to fetch job' });
+        }
+    }),
     // GET /api/jobs/:jobId
     getJobById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
@@ -398,7 +668,7 @@ exports.jobsController = {
     }),
     // POST /api/jobs
     createJob: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _0, _1, _2, _3, _4, _5, _6;
         try {
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({ success: false, error: 'Database service unavailable' });
@@ -442,7 +712,11 @@ exports.jobsController = {
             const salaryMax = Number.isFinite(Number(salaryMaxRaw)) ? Number(salaryMaxRaw) : null;
             const salaryCurrency = readString((_m = req.body) === null || _m === void 0 ? void 0 : _m.salaryCurrency, 10).toUpperCase();
             const applicationDeadline = parseIsoOrNull((_o = req.body) === null || _o === void 0 ? void 0 : _o.applicationDeadline);
-            const announceInFeed = Boolean((_p = req.body) === null || _p === void 0 ? void 0 : _p.announceInFeed);
+            const hasApplicationUrlPayload = ((_p = req.body) === null || _p === void 0 ? void 0 : _p.applicationUrl) !== undefined;
+            const hasApplicationEmailPayload = ((_q = req.body) === null || _q === void 0 ? void 0 : _q.applicationEmail) !== undefined;
+            const applicationUrl = normalizeExternalUrl((_r = req.body) === null || _r === void 0 ? void 0 : _r.applicationUrl);
+            const applicationEmail = normalizeEmailAddress((_s = req.body) === null || _s === void 0 ? void 0 : _s.applicationEmail);
+            const announceInFeed = Boolean((_t = req.body) === null || _t === void 0 ? void 0 : _t.announceInFeed);
             if (salaryMin != null && salaryMin < 0) {
                 return res.status(400).json({ success: false, error: 'salaryMin cannot be negative' });
             }
@@ -452,12 +726,23 @@ exports.jobsController = {
             if (salaryMin != null && salaryMax != null && salaryMax < salaryMin) {
                 return res.status(400).json({ success: false, error: 'salaryMax cannot be less than salaryMin' });
             }
+            if (hasApplicationUrlPayload && !applicationUrl) {
+                return res.status(400).json({ success: false, error: 'applicationUrl must be a valid http(s) URL' });
+            }
+            if (hasApplicationEmailPayload && !applicationEmail) {
+                return res.status(400).json({ success: false, error: 'applicationEmail must be a valid email address' });
+            }
             const nowIso = new Date().toISOString();
+            const jobId = `job-${Date.now()}-${crypto_1.default.randomBytes(4).toString('hex')}`;
             const job = {
-                id: `job-${Date.now()}-${crypto_1.default.randomBytes(4).toString('hex')}`,
+                id: jobId,
+                slug: '',
                 companyId: actor.id,
-                companyName: readString((_q = access.company) === null || _q === void 0 ? void 0 : _q.name, 120) || 'Company',
-                companyHandle: readString((_r = access.company) === null || _r === void 0 ? void 0 : _r.handle, 80),
+                companyName: readString((_u = access.company) === null || _u === void 0 ? void 0 : _u.name, 120) || 'Company',
+                companyHandle: readString((_v = access.company) === null || _v === void 0 ? void 0 : _v.handle, 80),
+                companyIsVerified: Boolean((_w = access.company) === null || _w === void 0 ? void 0 : _w.isVerified),
+                companyWebsite: normalizeExternalUrl((_x = access.company) === null || _x === void 0 ? void 0 : _x.website),
+                companyEmail: normalizeEmailAddress((_y = access.company) === null || _y === void 0 ? void 0 : _y.email),
                 title,
                 summary,
                 description,
@@ -475,8 +760,11 @@ exports.jobsController = {
                 updatedAt: nowIso,
                 publishedAt: nowIso,
                 announcementPostId: null,
+                applicationUrl,
+                applicationEmail,
                 applicationCount: 0,
             };
+            job.slug = buildPersistentJobSlug(job);
             const db = (0, db_1.getDB)();
             let announcementPostId = null;
             if (announceInFeed) {
@@ -484,7 +772,7 @@ exports.jobsController = {
                 const postId = `post-job-${nowTimestamp}-${crypto_1.default.randomBytes(4).toString('hex')}`;
                 const announcementContent = buildJobAnnouncementContent({
                     title,
-                    companyName: readString((_s = access.company) === null || _s === void 0 ? void 0 : _s.name, 120) || 'Company',
+                    companyName: readString((_z = access.company) === null || _z === void 0 ? void 0 : _z.name, 120) || 'Company',
                     locationText,
                     workModel,
                     employmentType,
@@ -496,14 +784,14 @@ exports.jobsController = {
                     id: postId,
                     author: {
                         id: actor.id,
-                        firstName: readString((_t = access.company) === null || _t === void 0 ? void 0 : _t.name, 120) || 'Company',
+                        firstName: readString((_0 = access.company) === null || _0 === void 0 ? void 0 : _0.name, 120) || 'Company',
                         lastName: '',
-                        name: readString((_u = access.company) === null || _u === void 0 ? void 0 : _u.name, 120) || 'Company',
-                        handle: readString((_v = access.company) === null || _v === void 0 ? void 0 : _v.handle, 80) || '',
-                        avatar: readString((_w = access.company) === null || _w === void 0 ? void 0 : _w.avatar, 500) || '',
-                        avatarKey: readString((_x = access.company) === null || _x === void 0 ? void 0 : _x.avatarKey, 500) || '',
-                        avatarType: ((_y = access.company) === null || _y === void 0 ? void 0 : _y.avatarType) === 'video' ? 'video' : 'image',
-                        activeGlow: ((_z = access.company) === null || _z === void 0 ? void 0 : _z.activeGlow) || 'none',
+                        name: readString((_1 = access.company) === null || _1 === void 0 ? void 0 : _1.name, 120) || 'Company',
+                        handle: readString((_2 = access.company) === null || _2 === void 0 ? void 0 : _2.handle, 80) || '',
+                        avatar: readString((_3 = access.company) === null || _3 === void 0 ? void 0 : _3.avatar, 500) || '',
+                        avatarKey: readString((_4 = access.company) === null || _4 === void 0 ? void 0 : _4.avatarKey, 500) || '',
+                        avatarType: ((_5 = access.company) === null || _5 === void 0 ? void 0 : _5.avatarType) === 'video' ? 'video' : 'image',
+                        activeGlow: ((_6 = access.company) === null || _6 === void 0 ? void 0 : _6.activeGlow) || 'none',
                         type: 'company',
                     },
                     authorId: actor.id,
@@ -647,11 +935,30 @@ exports.jobsController = {
                 const parsed = parseIsoOrNull(req.body.applicationDeadline);
                 updates.applicationDeadline = parsed;
             }
+            if (req.body.applicationUrl !== undefined) {
+                const parsedUrl = normalizeExternalUrl(req.body.applicationUrl);
+                const raw = readString(String(req.body.applicationUrl || ''), 600);
+                if (raw && !parsedUrl) {
+                    return res.status(400).json({ success: false, error: 'applicationUrl must be a valid http(s) URL' });
+                }
+                updates.applicationUrl = parsedUrl;
+            }
+            if (req.body.applicationEmail !== undefined) {
+                const parsedEmail = normalizeEmailAddress(req.body.applicationEmail);
+                const raw = readString(String(req.body.applicationEmail || ''), 200);
+                if (raw && !parsedEmail) {
+                    return res.status(400).json({ success: false, error: 'applicationEmail must be a valid email address' });
+                }
+                updates.applicationEmail = parsedEmail;
+            }
             if (req.body.tags !== undefined) {
                 updates.tags = readStringList(req.body.tags, 10, 40);
             }
             if (Object.keys(updates).length === 0) {
                 return res.status(400).json({ success: false, error: 'No valid fields to update' });
+            }
+            if (!normalizeSlugValue(existingJob === null || existingJob === void 0 ? void 0 : existingJob.slug, 220)) {
+                updates.slug = buildPersistentJobSlug(Object.assign(Object.assign(Object.assign({}, existingJob), updates), { id: existingJob.id }));
             }
             updates.updatedAt = new Date().toISOString();
             yield db.collection(JOBS_COLLECTION).updateOne({ id: jobId }, { $set: updates });

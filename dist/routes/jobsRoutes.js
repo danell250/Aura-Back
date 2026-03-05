@@ -58,6 +58,8 @@ const jobsApplyRateLimiter = (0, express_rate_limit_1.default)({
 // Public company jobs feed (v1 discovery surface)
 router.get('/companies/:companyId/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listCompanyJobs);
 router.get('/companies/:companyId/job-applications/attention-count', authMiddleware_1.requireAuth, jobsController_1.jobsController.getCompanyApplicationAttentionCount);
+router.get('/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listPublicJobs);
+router.get('/jobs/slug/:jobSlug', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getJobBySlug);
 // Public job detail
 router.get('/jobs/:jobId', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getJobById);
 // Company owner/admin job management
