@@ -20,10 +20,18 @@ const db_1 = require("../db");
 const identityUtils_1 = require("../utils/identityUtils");
 const postsController_1 = require("./postsController");
 const hashtagUtils_1 = require("../utils/hashtagUtils");
-const emailService_1 = require("../services/emailService");
+const roomNames_1 = require("../realtime/roomNames");
+const jobSkillGapService_1 = require("../services/jobSkillGapService");
+const companyJobAnalyticsService_1 = require("../services/companyJobAnalyticsService");
+const jobApplicationReviewService_1 = require("../services/jobApplicationReviewService");
+const jobSyndicationService_1 = require("../services/jobSyndicationService");
+const resumeParsingService_1 = require("../services/resumeParsingService");
+const resumeEnrichmentQueueService_1 = require("../services/resumeEnrichmentQueueService");
+const userBadgeService_1 = require("../services/userBadgeService");
 const JOBS_COLLECTION = 'jobs';
 const JOB_APPLICATIONS_COLLECTION = 'job_applications';
 const JOB_APPLICATION_REVIEW_LINKS_COLLECTION = 'job_application_review_links';
+const JOB_APPLICATION_NOTES_COLLECTION = 'application_notes';
 const COMPANIES_COLLECTION = 'companies';
 const COMPANY_MEMBERS_COLLECTION = 'company_members';
 const USERS_COLLECTION = 'users';
@@ -36,6 +44,9 @@ const ALLOWED_RESUME_MIME_TYPES = new Set([
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
+const MAX_NETWORK_COUNT_SCAN_IDS = 5000;
+const MAX_NETWORK_COUNT_QUERY_BATCH_SIZE = 500;
+const JOB_SKILL_GAP_TIMEOUT_MS = 180;
 const readString = (value, maxLength = 10000) => {
     if (typeof value !== 'string')
         return '';
@@ -84,6 +95,31 @@ const getPagination = (query) => {
         skip: (page - 1) * limit,
     };
 };
+const resolveJobSkillGap = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    const currentUserId = readString(params.currentUserId, 120);
+    if (!currentUserId)
+        return null;
+    const supportsTimeoutSignal = typeof AbortSignal !== 'undefined' &&
+        typeof AbortSignal.timeout === 'function';
+    const signal = supportsTimeoutSignal
+        ? AbortSignal.timeout(JOB_SKILL_GAP_TIMEOUT_MS)
+        : undefined;
+    try {
+        return yield (0, jobSkillGapService_1.buildJobSkillGap)({
+            db: params.db,
+            currentUserId,
+            viewer: params.viewer,
+            job: params.job,
+            signal,
+        });
+    }
+    catch (error) {
+        if ((error === null || error === void 0 ? void 0 : error.name) === 'AbortError')
+            return null;
+        console.warn('Job skill gap analysis error:', error);
+        return null;
+    }
+});
 const parseIsoOrNull = (value) => {
     if (value == null)
         return null;
@@ -97,21 +133,6 @@ const parseIsoOrNull = (value) => {
 };
 const hashSecureToken = (token) => {
     return crypto_1.default.createHash('sha256').update(token).digest('hex');
-};
-const getReviewLinkTtlHours = () => {
-    const raw = Number(process.env.JOB_REVIEW_LINK_TTL_HOURS || 72);
-    if (!Number.isFinite(raw))
-        return 72;
-    return Math.min(168, Math.max(1, Math.round(raw)));
-};
-const getReviewPortalBaseUrl = () => {
-    const configured = readString(process.env.FRONTEND_URL || '', 300) ||
-        readString(process.env.VITE_FRONTEND_URL || '', 300);
-    return configured ? configured.replace(/\/$/, '') : 'https://www.aurasocial.world';
-};
-const buildReviewPortalUrl = (rawToken) => {
-    const baseUrl = getReviewPortalBaseUrl();
-    return `${baseUrl}/company/manage?applicationReviewToken=${encodeURIComponent(rawToken)}`;
 };
 const escapeRegexPattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const sanitizeSearchRegex = (raw) => {
@@ -331,102 +352,79 @@ const canReadApplication = (application, authenticatedUserId) => __awaiter(void 
     const access = yield resolveOwnerAdminCompanyAccess(String(application.companyId || ''), authenticatedUserId);
     return access.allowed;
 });
-const resolveJobReviewRecipients = (db, companyId) => __awaiter(void 0, void 0, void 0, function* () {
-    if (!companyId) {
-        return { company: null, recipients: [] };
-    }
-    const company = yield db.collection(COMPANIES_COLLECTION).findOne({ id: companyId, legacyArchived: { $ne: true } }, { projection: { id: 1, name: 1, ownerId: 1 } });
-    if (!company) {
-        return { company: null, recipients: [] };
-    }
-    const memberRows = yield db.collection(COMPANY_MEMBERS_COLLECTION)
-        .find({
-        companyId,
-        role: { $in: ['owner', 'admin'] },
-    })
-        .project({ userId: 1 })
-        .toArray();
-    const reviewerIds = Array.from(new Set([
-        String(company.ownerId || '').trim(),
-        ...memberRows.map((row) => String((row === null || row === void 0 ? void 0 : row.userId) || '').trim()),
-    ].filter((id) => id.length > 0)));
-    if (reviewerIds.length === 0) {
-        return { company, recipients: [] };
-    }
-    const reviewerUsers = yield db.collection(USERS_COLLECTION)
-        .find({ id: { $in: reviewerIds } })
-        .project({ id: 1, email: 1, name: 1, firstName: 1, lastName: 1 })
-        .toArray();
-    const emailDedupe = new Set();
-    const recipients = [];
-    for (const reviewer of reviewerUsers) {
-        const email = readString(reviewer === null || reviewer === void 0 ? void 0 : reviewer.email, 160).toLowerCase();
-        if (!email || emailDedupe.has(email))
-            continue;
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-            continue;
-        emailDedupe.add(email);
-        const displayName = readString(reviewer === null || reviewer === void 0 ? void 0 : reviewer.name, 120) ||
-            `${readString(reviewer === null || reviewer === void 0 ? void 0 : reviewer.firstName, 80)} ${readString(reviewer === null || reviewer === void 0 ? void 0 : reviewer.lastName, 80)}`.trim() ||
-            'Team';
-        recipients.push({
-            userId: String((reviewer === null || reviewer === void 0 ? void 0 : reviewer.id) || ''),
-            email,
-            displayName,
+const incrementApplicantApplicationCount = (db, userId, nowIso) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
+    try {
+        const updateResult = yield db.collection(USERS_COLLECTION).findOneAndUpdate({ id: userId }, {
+            $inc: { jobApplicationsCount: 1 },
+            $set: { updatedAt: nowIso },
+        }, {
+            returnDocument: 'after',
+            projection: { jobApplicationsCount: 1 },
         });
+        const updatedUser = (_a = updateResult === null || updateResult === void 0 ? void 0 : updateResult.value) !== null && _a !== void 0 ? _a : updateResult;
+        const parsedCount = Number(updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.jobApplicationsCount);
+        return Number.isFinite(parsedCount) && parsedCount >= 0 ? parsedCount : null;
     }
-    return { company, recipients };
-});
-const sendApplicationReviewEmails = (db, params) => __awaiter(void 0, void 0, void 0, function* () {
-    const companyId = readString(params.companyId, 120);
-    const jobId = readString(params.jobId, 120);
-    const application = params.application;
-    const job = params.job;
-    if (!companyId || !jobId || !application || !job)
-        return;
-    const { company, recipients } = yield resolveJobReviewRecipients(db, companyId);
-    if (!company || recipients.length === 0)
-        return;
-    const now = Date.now();
-    const nowIso = new Date(now).toISOString();
-    const ttlHours = getReviewLinkTtlHours();
-    const expiresAtIso = new Date(now + ttlHours * 60 * 60 * 1000).toISOString();
-    const linkRows = [];
-    for (const recipient of recipients) {
-        const rawToken = crypto_1.default.randomBytes(32).toString('hex');
-        linkRows.push({
-            recipient,
-            rawToken,
-            record: {
-                id: `jobreview-${Date.now()}-${crypto_1.default.randomBytes(4).toString('hex')}`,
-                tokenHash: hashSecureToken(rawToken),
-                companyId,
-                jobId,
-                applicationId: String((application === null || application === void 0 ? void 0 : application.id) || ''),
-                recipientUserId: recipient.userId,
-                recipientEmail: recipient.email,
-                createdAt: nowIso,
-                expiresAt: expiresAtIso,
-                lastResolvedAt: null,
-                lastResolvedByUserId: null,
-            },
-        });
+    catch (counterError) {
+        console.error('Increment user jobApplicationsCount error:', counterError);
+        return null;
     }
-    if (linkRows.length === 0)
-        return;
-    yield db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).insertMany(linkRows.map((row) => row.record));
-    yield Promise.allSettled(linkRows.map((row) => (0, emailService_1.sendJobApplicationReviewEmail)(row.recipient.email, {
-        reviewerName: row.recipient.displayName,
-        companyName: readString(company === null || company === void 0 ? void 0 : company.name, 160) || readString(job === null || job === void 0 ? void 0 : job.companyName, 160) || 'Aura Company',
-        jobTitle: readString(job === null || job === void 0 ? void 0 : job.title, 160) || 'Open role',
-        applicantName: readString(application === null || application === void 0 ? void 0 : application.applicantName, 160) || 'Applicant',
-        applicantEmail: readString(application === null || application === void 0 ? void 0 : application.applicantEmail, 160),
-        applicantPhone: readString(application === null || application === void 0 ? void 0 : application.applicantPhone, 60),
-        submittedAt: readString(application === null || application === void 0 ? void 0 : application.createdAt, 80) || nowIso,
-        securePortalUrl: buildReviewPortalUrl(row.rawToken),
-        expiresAt: expiresAtIso,
-    })));
 });
+const emitNewApplicationEvent = (req, params) => {
+    const io = req.app.get('io');
+    const targetCompanyId = readString(params.companyId, 120);
+    if (!io || !targetCompanyId)
+        return;
+    io.to((0, roomNames_1.getCompanyApplicationRoom)(targetCompanyId)).emit('new_application', {
+        applicationId: params.applicationId,
+        jobTitle: params.jobTitle,
+        applicantName: params.applicantName,
+        companyId: targetCompanyId,
+        createdAt: params.createdAt,
+    });
+};
+const scheduleApplicationPostCreateEffects = (params) => {
+    var _a;
+    void (0, userBadgeService_1.awardApplicationMilestoneBadges)({
+        db: params.db,
+        userId: params.currentUserId,
+        applicationId: params.application.id,
+        applicationCount: (_a = params.applicantApplicationCount) !== null && _a !== void 0 ? _a : undefined,
+    }).catch((badgeError) => {
+        console.error('Award application milestone badges error:', badgeError);
+    });
+    emitNewApplicationEvent(params.req, {
+        companyId: String(params.job.companyId || ''),
+        applicationId: String(params.application.id || ''),
+        jobTitle: String(params.job.title || ''),
+        applicantName: String(params.application.applicantName || ''),
+        createdAt: params.nowIso,
+    });
+    // Fire-and-forget: notify company owner/admin reviewers by email with a secure portal link.
+    (0, jobApplicationReviewService_1.queueJobApplicationReviewEmails)({
+        db: params.db,
+        companyId: String(params.job.companyId || ''),
+        jobId: params.jobId,
+        application: params.application,
+        job: params.job,
+    }).catch((emailError) => {
+        console.error('Job application review email dispatch error:', emailError);
+    });
+    setImmediate(() => {
+        (0, resumeEnrichmentQueueService_1.enqueueResumeEnrichmentJob)(() => __awaiter(void 0, void 0, void 0, function* () {
+            var _a, _b, _c;
+            yield (0, resumeParsingService_1.enrichUserProfileFromResume)({
+                db: params.db,
+                userId: params.currentUserId,
+                resumeKey: readString((_a = params.application) === null || _a === void 0 ? void 0 : _a.resumeKey, 600),
+                resumeMimeType: readString((_b = params.application) === null || _b === void 0 ? void 0 : _b.resumeMimeType, 120).toLowerCase(),
+                resumeFileName: readString((_c = params.application) === null || _c === void 0 ? void 0 : _c.resumeFileName, 200),
+                source: 'job_application_submission',
+            });
+        }));
+    });
+};
 const toJobResponse = (job) => ({
     id: String((job === null || job === void 0 ? void 0 : job.id) || ''),
     slug: buildPersistentJobSlug(job),
@@ -613,8 +611,135 @@ exports.jobsController = {
             return res.status(500).json({ success: false, error: 'Failed to fetch jobs' });
         }
     }),
+    // GET /api/partner/jobs
+    getJobsForSyndication: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b;
+        try {
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({ success: false, error: 'Database service unavailable' });
+            }
+            const db = (0, db_1.getDB)();
+            const limit = parsePositiveInt((_a = req.query) === null || _a === void 0 ? void 0 : _a.limit, 100, 1, 250);
+            const statusRaw = readString((_b = req.query) === null || _b === void 0 ? void 0 : _b.status, 40).toLowerCase();
+            const status = statusRaw || 'open';
+            const filter = {};
+            if (status === 'all') {
+                filter.status = { $ne: 'archived' };
+            }
+            else if (ALLOWED_JOB_STATUSES.has(status)) {
+                filter.status = status;
+            }
+            else {
+                return res.status(400).json({ success: false, error: 'Invalid status filter' });
+            }
+            const jobs = yield db.collection(JOBS_COLLECTION)
+                .find(filter)
+                .sort({ publishedAt: -1, createdAt: -1 })
+                .limit(limit)
+                .toArray();
+            const feed = (0, jobSyndicationService_1.buildJobsSyndicationFeed)(jobs.map(toJobResponse));
+            res.setHeader('Content-Type', 'application/feed+json; charset=utf-8');
+            return res.status(200).json(feed);
+        }
+        catch (error) {
+            console.error('Get jobs for syndication error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to build jobs syndication feed' });
+        }
+    }),
+    // GET /api/jobs/salary-insights
+    getSalaryInsights: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({ success: false, error: 'Database service unavailable' });
+            }
+            const jobTitle = readString(req.query.jobTitle, 140);
+            const location = readString(req.query.location, 140);
+            if (!jobTitle || !location) {
+                return res.status(400).json({ success: false, error: 'jobTitle and location are required' });
+            }
+            const db = (0, db_1.getDB)();
+            const allowTextSearch = yield ensureJobsTextIndex(db);
+            if (!allowTextSearch) {
+                return res.status(503).json({
+                    success: false,
+                    error: 'Search index is warming up. Please retry in a moment.',
+                });
+            }
+            const searchText = `${jobTitle} ${location}`.trim();
+            const missingMinSentinel = Number.MAX_SAFE_INTEGER;
+            const missingMaxSentinel = -1;
+            const [aggregated] = yield db.collection(JOBS_COLLECTION)
+                .aggregate([
+                {
+                    $match: {
+                        status: 'open',
+                        $text: { $search: searchText },
+                        $or: [
+                            { salaryMin: { $type: 'number' } },
+                            { salaryMax: { $type: 'number' } },
+                        ],
+                    },
+                },
+                {
+                    $group: {
+                        _id: null,
+                        sampleSize: { $sum: 1 },
+                        avgMin: {
+                            $avg: {
+                                $cond: [{ $isNumber: '$salaryMin' }, '$salaryMin', null],
+                            },
+                        },
+                        avgMax: {
+                            $avg: {
+                                $cond: [{ $isNumber: '$salaryMax' }, '$salaryMax', null],
+                            },
+                        },
+                        minSalaryCandidate: {
+                            $min: {
+                                $cond: [{ $isNumber: '$salaryMin' }, '$salaryMin', missingMinSentinel],
+                            },
+                        },
+                        maxSalaryCandidate: {
+                            $max: {
+                                $cond: [{ $isNumber: '$salaryMax' }, '$salaryMax', missingMaxSentinel],
+                            },
+                        },
+                    },
+                },
+                {
+                    $project: {
+                        sampleSize: 1,
+                        avgMin: 1,
+                        avgMax: 1,
+                        minSalary: {
+                            $cond: [{ $eq: ['$minSalaryCandidate', missingMinSentinel] }, null, '$minSalaryCandidate'],
+                        },
+                        maxSalary: {
+                            $cond: [{ $eq: ['$maxSalaryCandidate', missingMaxSentinel] }, null, '$maxSalaryCandidate'],
+                        },
+                    },
+                },
+            ])
+                .toArray();
+            return res.json({
+                success: true,
+                data: {
+                    sampleSize: Number.isFinite(aggregated === null || aggregated === void 0 ? void 0 : aggregated.sampleSize) ? Number(aggregated.sampleSize) : 0,
+                    avgMin: Number.isFinite(aggregated === null || aggregated === void 0 ? void 0 : aggregated.avgMin) ? Number(aggregated.avgMin) : null,
+                    avgMax: Number.isFinite(aggregated === null || aggregated === void 0 ? void 0 : aggregated.avgMax) ? Number(aggregated.avgMax) : null,
+                    minSalary: Number.isFinite(aggregated === null || aggregated === void 0 ? void 0 : aggregated.minSalary) ? Number(aggregated.minSalary) : null,
+                    maxSalary: Number.isFinite(aggregated === null || aggregated === void 0 ? void 0 : aggregated.maxSalary) ? Number(aggregated.maxSalary) : null,
+                },
+            });
+        }
+        catch (error) {
+            console.error('Get salary insights error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to fetch salary insights' });
+        }
+    }),
     // GET /api/jobs/slug/:jobSlug
     getJobBySlug: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({ success: false, error: 'Database service unavailable' });
@@ -625,12 +750,24 @@ exports.jobsController = {
                 return res.status(400).json({ success: false, error: 'Invalid job slug' });
             }
             const db = (0, db_1.getDB)();
+            const currentUserId = readString((_a = req.user) === null || _a === void 0 ? void 0 : _a.id, 120);
             const slugIdMatch = rawRequestedSlug.match(/(?:^|--)(job-[a-z0-9-]+)$/i);
             const slugJobId = (slugIdMatch === null || slugIdMatch === void 0 ? void 0 : slugIdMatch[1]) || '';
             if (slugJobId) {
                 const byId = yield db.collection(JOBS_COLLECTION).findOne({ id: slugJobId, status: { $ne: 'archived' } });
                 if (byId) {
-                    return res.json({ success: true, data: toJobResponse(byId) });
+                    const skillGap = currentUserId
+                        ? yield resolveJobSkillGap({
+                            db,
+                            currentUserId,
+                            viewer: req.user,
+                            job: byId,
+                        })
+                        : null;
+                    return res.json({
+                        success: true,
+                        data: Object.assign(Object.assign({}, toJobResponse(byId)), (skillGap ? { skillGap } : {})),
+                    });
                 }
             }
             const bySlug = yield db.collection(JOBS_COLLECTION).findOne({
@@ -640,7 +777,18 @@ exports.jobsController = {
             if (!bySlug) {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
-            return res.json({ success: true, data: toJobResponse(bySlug) });
+            const skillGap = currentUserId
+                ? yield resolveJobSkillGap({
+                    db,
+                    currentUserId,
+                    viewer: req.user,
+                    job: bySlug,
+                })
+                : null;
+            return res.json({
+                success: true,
+                data: Object.assign(Object.assign({}, toJobResponse(bySlug)), (skillGap ? { skillGap } : {})),
+            });
         }
         catch (error) {
             console.error('Get job by slug error:', error);
@@ -649,21 +797,104 @@ exports.jobsController = {
     }),
     // GET /api/jobs/:jobId
     getJobById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({ success: false, error: 'Database service unavailable' });
             }
             const { jobId } = req.params;
             const db = (0, db_1.getDB)();
+            const currentUserId = readString((_a = req.user) === null || _a === void 0 ? void 0 : _a.id, 120);
             const job = yield db.collection(JOBS_COLLECTION).findOne({ id: jobId });
             if (!job || job.status === 'archived') {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
-            return res.json({ success: true, data: toJobResponse(job) });
+            const skillGap = currentUserId
+                ? yield resolveJobSkillGap({
+                    db,
+                    currentUserId,
+                    viewer: req.user,
+                    job,
+                })
+                : null;
+            return res.json({
+                success: true,
+                data: Object.assign(Object.assign({}, toJobResponse(job)), (skillGap ? { skillGap } : {})),
+            });
         }
         catch (error) {
             console.error('Get job error:', error);
             return res.status(500).json({ success: false, error: 'Failed to fetch job' });
+        }
+    }),
+    // GET /api/jobs/:jobId/network-count
+    getJobNetworkCount: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({ success: false, error: 'Database service unavailable' });
+            }
+            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
+            if (!currentUserId) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
+            const jobId = readString(req.params.jobId, 120);
+            if (!jobId) {
+                return res.status(400).json({ success: false, error: 'jobId is required' });
+            }
+            const db = (0, db_1.getDB)();
+            const job = yield db.collection(JOBS_COLLECTION).findOne({ id: jobId, status: { $ne: 'archived' } }, { projection: { id: 1, companyId: 1 } });
+            if (!job) {
+                return res.status(404).json({ success: false, error: 'Job not found' });
+            }
+            const companyId = readString(job.companyId, 120);
+            if (!companyId) {
+                return res.json({ success: true, data: { count: 0, companyId: '' } });
+            }
+            const currentUser = yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId }, { projection: { acquaintances: 1 } });
+            const acquaintanceIds = Array.isArray(currentUser === null || currentUser === void 0 ? void 0 : currentUser.acquaintances)
+                ? Array.from(new Set(currentUser.acquaintances
+                    .map((value) => readString(value, 120))
+                    .filter((value) => value.length > 0)))
+                : [];
+            if (acquaintanceIds.length === 0) {
+                return res.json({ success: true, data: { count: 0, companyId } });
+            }
+            const scannedAcquaintanceIds = acquaintanceIds.slice(0, MAX_NETWORK_COUNT_SCAN_IDS);
+            const batches = [];
+            for (let index = 0; index < scannedAcquaintanceIds.length; index += MAX_NETWORK_COUNT_QUERY_BATCH_SIZE) {
+                const batch = scannedAcquaintanceIds.slice(index, index + MAX_NETWORK_COUNT_QUERY_BATCH_SIZE);
+                if (batch.length > 0) {
+                    batches.push(batch);
+                }
+            }
+            const maxConcurrentBatchQueries = 4;
+            const partialCounts = new Array(batches.length);
+            let batchCursor = 0;
+            const runBatchWorker = () => __awaiter(void 0, void 0, void 0, function* () {
+                while (batchCursor < batches.length) {
+                    const nextIndex = batchCursor;
+                    batchCursor += 1;
+                    const batch = batches[nextIndex];
+                    partialCounts[nextIndex] = yield db.collection(COMPANY_MEMBERS_COLLECTION).countDocuments({
+                        companyId,
+                        userId: { $in: batch },
+                    });
+                }
+            });
+            yield Promise.all(Array.from({ length: Math.min(maxConcurrentBatchQueries, batches.length) }, () => runBatchWorker()));
+            const count = partialCounts.reduce((sum, value) => sum + value, 0);
+            return res.json({
+                success: true,
+                data: {
+                    count,
+                    companyId,
+                },
+            });
+        }
+        catch (error) {
+            console.error('Get job network count error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to fetch network count' });
         }
     }),
     // POST /api/jobs
@@ -1043,6 +1274,7 @@ exports.jobsController = {
             yield Promise.all([
                 db.collection(JOBS_COLLECTION).deleteOne({ id: jobId }),
                 db.collection(JOB_APPLICATIONS_COLLECTION).deleteMany({ jobId }),
+                db.collection(JOB_APPLICATION_NOTES_COLLECTION).deleteMany({ jobId }),
                 db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).deleteMany({ jobId }),
                 db.collection('posts').deleteMany(postDeleteFilter),
             ]);
@@ -1063,7 +1295,7 @@ exports.jobsController = {
     }),
     // POST /api/jobs/:jobId/applications
     createJobApplication: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
         try {
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({ success: false, error: 'Database service unavailable' });
@@ -1095,15 +1327,54 @@ exports.jobsController = {
                     error: 'You have already applied to this job',
                 });
             }
-            const applicantName = readString((_b = req.body) === null || _b === void 0 ? void 0 : _b.applicantName, 120);
-            const applicantEmail = readString((_c = req.body) === null || _c === void 0 ? void 0 : _c.applicantEmail, 160).toLowerCase();
-            const applicantPhone = readStringOrNull((_d = req.body) === null || _d === void 0 ? void 0 : _d.applicantPhone, 40);
-            const coverLetter = readStringOrNull((_e = req.body) === null || _e === void 0 ? void 0 : _e.coverLetter, 5000);
-            const portfolioUrl = readStringOrNull((_f = req.body) === null || _f === void 0 ? void 0 : _f.portfolioUrl, 300);
-            const resumeKey = readString((_g = req.body) === null || _g === void 0 ? void 0 : _g.resumeKey, 500);
-            const resumeFileName = readString((_h = req.body) === null || _h === void 0 ? void 0 : _h.resumeFileName, 200);
-            const resumeMimeType = readString((_j = req.body) === null || _j === void 0 ? void 0 : _j.resumeMimeType, 120);
-            const resumeSize = Number((_k = req.body) === null || _k === void 0 ? void 0 : _k.resumeSize);
+            const useProfile = Boolean((_b = req.body) === null || _b === void 0 ? void 0 : _b.useProfile);
+            const profileUser = useProfile
+                ? yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId }, {
+                    projection: {
+                        firstName: 1,
+                        lastName: 1,
+                        name: 1,
+                        email: 1,
+                        defaultResumeKey: 1,
+                        defaultResumeFileName: 1,
+                        defaultResumeMimeType: 1,
+                        defaultResumeSize: 1,
+                    },
+                })
+                : null;
+            let applicantName = readString((_c = req.body) === null || _c === void 0 ? void 0 : _c.applicantName, 120);
+            let applicantEmail = readString((_d = req.body) === null || _d === void 0 ? void 0 : _d.applicantEmail, 160).toLowerCase();
+            const applicantPhone = readStringOrNull((_e = req.body) === null || _e === void 0 ? void 0 : _e.applicantPhone, 40);
+            const coverLetter = readStringOrNull((_f = req.body) === null || _f === void 0 ? void 0 : _f.coverLetter, 5000);
+            const portfolioUrl = readStringOrNull((_g = req.body) === null || _g === void 0 ? void 0 : _g.portfolioUrl, 300);
+            let resumeKey = readString((_h = req.body) === null || _h === void 0 ? void 0 : _h.resumeKey, 500);
+            let resumeFileName = readString((_j = req.body) === null || _j === void 0 ? void 0 : _j.resumeFileName, 200);
+            let resumeMimeType = readString((_k = req.body) === null || _k === void 0 ? void 0 : _k.resumeMimeType, 120);
+            let resumeSize = Number((_l = req.body) === null || _l === void 0 ? void 0 : _l.resumeSize);
+            if (profileUser) {
+                const derivedProfileName = `${readString(profileUser === null || profileUser === void 0 ? void 0 : profileUser.firstName, 80)} ${readString(profileUser === null || profileUser === void 0 ? void 0 : profileUser.lastName, 80)}`.trim()
+                    || readString(profileUser === null || profileUser === void 0 ? void 0 : profileUser.name, 120);
+                const derivedProfileEmail = readString(profileUser === null || profileUser === void 0 ? void 0 : profileUser.email, 160).toLowerCase();
+                if (derivedProfileName) {
+                    applicantName = derivedProfileName;
+                }
+                if (derivedProfileEmail) {
+                    applicantEmail = derivedProfileEmail;
+                }
+                const defaultResumeKey = readString(profileUser === null || profileUser === void 0 ? void 0 : profileUser.defaultResumeKey, 500);
+                if (defaultResumeKey) {
+                    resumeKey = defaultResumeKey;
+                    resumeFileName = readString(profileUser === null || profileUser === void 0 ? void 0 : profileUser.defaultResumeFileName, 200);
+                    resumeMimeType = readString(profileUser === null || profileUser === void 0 ? void 0 : profileUser.defaultResumeMimeType, 120);
+                    resumeSize = Number(profileUser === null || profileUser === void 0 ? void 0 : profileUser.defaultResumeSize);
+                }
+            }
+            if (useProfile && (!resumeKey || !resumeFileName || !resumeMimeType || !Number.isFinite(resumeSize) || resumeSize <= 0)) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'No default resume found on your Aura profile. Add one in your profile and retry.',
+                });
+            }
             if (!applicantName || !applicantEmail || !resumeKey || !resumeFileName || !resumeMimeType) {
                 return res.status(400).json({
                     success: false,
@@ -1120,10 +1391,12 @@ exports.jobsController = {
                 return res.status(400).json({ success: false, error: 'resumeSize must be between 1 byte and 10MB' });
             }
             const nowIso = new Date().toISOString();
+            const nowDate = new Date(nowIso);
             const application = {
                 id: `jobapp-${Date.now()}-${crypto_1.default.randomBytes(4).toString('hex')}`,
                 jobId,
                 companyId: String(job.companyId || ''),
+                jobTitleSnapshot: readString(job.title, 180) || null,
                 applicantUserId: currentUserId,
                 applicantName,
                 applicantEmail,
@@ -1136,21 +1409,27 @@ exports.jobsController = {
                 resumeSize,
                 status: 'submitted',
                 createdAt: nowIso,
+                createdAtDate: nowDate,
                 updatedAt: nowIso,
+                updatedAtDate: nowDate,
                 reviewedByUserId: null,
                 reviewedAt: null,
+                reviewedAtDate: null,
                 statusNote: null,
             };
             yield db.collection(JOB_APPLICATIONS_COLLECTION).insertOne(application);
             yield db.collection(JOBS_COLLECTION).updateOne({ id: jobId }, { $inc: { applicationCount: 1 }, $set: { updatedAt: nowIso } });
-            // Fire-and-forget: notify company owner/admin reviewers by email with a secure portal link.
-            sendApplicationReviewEmails(db, {
-                companyId: String(job.companyId || ''),
+            (0, companyJobAnalyticsService_1.invalidateCompanyJobAnalyticsCache)(String(job.companyId || ''));
+            const applicantApplicationCount = yield incrementApplicantApplicationCount(db, currentUserId, nowIso);
+            scheduleApplicationPostCreateEffects({
+                req,
+                db,
+                currentUserId,
+                applicantApplicationCount,
                 jobId,
-                application,
                 job,
-            }).catch((emailError) => {
-                console.error('Job application review email dispatch error:', emailError);
+                application,
+                nowIso,
             });
             return res.status(201).json({
                 success: true,
@@ -1281,14 +1560,26 @@ exports.jobsController = {
                 return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
             }
             const nowIso = new Date().toISOString();
+            const nowDate = new Date(nowIso);
             const updates = {
                 status: nextStatus,
                 statusNote,
                 updatedAt: nowIso,
+                updatedAtDate: nowDate,
                 reviewedByUserId: currentUserId,
                 reviewedAt: nowIso,
+                reviewedAtDate: nowDate,
             };
             yield db.collection(JOB_APPLICATIONS_COLLECTION).updateOne({ id: applicationId }, { $set: updates });
+            (0, companyJobAnalyticsService_1.invalidateCompanyJobAnalyticsCache)(String(application.companyId || ''));
+            void (0, userBadgeService_1.awardStatusDrivenBadge)({
+                db,
+                userId: String(application.applicantUserId || ''),
+                applicationId,
+                nextStatus,
+            }).catch((badgeError) => {
+                console.error('Award status-driven badge error:', badgeError);
+            });
             const updated = yield db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
             return res.json({ success: true, data: toApplicationResponse(updated) });
         }
@@ -1414,6 +1705,37 @@ exports.jobsController = {
         catch (error) {
             console.error('Resolve application review portal token error:', error);
             return res.status(500).json({ success: false, error: 'Failed to resolve review link' });
+        }
+    }),
+    // GET /api/companies/:companyId/job-analytics
+    getJobAnalytics: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({ success: true, data: companyJobAnalyticsService_1.EMPTY_COMPANY_JOB_ANALYTICS });
+            }
+            const currentUserId = readString((_a = req.user) === null || _a === void 0 ? void 0 : _a.id, 120);
+            if (!currentUserId) {
+                return res.status(401).json({ success: false, error: 'Authentication required' });
+            }
+            const companyId = readString(req.params.companyId, 120);
+            if (!companyId) {
+                return res.status(400).json({ success: false, error: 'companyId is required' });
+            }
+            const access = yield resolveOwnerAdminCompanyAccess(companyId, currentUserId);
+            if (!access.allowed) {
+                return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
+            }
+            const db = (0, db_1.getDB)();
+            const data = yield (0, companyJobAnalyticsService_1.buildCompanyJobAnalytics)(db, companyId);
+            return res.json({
+                success: true,
+                data,
+            });
+        }
+        catch (error) {
+            console.error('Get company job analytics error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to fetch company job analytics' });
         }
     }),
     // GET /api/companies/:companyId/job-applications/attention-count
@@ -1576,13 +1898,16 @@ exports.jobsController = {
                 return res.status(403).json({ success: false, error: 'Only the applicant can withdraw this application' });
             }
             const nowIso = new Date().toISOString();
+            const nowDate = new Date(nowIso);
             yield db.collection(JOB_APPLICATIONS_COLLECTION).updateOne({ id: applicationId }, {
                 $set: {
                     status: 'withdrawn',
                     updatedAt: nowIso,
+                    updatedAtDate: nowDate,
                     statusNote: readStringOrNull((_b = req.body) === null || _b === void 0 ? void 0 : _b.statusNote, 1000),
                 },
             });
+            (0, companyJobAnalyticsService_1.invalidateCompanyJobAnalyticsCache)(String(application.companyId || ''));
             const updated = yield db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
             return res.json({ success: true, data: toApplicationResponse(updated) });
         }

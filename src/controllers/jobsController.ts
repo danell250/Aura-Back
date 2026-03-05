@@ -6,11 +6,26 @@ import { getDB, isDBConnected } from '../db';
 import { resolveIdentityActor } from '../utils/identityUtils';
 import { emitAuthorInsightsUpdate } from './postsController';
 import { getHashtagsFromText } from '../utils/hashtagUtils';
-import { sendJobApplicationReviewEmail } from '../services/emailService';
+import { getCompanyApplicationRoom } from '../realtime/roomNames';
+import { buildJobSkillGap } from '../services/jobSkillGapService';
+import {
+  buildCompanyJobAnalytics,
+  EMPTY_COMPANY_JOB_ANALYTICS,
+  invalidateCompanyJobAnalyticsCache,
+} from '../services/companyJobAnalyticsService';
+import { queueJobApplicationReviewEmails } from '../services/jobApplicationReviewService';
+import { buildJobsSyndicationFeed } from '../services/jobSyndicationService';
+import { enrichUserProfileFromResume } from '../services/resumeParsingService';
+import { enqueueResumeEnrichmentJob } from '../services/resumeEnrichmentQueueService';
+import {
+  awardApplicationMilestoneBadges,
+  awardStatusDrivenBadge,
+} from '../services/userBadgeService';
 
 const JOBS_COLLECTION = 'jobs';
 const JOB_APPLICATIONS_COLLECTION = 'job_applications';
 const JOB_APPLICATION_REVIEW_LINKS_COLLECTION = 'job_application_review_links';
+const JOB_APPLICATION_NOTES_COLLECTION = 'application_notes';
 const COMPANIES_COLLECTION = 'companies';
 const COMPANY_MEMBERS_COLLECTION = 'company_members';
 const USERS_COLLECTION = 'users';
@@ -24,6 +39,9 @@ const ALLOWED_RESUME_MIME_TYPES = new Set([
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
+const MAX_NETWORK_COUNT_SCAN_IDS = 5000;
+const MAX_NETWORK_COUNT_QUERY_BATCH_SIZE = 500;
+const JOB_SKILL_GAP_TIMEOUT_MS = 180;
 
 type CompanyAdminAccessResult = {
   allowed: boolean;
@@ -36,26 +54,6 @@ type Pagination = {
   page: number;
   limit: number;
   skip: number;
-};
-
-type JobReviewRecipient = {
-  userId: string;
-  email: string;
-  displayName: string;
-};
-
-type JobApplicationReviewLinkRecord = {
-  id: string;
-  tokenHash: string;
-  companyId: string;
-  jobId: string;
-  applicationId: string;
-  recipientUserId: string;
-  recipientEmail: string;
-  createdAt: string;
-  expiresAt: string;
-  lastResolvedAt: string | null;
-  lastResolvedByUserId: string | null;
 };
 
 const readString = (value: unknown, maxLength = 10000): string => {
@@ -103,6 +101,37 @@ const getPagination = (query: Record<string, unknown>): Pagination => {
   };
 };
 
+const resolveJobSkillGap = async (params: {
+  db: any;
+  currentUserId: string;
+  viewer: any;
+  job: any;
+}) => {
+  const currentUserId = readString(params.currentUserId, 120);
+  if (!currentUserId) return null;
+
+  const supportsTimeoutSignal =
+    typeof AbortSignal !== 'undefined' &&
+    typeof (AbortSignal as any).timeout === 'function';
+  const signal: AbortSignal | undefined = supportsTimeoutSignal
+    ? (AbortSignal as any).timeout(JOB_SKILL_GAP_TIMEOUT_MS)
+    : undefined;
+
+  try {
+    return await buildJobSkillGap({
+      db: params.db,
+      currentUserId,
+      viewer: params.viewer,
+      job: params.job,
+      signal,
+    });
+  } catch (error: any) {
+    if (error?.name === 'AbortError') return null;
+    console.warn('Job skill gap analysis error:', error);
+    return null;
+  }
+};
+
 const parseIsoOrNull = (value: unknown): string | null => {
   if (value == null) return null;
   const asString = readString(String(value), 100);
@@ -114,24 +143,6 @@ const parseIsoOrNull = (value: unknown): string | null => {
 
 const hashSecureToken = (token: string): string => {
   return crypto.createHash('sha256').update(token).digest('hex');
-};
-
-const getReviewLinkTtlHours = (): number => {
-  const raw = Number(process.env.JOB_REVIEW_LINK_TTL_HOURS || 72);
-  if (!Number.isFinite(raw)) return 72;
-  return Math.min(168, Math.max(1, Math.round(raw)));
-};
-
-const getReviewPortalBaseUrl = (): string => {
-  const configured =
-    readString(process.env.FRONTEND_URL || '', 300) ||
-    readString(process.env.VITE_FRONTEND_URL || '', 300);
-  return configured ? configured.replace(/\/$/, '') : 'https://www.aurasocial.world';
-};
-
-const buildReviewPortalUrl = (rawToken: string): string => {
-  const baseUrl = getReviewPortalBaseUrl();
-  return `${baseUrl}/company/manage?applicationReviewToken=${encodeURIComponent(rawToken)}`;
 };
 
 const escapeRegexPattern = (value: string): string =>
@@ -416,139 +427,105 @@ const canReadApplication = async (
   return access.allowed;
 };
 
-const resolveJobReviewRecipients = async (
+const incrementApplicantApplicationCount = async (
   db: any,
-  companyId: string,
-): Promise<{ company: any | null; recipients: JobReviewRecipient[] }> => {
-  if (!companyId) {
-    return { company: null, recipients: [] };
+  userId: string,
+  nowIso: string,
+): Promise<number | null> => {
+  try {
+    const updateResult = await db.collection(USERS_COLLECTION).findOneAndUpdate(
+      { id: userId },
+      {
+        $inc: { jobApplicationsCount: 1 },
+        $set: { updatedAt: nowIso },
+      },
+      {
+        returnDocument: 'after',
+        projection: { jobApplicationsCount: 1 },
+      },
+    );
+    const updatedUser = (updateResult as any)?.value ?? updateResult;
+    const parsedCount = Number((updatedUser as any)?.jobApplicationsCount);
+    return Number.isFinite(parsedCount) && parsedCount >= 0 ? parsedCount : null;
+  } catch (counterError) {
+    console.error('Increment user jobApplicationsCount error:', counterError);
+    return null;
   }
-
-  const company = await db.collection(COMPANIES_COLLECTION).findOne(
-    { id: companyId, legacyArchived: { $ne: true } },
-    { projection: { id: 1, name: 1, ownerId: 1 } },
-  );
-
-  if (!company) {
-    return { company: null, recipients: [] };
-  }
-
-  const memberRows = await db.collection(COMPANY_MEMBERS_COLLECTION)
-    .find({
-      companyId,
-      role: { $in: ['owner', 'admin'] },
-    })
-    .project({ userId: 1 })
-    .toArray();
-
-  const reviewerIds = Array.from(
-    new Set(
-      [
-        String(company.ownerId || '').trim(),
-        ...memberRows.map((row: any) => String(row?.userId || '').trim()),
-      ].filter((id) => id.length > 0),
-    ),
-  );
-
-  if (reviewerIds.length === 0) {
-    return { company, recipients: [] };
-  }
-
-  const reviewerUsers = await db.collection(USERS_COLLECTION)
-    .find({ id: { $in: reviewerIds } })
-    .project({ id: 1, email: 1, name: 1, firstName: 1, lastName: 1 })
-    .toArray();
-
-  const emailDedupe = new Set<string>();
-  const recipients: JobReviewRecipient[] = [];
-
-  for (const reviewer of reviewerUsers) {
-    const email = readString(reviewer?.email, 160).toLowerCase();
-    if (!email || emailDedupe.has(email)) continue;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) continue;
-    emailDedupe.add(email);
-
-    const displayName =
-      readString(reviewer?.name, 120) ||
-      `${readString(reviewer?.firstName, 80)} ${readString(reviewer?.lastName, 80)}`.trim() ||
-      'Team';
-
-    recipients.push({
-      userId: String(reviewer?.id || ''),
-      email,
-      displayName,
-    });
-  }
-
-  return { company, recipients };
 };
 
-const sendApplicationReviewEmails = async (
-  db: any,
+const emitNewApplicationEvent = (
+  req: Request,
   params: {
     companyId: string;
-    jobId: string;
-    application: any;
-    job: any;
+    applicationId: string;
+    jobTitle: string;
+    applicantName: string;
+    createdAt: string;
   },
-): Promise<void> => {
-  const companyId = readString(params.companyId, 120);
-  const jobId = readString(params.jobId, 120);
-  const application = params.application;
-  const job = params.job;
+): void => {
+  const io = req.app.get('io');
+  const targetCompanyId = readString(params.companyId, 120);
+  if (!io || !targetCompanyId) return;
 
-  if (!companyId || !jobId || !application || !job) return;
+  io.to(getCompanyApplicationRoom(targetCompanyId)).emit('new_application', {
+    applicationId: params.applicationId,
+    jobTitle: params.jobTitle,
+    applicantName: params.applicantName,
+    companyId: targetCompanyId,
+    createdAt: params.createdAt,
+  });
+};
 
-  const { company, recipients } = await resolveJobReviewRecipients(db, companyId);
-  if (!company || recipients.length === 0) return;
+const scheduleApplicationPostCreateEffects = (params: {
+  req: Request;
+  db: any;
+  currentUserId: string;
+  applicantApplicationCount: number | null;
+  jobId: string;
+  job: any;
+  application: any;
+  nowIso: string;
+}): void => {
+  void awardApplicationMilestoneBadges({
+    db: params.db,
+    userId: params.currentUserId,
+    applicationId: params.application.id,
+    applicationCount: params.applicantApplicationCount ?? undefined,
+  }).catch((badgeError) => {
+    console.error('Award application milestone badges error:', badgeError);
+  });
 
-  const now = Date.now();
-  const nowIso = new Date(now).toISOString();
-  const ttlHours = getReviewLinkTtlHours();
-  const expiresAtIso = new Date(now + ttlHours * 60 * 60 * 1000).toISOString();
+  emitNewApplicationEvent(params.req, {
+    companyId: String(params.job.companyId || ''),
+    applicationId: String(params.application.id || ''),
+    jobTitle: String(params.job.title || ''),
+    applicantName: String(params.application.applicantName || ''),
+    createdAt: params.nowIso,
+  });
 
-  const linkRows: Array<{ recipient: JobReviewRecipient; rawToken: string; record: JobApplicationReviewLinkRecord }> = [];
+  // Fire-and-forget: notify company owner/admin reviewers by email with a secure portal link.
+  queueJobApplicationReviewEmails({
+    db: params.db,
+    companyId: String(params.job.companyId || ''),
+    jobId: params.jobId,
+    application: params.application,
+    job: params.job,
+  }).catch((emailError) => {
+    console.error('Job application review email dispatch error:', emailError);
+  });
 
-  for (const recipient of recipients) {
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    linkRows.push({
-      recipient,
-      rawToken,
-      record: {
-        id: `jobreview-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
-        tokenHash: hashSecureToken(rawToken),
-        companyId,
-        jobId,
-        applicationId: String(application?.id || ''),
-        recipientUserId: recipient.userId,
-        recipientEmail: recipient.email,
-        createdAt: nowIso,
-        expiresAt: expiresAtIso,
-        lastResolvedAt: null,
-        lastResolvedByUserId: null,
-      },
+  setImmediate(() => {
+    enqueueResumeEnrichmentJob(async () => {
+      await enrichUserProfileFromResume({
+        db: params.db,
+        userId: params.currentUserId,
+        resumeKey: readString(params.application?.resumeKey, 600),
+        resumeMimeType: readString(params.application?.resumeMimeType, 120).toLowerCase(),
+        resumeFileName: readString(params.application?.resumeFileName, 200),
+        source: 'job_application_submission',
+      });
     });
-  }
-
-  if (linkRows.length === 0) return;
-
-  await db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).insertMany(linkRows.map((row) => row.record));
-
-  await Promise.allSettled(
-    linkRows.map((row) =>
-      sendJobApplicationReviewEmail(row.recipient.email, {
-        reviewerName: row.recipient.displayName,
-        companyName: readString(company?.name, 160) || readString(job?.companyName, 160) || 'Aura Company',
-        jobTitle: readString(job?.title, 160) || 'Open role',
-        applicantName: readString(application?.applicantName, 160) || 'Applicant',
-        applicantEmail: readString(application?.applicantEmail, 160),
-        applicantPhone: readString(application?.applicantPhone, 60),
-        submittedAt: readString(application?.createdAt, 80) || nowIso,
-        securePortalUrl: buildReviewPortalUrl(row.rawToken),
-        expiresAt: expiresAtIso,
-      }),
-    ),
-  );
+  });
 };
 
 const toJobResponse = (job: any) => ({
@@ -753,6 +730,138 @@ export const jobsController = {
     }
   },
 
+  // GET /api/partner/jobs
+  getJobsForSyndication: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.status(503).json({ success: false, error: 'Database service unavailable' });
+      }
+
+      const db = getDB();
+      const limit = parsePositiveInt((req.query as any)?.limit, 100, 1, 250);
+      const statusRaw = readString((req.query as any)?.status, 40).toLowerCase();
+      const status = statusRaw || 'open';
+
+      const filter: Record<string, unknown> = {};
+      if (status === 'all') {
+        filter.status = { $ne: 'archived' };
+      } else if (ALLOWED_JOB_STATUSES.has(status)) {
+        filter.status = status;
+      } else {
+        return res.status(400).json({ success: false, error: 'Invalid status filter' });
+      }
+
+      const jobs = await db.collection(JOBS_COLLECTION)
+        .find(filter)
+        .sort({ publishedAt: -1, createdAt: -1 })
+        .limit(limit)
+        .toArray();
+
+      const feed = buildJobsSyndicationFeed(jobs.map(toJobResponse));
+
+      res.setHeader('Content-Type', 'application/feed+json; charset=utf-8');
+      return res.status(200).json(feed);
+    } catch (error) {
+      console.error('Get jobs for syndication error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to build jobs syndication feed' });
+    }
+  },
+
+  // GET /api/jobs/salary-insights
+  getSalaryInsights: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.status(503).json({ success: false, error: 'Database service unavailable' });
+      }
+
+      const jobTitle = readString((req.query as any).jobTitle, 140);
+      const location = readString((req.query as any).location, 140);
+      if (!jobTitle || !location) {
+        return res.status(400).json({ success: false, error: 'jobTitle and location are required' });
+      }
+
+      const db = getDB();
+      const allowTextSearch = await ensureJobsTextIndex(db);
+      if (!allowTextSearch) {
+        return res.status(503).json({
+          success: false,
+          error: 'Search index is warming up. Please retry in a moment.',
+        });
+      }
+      const searchText = `${jobTitle} ${location}`.trim();
+      const missingMinSentinel = Number.MAX_SAFE_INTEGER;
+      const missingMaxSentinel = -1;
+
+      const [aggregated] = await db.collection(JOBS_COLLECTION)
+        .aggregate([
+          {
+            $match: {
+              status: 'open',
+              $text: { $search: searchText },
+              $or: [
+                { salaryMin: { $type: 'number' } },
+                { salaryMax: { $type: 'number' } },
+              ],
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              sampleSize: { $sum: 1 },
+              avgMin: {
+                $avg: {
+                  $cond: [{ $isNumber: '$salaryMin' }, '$salaryMin', null],
+                },
+              },
+              avgMax: {
+                $avg: {
+                  $cond: [{ $isNumber: '$salaryMax' }, '$salaryMax', null],
+                },
+              },
+              minSalaryCandidate: {
+                $min: {
+                  $cond: [{ $isNumber: '$salaryMin' }, '$salaryMin', missingMinSentinel],
+                },
+              },
+              maxSalaryCandidate: {
+                $max: {
+                  $cond: [{ $isNumber: '$salaryMax' }, '$salaryMax', missingMaxSentinel],
+                },
+              },
+            },
+          },
+          {
+            $project: {
+              sampleSize: 1,
+              avgMin: 1,
+              avgMax: 1,
+              minSalary: {
+                $cond: [{ $eq: ['$minSalaryCandidate', missingMinSentinel] }, null, '$minSalaryCandidate'],
+              },
+              maxSalary: {
+                $cond: [{ $eq: ['$maxSalaryCandidate', missingMaxSentinel] }, null, '$maxSalaryCandidate'],
+              },
+            },
+          },
+        ])
+        .toArray();
+
+      return res.json({
+        success: true,
+        data: {
+          sampleSize: Number.isFinite(aggregated?.sampleSize) ? Number(aggregated.sampleSize) : 0,
+          avgMin: Number.isFinite(aggregated?.avgMin) ? Number(aggregated.avgMin) : null,
+          avgMax: Number.isFinite(aggregated?.avgMax) ? Number(aggregated.avgMax) : null,
+          minSalary: Number.isFinite(aggregated?.minSalary) ? Number(aggregated.minSalary) : null,
+          maxSalary: Number.isFinite(aggregated?.maxSalary) ? Number(aggregated.maxSalary) : null,
+        },
+      });
+    } catch (error) {
+      console.error('Get salary insights error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch salary insights' });
+    }
+  },
+
   // GET /api/jobs/slug/:jobSlug
   getJobBySlug: async (req: Request, res: Response) => {
     try {
@@ -767,13 +876,28 @@ export const jobsController = {
       }
 
       const db = getDB();
+      const currentUserId = readString((req.user as any)?.id, 120);
 
       const slugIdMatch = rawRequestedSlug.match(/(?:^|--)(job-[a-z0-9-]+)$/i);
       const slugJobId = slugIdMatch?.[1] || '';
       if (slugJobId) {
         const byId = await db.collection(JOBS_COLLECTION).findOne({ id: slugJobId, status: { $ne: 'archived' } });
         if (byId) {
-          return res.json({ success: true, data: toJobResponse(byId) });
+          const skillGap = currentUserId
+            ? await resolveJobSkillGap({
+                db,
+                currentUserId,
+                viewer: req.user,
+                job: byId,
+              })
+            : null;
+          return res.json({
+            success: true,
+            data: {
+              ...toJobResponse(byId),
+              ...(skillGap ? { skillGap } : {}),
+            },
+          });
         }
       }
 
@@ -785,7 +909,21 @@ export const jobsController = {
         return res.status(404).json({ success: false, error: 'Job not found' });
       }
 
-      return res.json({ success: true, data: toJobResponse(bySlug) });
+      const skillGap = currentUserId
+        ? await resolveJobSkillGap({
+            db,
+            currentUserId,
+            viewer: req.user,
+            job: bySlug,
+          })
+        : null;
+      return res.json({
+        success: true,
+        data: {
+          ...toJobResponse(bySlug),
+          ...(skillGap ? { skillGap } : {}),
+        },
+      });
     } catch (error) {
       console.error('Get job by slug error:', error);
       return res.status(500).json({ success: false, error: 'Failed to fetch job' });
@@ -801,16 +939,125 @@ export const jobsController = {
 
       const { jobId } = req.params;
       const db = getDB();
+      const currentUserId = readString((req.user as any)?.id, 120);
       const job = await db.collection(JOBS_COLLECTION).findOne({ id: jobId });
 
       if (!job || job.status === 'archived') {
         return res.status(404).json({ success: false, error: 'Job not found' });
       }
 
-      return res.json({ success: true, data: toJobResponse(job) });
+      const skillGap = currentUserId
+        ? await resolveJobSkillGap({
+            db,
+            currentUserId,
+            viewer: req.user,
+            job,
+          })
+        : null;
+      return res.json({
+        success: true,
+        data: {
+          ...toJobResponse(job),
+          ...(skillGap ? { skillGap } : {}),
+        },
+      });
     } catch (error) {
       console.error('Get job error:', error);
       return res.status(500).json({ success: false, error: 'Failed to fetch job' });
+    }
+  },
+
+  // GET /api/jobs/:jobId/network-count
+  getJobNetworkCount: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.status(503).json({ success: false, error: 'Database service unavailable' });
+      }
+
+      const currentUserId = (req.user as any)?.id;
+      if (!currentUserId) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const jobId = readString(req.params.jobId, 120);
+      if (!jobId) {
+        return res.status(400).json({ success: false, error: 'jobId is required' });
+      }
+
+      const db = getDB();
+      const job = await db.collection(JOBS_COLLECTION).findOne(
+        { id: jobId, status: { $ne: 'archived' } },
+        { projection: { id: 1, companyId: 1 } },
+      );
+
+      if (!job) {
+        return res.status(404).json({ success: false, error: 'Job not found' });
+      }
+
+      const companyId = readString(job.companyId, 120);
+      if (!companyId) {
+        return res.json({ success: true, data: { count: 0, companyId: '' } });
+      }
+
+      const currentUser = await db.collection(USERS_COLLECTION).findOne(
+        { id: currentUserId },
+        { projection: { acquaintances: 1 } },
+      );
+
+      const acquaintanceIds = Array.isArray(currentUser?.acquaintances)
+        ? Array.from(
+            new Set(
+              currentUser.acquaintances
+                .map((value: unknown) => readString(value, 120))
+                .filter((value: string) => value.length > 0),
+            ),
+          )
+        : [];
+
+      if (acquaintanceIds.length === 0) {
+        return res.json({ success: true, data: { count: 0, companyId } });
+      }
+
+      const scannedAcquaintanceIds = acquaintanceIds.slice(0, MAX_NETWORK_COUNT_SCAN_IDS);
+      const batches: string[][] = [];
+      for (let index = 0; index < scannedAcquaintanceIds.length; index += MAX_NETWORK_COUNT_QUERY_BATCH_SIZE) {
+        const batch = scannedAcquaintanceIds.slice(index, index + MAX_NETWORK_COUNT_QUERY_BATCH_SIZE);
+        if (batch.length > 0) {
+          batches.push(batch);
+        }
+      }
+
+      const maxConcurrentBatchQueries = 4;
+      const partialCounts = new Array<number>(batches.length);
+      let batchCursor = 0;
+
+      const runBatchWorker = async () => {
+        while (batchCursor < batches.length) {
+          const nextIndex = batchCursor;
+          batchCursor += 1;
+          const batch = batches[nextIndex];
+          partialCounts[nextIndex] = await db.collection(COMPANY_MEMBERS_COLLECTION).countDocuments({
+            companyId,
+            userId: { $in: batch },
+          });
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(maxConcurrentBatchQueries, batches.length) }, () => runBatchWorker()),
+      );
+      const count = partialCounts.reduce((sum, value) => sum + value, 0);
+
+      return res.json({
+        success: true,
+        data: {
+          count,
+          companyId,
+        },
+      });
+    } catch (error) {
+      console.error('Get job network count error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch network count' });
     }
   },
 
@@ -1241,6 +1488,7 @@ export const jobsController = {
       await Promise.all([
         db.collection(JOBS_COLLECTION).deleteOne({ id: jobId }),
         db.collection(JOB_APPLICATIONS_COLLECTION).deleteMany({ jobId }),
+        db.collection(JOB_APPLICATION_NOTES_COLLECTION).deleteMany({ jobId }),
         db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).deleteMany({ jobId }),
         db.collection('posts').deleteMany(postDeleteFilter),
       ]);
@@ -1305,15 +1553,63 @@ export const jobsController = {
         });
       }
 
-      const applicantName = readString((req.body as any)?.applicantName, 120);
-      const applicantEmail = readString((req.body as any)?.applicantEmail, 160).toLowerCase();
+      const useProfile = Boolean((req.body as any)?.useProfile);
+      const profileUser = useProfile
+        ? await db.collection(USERS_COLLECTION).findOne(
+            { id: currentUserId },
+            {
+              projection: {
+                firstName: 1,
+                lastName: 1,
+                name: 1,
+                email: 1,
+                defaultResumeKey: 1,
+                defaultResumeFileName: 1,
+                defaultResumeMimeType: 1,
+                defaultResumeSize: 1,
+              },
+            },
+          )
+        : null;
+
+      let applicantName = readString((req.body as any)?.applicantName, 120);
+      let applicantEmail = readString((req.body as any)?.applicantEmail, 160).toLowerCase();
       const applicantPhone = readStringOrNull((req.body as any)?.applicantPhone, 40);
       const coverLetter = readStringOrNull((req.body as any)?.coverLetter, 5000);
       const portfolioUrl = readStringOrNull((req.body as any)?.portfolioUrl, 300);
-      const resumeKey = readString((req.body as any)?.resumeKey, 500);
-      const resumeFileName = readString((req.body as any)?.resumeFileName, 200);
-      const resumeMimeType = readString((req.body as any)?.resumeMimeType, 120);
-      const resumeSize = Number((req.body as any)?.resumeSize);
+      let resumeKey = readString((req.body as any)?.resumeKey, 500);
+      let resumeFileName = readString((req.body as any)?.resumeFileName, 200);
+      let resumeMimeType = readString((req.body as any)?.resumeMimeType, 120);
+      let resumeSize = Number((req.body as any)?.resumeSize);
+
+      if (profileUser) {
+        const derivedProfileName =
+          `${readString((profileUser as any)?.firstName, 80)} ${readString((profileUser as any)?.lastName, 80)}`.trim()
+          || readString((profileUser as any)?.name, 120);
+        const derivedProfileEmail = readString((profileUser as any)?.email, 160).toLowerCase();
+
+        if (derivedProfileName) {
+          applicantName = derivedProfileName;
+        }
+        if (derivedProfileEmail) {
+          applicantEmail = derivedProfileEmail;
+        }
+
+        const defaultResumeKey = readString((profileUser as any)?.defaultResumeKey, 500);
+        if (defaultResumeKey) {
+          resumeKey = defaultResumeKey;
+          resumeFileName = readString((profileUser as any)?.defaultResumeFileName, 200);
+          resumeMimeType = readString((profileUser as any)?.defaultResumeMimeType, 120);
+          resumeSize = Number((profileUser as any)?.defaultResumeSize);
+        }
+      }
+
+      if (useProfile && (!resumeKey || !resumeFileName || !resumeMimeType || !Number.isFinite(resumeSize) || resumeSize <= 0)) {
+        return res.status(400).json({
+          success: false,
+          error: 'No default resume found on your Aura profile. Add one in your profile and retry.',
+        });
+      }
 
       if (!applicantName || !applicantEmail || !resumeKey || !resumeFileName || !resumeMimeType) {
         return res.status(400).json({
@@ -1335,10 +1631,12 @@ export const jobsController = {
       }
 
       const nowIso = new Date().toISOString();
+      const nowDate = new Date(nowIso);
       const application = {
         id: `jobapp-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
         jobId,
         companyId: String(job.companyId || ''),
+        jobTitleSnapshot: readString(job.title, 180) || null,
         applicantUserId: currentUserId,
         applicantName,
         applicantEmail,
@@ -1351,9 +1649,12 @@ export const jobsController = {
         resumeSize,
         status: 'submitted',
         createdAt: nowIso,
+        createdAtDate: nowDate,
         updatedAt: nowIso,
+        updatedAtDate: nowDate,
         reviewedByUserId: null as string | null,
         reviewedAt: null as string | null,
+        reviewedAtDate: null as Date | null,
         statusNote: null as string | null,
       };
 
@@ -1362,15 +1663,18 @@ export const jobsController = {
         { id: jobId },
         { $inc: { applicationCount: 1 }, $set: { updatedAt: nowIso } },
       );
+      invalidateCompanyJobAnalyticsCache(String(job.companyId || ''));
+      const applicantApplicationCount = await incrementApplicantApplicationCount(db, currentUserId, nowIso);
 
-      // Fire-and-forget: notify company owner/admin reviewers by email with a secure portal link.
-      sendApplicationReviewEmails(db, {
-        companyId: String(job.companyId || ''),
+      scheduleApplicationPostCreateEffects({
+        req,
+        db,
+        currentUserId,
+        applicantApplicationCount,
         jobId,
-        application,
         job,
-      }).catch((emailError) => {
-        console.error('Job application review email dispatch error:', emailError);
+        application,
+        nowIso,
       });
 
       return res.status(201).json({
@@ -1516,18 +1820,31 @@ export const jobsController = {
       }
 
       const nowIso = new Date().toISOString();
+      const nowDate = new Date(nowIso);
       const updates = {
         status: nextStatus,
         statusNote,
         updatedAt: nowIso,
+        updatedAtDate: nowDate,
         reviewedByUserId: currentUserId,
         reviewedAt: nowIso,
+        reviewedAtDate: nowDate,
       };
 
       await db.collection(JOB_APPLICATIONS_COLLECTION).updateOne(
         { id: applicationId },
         { $set: updates },
       );
+      invalidateCompanyJobAnalyticsCache(String(application.companyId || ''));
+
+      void awardStatusDrivenBadge({
+        db,
+        userId: String(application.applicantUserId || ''),
+        applicationId,
+        nextStatus,
+      }).catch((badgeError) => {
+        console.error('Award status-driven badge error:', badgeError);
+      });
 
       const updated = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
       return res.json({ success: true, data: toApplicationResponse(updated) });
@@ -1671,6 +1988,40 @@ export const jobsController = {
     } catch (error) {
       console.error('Resolve application review portal token error:', error);
       return res.status(500).json({ success: false, error: 'Failed to resolve review link' });
+    }
+  },
+
+  // GET /api/companies/:companyId/job-analytics
+  getJobAnalytics: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.json({ success: true, data: EMPTY_COMPANY_JOB_ANALYTICS });
+      }
+
+      const currentUserId = readString((req.user as any)?.id, 120);
+      if (!currentUserId) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const companyId = readString(req.params.companyId, 120);
+      if (!companyId) {
+        return res.status(400).json({ success: false, error: 'companyId is required' });
+      }
+
+      const access = await resolveOwnerAdminCompanyAccess(companyId, currentUserId);
+      if (!access.allowed) {
+        return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
+      }
+
+      const db = getDB();
+      const data = await buildCompanyJobAnalytics(db, companyId);
+      return res.json({
+        success: true,
+        data,
+      });
+    } catch (error) {
+      console.error('Get company job analytics error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch company job analytics' });
     }
   },
 
@@ -1865,16 +2216,19 @@ export const jobsController = {
       }
 
       const nowIso = new Date().toISOString();
+      const nowDate = new Date(nowIso);
       await db.collection(JOB_APPLICATIONS_COLLECTION).updateOne(
         { id: applicationId },
         {
           $set: {
             status: 'withdrawn',
             updatedAt: nowIso,
+            updatedAtDate: nowDate,
             statusNote: readStringOrNull((req.body as any)?.statusNote, 1000),
           },
         },
       );
+      invalidateCompanyJobAnalyticsCache(String(application.companyId || ''));
 
       const updated = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
       return res.json({ success: true, data: toApplicationResponse(updated) });

@@ -13,6 +13,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
+const mongodb_1 = require("mongodb");
 const db_1 = require("../db");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const emailService_1 = require("../services/emailService");
@@ -61,6 +62,7 @@ const COMPANY_NAME_MAX_LENGTH = 120;
 const COMPANY_NAME_ALLOWED_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}\s.,&'()\-+_!/]*$/u;
 const COMPANY_NAME_URL_PATTERN = /(https?:\/\/|www\.)/i;
 const COMPANY_NAME_HTML_TAG_PATTERN = /<[^>]*>/;
+const MAX_PUBLIC_COMPANY_MEDIA_ITEMS = 20;
 const normalizeFeaturedPostIds = (input) => {
     if (!Array.isArray(input))
         return null;
@@ -377,6 +379,131 @@ router.get('/:companyId/dashboard', authMiddleware_1.requireAuth, (req, res) => 
             success: false,
             error: 'Failed to fetch company dashboard data'
         });
+    }
+}));
+// GET /api/companies/:companyId/profile - Public company profile payload
+router.get('/:companyId/profile', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const companyId = String(req.params.companyId || '').trim();
+        if (!companyId) {
+            return res.status(400).json({ success: false, error: 'companyId is required' });
+        }
+        const requestedMediaLimit = Number(req.query.mediaLimit);
+        const mediaLimit = Number.isFinite(requestedMediaLimit)
+            ? Math.max(1, Math.min(MAX_PUBLIC_COMPANY_MEDIA_ITEMS, Math.floor(requestedMediaLimit)))
+            : MAX_PUBLIC_COMPANY_MEDIA_ITEMS;
+        const db = (0, db_1.getDB)();
+        const [company, posts, media] = yield Promise.all([
+            db.collection('companies').findOne({
+                id: companyId,
+                legacyArchived: { $ne: true }
+            }, {
+                projection: {
+                    _id: 0,
+                    id: 1,
+                    name: 1,
+                    handle: 1,
+                    bio: 1,
+                    website: 1,
+                    location: 1,
+                    industry: 1,
+                    avatar: 1,
+                    avatarType: 1,
+                    coverImage: 1,
+                    coverType: 1,
+                    isVerified: 1,
+                    employeeCount: 1,
+                    profileLinks: 1,
+                    cultureVideoUrl: 1,
+                    videoUrl: 1,
+                    subscriberCount: 1,
+                    createdAt: 1
+                }
+            }),
+            db.collection('posts')
+                .find({
+                ownerId: companyId,
+                visibility: 'public',
+                $or: [
+                    { ownerType: 'company' },
+                    { ownerType: { $exists: false } }
+                ]
+            }, {
+                projection: {
+                    _id: 0,
+                    id: 1,
+                    ownerId: 1,
+                    ownerType: 1,
+                    content: 1,
+                    mediaUrl: 1,
+                    mediaItems: 1,
+                    timestamp: 1,
+                    createdAt: 1,
+                    visibility: 1
+                }
+            })
+                .sort({ timestamp: -1 })
+                .hint({ ownerId: 1, visibility: 1, timestamp: -1 })
+                .limit(10)
+                .toArray(),
+            db.collection('company_media')
+                .find({ companyId }, {
+                projection: {
+                    _id: 0,
+                    id: 1,
+                    url: 1,
+                    mediaUrl: 1,
+                    src: 1,
+                    type: 1,
+                    mediaType: 1,
+                    category: 1,
+                    kind: 1,
+                    title: 1,
+                    caption: 1,
+                    createdAt: 1
+                }
+            })
+                .sort({ createdAt: -1, _id: -1 })
+                .hint({ companyId: 1, createdAt: -1, _id: -1 })
+                .limit(mediaLimit)
+                .toArray()
+        ]);
+        if (!company) {
+            return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+        }
+        const publicCompany = {
+            type: 'company',
+            id: String(company.id || ''),
+            name: String(company.name || ''),
+            handle: String(company.handle || ''),
+            bio: String(company.bio || ''),
+            website: String(company.website || ''),
+            location: String(company.location || ''),
+            industry: String(company.industry || ''),
+            avatar: String(company.avatar || ''),
+            avatarType: company.avatarType === 'video' ? 'video' : 'image',
+            coverImage: String(company.coverImage || ''),
+            coverType: company.coverType === 'video' ? 'video' : 'image',
+            isVerified: Boolean(company.isVerified),
+            employeeCount: typeof company.employeeCount === 'number' ? company.employeeCount : 0,
+            profileLinks: Array.isArray(company.profileLinks) ? company.profileLinks : [],
+            cultureVideoUrl: String(company.cultureVideoUrl || ''),
+            videoUrl: String(company.videoUrl || ''),
+            subscriberCount: typeof company.subscriberCount === 'number' ? company.subscriberCount : 0,
+            createdAt: company.createdAt || null
+        };
+        return res.json({
+            success: true,
+            data: {
+                company: publicCompany,
+                posts,
+                media
+            }
+        });
+    }
+    catch (error) {
+        console.error('Get company public profile error:', error);
+        return res.status(500).json({ success: false, error: 'Failed to fetch company profile' });
     }
 }));
 // GET /api/companies/:companyId/privacy-settings - Get company privacy settings
@@ -1061,7 +1188,6 @@ router.post('/:companyId/invites/:inviteId/resend', authMiddleware_1.requireAuth
     try {
         const { companyId, inviteId } = req.params;
         const currentUser = req.user;
-        const { ObjectId } = require('mongodb');
         const db = (0, db_1.getDB)();
         // Verify currentUser is owner/admin
         const requester = yield db.collection('company_members').findOne({
@@ -1088,7 +1214,7 @@ router.post('/:companyId/invites/:inviteId/resend', authMiddleware_1.requireAuth
         }
         let query = {};
         try {
-            query._id = new ObjectId(inviteId);
+            query._id = new mongodb_1.ObjectId(inviteId);
         }
         catch (e) {
             query.inviteId = inviteId;
@@ -1232,7 +1358,6 @@ router.delete('/:companyId/invites/:inviteId', authMiddleware_1.requireAuth, (re
     try {
         const { companyId, inviteId } = req.params;
         const currentUser = req.user;
-        const { ObjectId } = require('mongodb');
         const db = (0, db_1.getDB)();
         // Verify currentUser is owner/admin
         const requester = yield db.collection('company_members').findOne({
@@ -1249,7 +1374,7 @@ router.delete('/:companyId/invites/:inviteId', authMiddleware_1.requireAuth, (re
         }
         let query = {};
         try {
-            query._id = new ObjectId(inviteId);
+            query._id = new mongodb_1.ObjectId(inviteId);
         }
         catch (e) {
             // If not a valid ObjectId, try finding by custom inviteId field if it exists
@@ -1277,14 +1402,13 @@ router.post('/invites/:inviteId/accept', authMiddleware_1.requireAuth, (req, res
     try {
         const { inviteId } = req.params;
         const currentUser = req.user;
-        const { ObjectId } = require('mongodb');
         const db = (0, db_1.getDB)();
         let query = {
             status: 'pending',
             expiresAt: { $gt: new Date() }
         };
         try {
-            query._id = new ObjectId(inviteId);
+            query._id = new mongodb_1.ObjectId(inviteId);
         }
         catch (e) {
             query.inviteId = inviteId;
@@ -1348,13 +1472,12 @@ router.post('/invites/:inviteId/decline', authMiddleware_1.requireAuth, (req, re
     try {
         const { inviteId } = req.params;
         const currentUser = req.user;
-        const { ObjectId } = require('mongodb');
         const db = (0, db_1.getDB)();
         let query = {
             status: 'pending'
         };
         try {
-            query._id = new ObjectId(inviteId);
+            query._id = new mongodb_1.ObjectId(inviteId);
         }
         catch (e) {
             query.inviteId = inviteId;

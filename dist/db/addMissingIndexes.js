@@ -10,6 +10,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.runIndexMigration = runIndexMigration;
+const badgeCatalog_1 = require("../config/badgeCatalog");
 const normalizeKey = (key) => JSON.stringify(Object.entries(key || {}).sort(([a], [b]) => a.localeCompare(b)));
 const toExistingIndexMeta = (indexes) => indexes.map((index) => ({
     name: String(index.name),
@@ -110,6 +111,62 @@ const migrateAdsIndexes = (db) => __awaiter(void 0, void 0, void 0, function* ()
     yield ensureIndex(collection, { ownerId: 1, ownerType: 1, status: 1 }, { name: 'idx_ads_owner_status', background: true });
     yield ensureIndex(collection, { status: 1, placement: 1, timestamp: -1 }, { name: 'idx_ads_status_placement_ts', background: true });
 });
+const migrateApplicationNotesIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    const collection = db.collection('application_notes');
+    yield ensureIndex(collection, { id: 1 }, { name: 'idx_app_notes_id', unique: true, background: true });
+    yield ensureIndex(collection, { applicationId: 1, createdAt: 1 }, { name: 'idx_app_notes_application_created', background: true });
+    yield ensureIndex(collection, { jobId: 1, createdAt: 1 }, { name: 'idx_app_notes_job_created', background: true });
+    yield ensureIndex(collection, { companyId: 1, createdAt: -1 }, { name: 'idx_app_notes_company_created', background: true });
+    yield ensureIndex(collection, { authorId: 1, createdAt: -1 }, { name: 'idx_app_notes_author_created', background: true });
+});
+const migrateLearningResourcesCacheIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    const collection = db.collection('learning_resources_cache');
+    yield ensureIndex(collection, { cacheKey: 1 }, { name: 'idx_learning_resources_cache_key', unique: true, background: true });
+    yield ensureIndex(collection, { expiresAt: 1 }, { name: 'idx_learning_resources_cache_ttl', expireAfterSeconds: 0, background: true });
+});
+const migrateJobApplicationsIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    const collection = db.collection('job_applications');
+    yield ensureIndex(collection, { companyId: 1, status: 1 }, { name: 'idx_job_apps_company_status', background: true });
+    yield ensureIndex(collection, { companyId: 1, status: 1, jobId: 1 }, { name: 'idx_job_apps_company_status_job', background: true });
+    yield ensureIndex(collection, { companyId: 1, status: 1, reviewedAtDate: 1, createdAtDate: 1 }, { name: 'idx_job_apps_company_status_review_created', background: true });
+    yield ensureIndex(collection, { applicantUserId: 1, createdAt: -1 }, { name: 'idx_job_apps_applicant_created', background: true });
+});
+const migrateUserBadgesIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    const badgesCollection = db.collection('badges');
+    yield ensureIndex(badgesCollection, { key: 1 }, { name: 'idx_badges_key', unique: true, background: true });
+    yield ensureIndex(badgesCollection, { category: 1, sortOrder: 1 }, { name: 'idx_badges_category_sort', background: true });
+    const userBadgesCollection = db.collection('user_badges');
+    yield ensureIndex(userBadgesCollection, { id: 1 }, { name: 'idx_user_badges_id', unique: true, background: true });
+    yield ensureIndex(userBadgesCollection, { userId: 1, badgeKey: 1 }, { name: 'idx_user_badges_user_badge', unique: true, background: true });
+    yield ensureIndex(userBadgesCollection, { userId: 1, awardedAtDate: -1, awardedAt: -1, createdAt: -1 }, { name: 'idx_user_badges_user_awarded_v2', background: true });
+});
+const seedBadgeCatalog = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    const nowIso = new Date().toISOString();
+    const operations = Object.values(badgeCatalog_1.BADGE_CATALOG).map((definition) => ({
+        updateOne: {
+            filter: { key: definition.key },
+            update: {
+                $set: {
+                    key: definition.key,
+                    name: definition.name,
+                    description: definition.description,
+                    icon: definition.icon,
+                    sortOrder: definition.sortOrder,
+                    category: definition.category,
+                    updatedAt: nowIso,
+                },
+                $setOnInsert: {
+                    id: `badge-${definition.key}`,
+                    createdAt: nowIso,
+                },
+            },
+            upsert: true,
+        },
+    }));
+    if (operations.length > 0) {
+        yield db.collection('badges').bulkWrite(operations, { ordered: false });
+    }
+});
 function runIndexMigration(db) {
     return __awaiter(this, void 0, void 0, function* () {
         console.log('[IndexMigration] Starting...');
@@ -118,6 +175,11 @@ function runIndexMigration(db) {
         yield migrateAdEventDedupeIndexes(db);
         yield migrateAdAnalyticsIndexes(db);
         yield migrateAdsIndexes(db);
+        yield migrateApplicationNotesIndexes(db);
+        yield migrateLearningResourcesCacheIndexes(db);
+        yield migrateJobApplicationsIndexes(db);
+        yield migrateUserBadgesIndexes(db);
+        yield seedBadgeCatalog(db);
         console.log('[IndexMigration] Done');
     });
 }

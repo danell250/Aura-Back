@@ -16,6 +16,7 @@ const cookie_1 = require("cookie");
 const jwtUtils_1 = require("../utils/jwtUtils");
 const identityUtils_1 = require("../utils/identityUtils");
 const socketHub_1 = require("../realtime/socketHub");
+const roomNames_1 = require("../realtime/roomNames");
 const CallLog_1 = require("../models/CallLog");
 const db_1 = require("../db");
 const migrationService_1 = require("../services/migrationService");
@@ -98,9 +99,26 @@ const registerRoomMembershipHandlers = ({ socket, user, identityRooms, identityR
             return;
         }
         try {
-            const hasAccess = yield (0, identityUtils_1.validateIdentityAccess)(user.id, companyId);
-            if (!hasAccess) {
+            const db = (0, db_1.getDB)();
+            const hasIdentityAccess = yield (0, identityUtils_1.validateIdentityAccess)(user.id, companyId);
+            if (!hasIdentityAccess) {
                 console.warn(`⚠️ User ${user.id} denied join_company_room for ${companyId}`);
+                ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'Unauthorized company room' });
+                return;
+            }
+            const company = yield db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } }, { projection: { ownerId: 1 } });
+            if (!company) {
+                ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'Company not found' });
+                return;
+            }
+            const isOwner = String(company.ownerId || '') === user.id;
+            const privilegedMembership = yield db.collection('company_members').findOne({
+                companyId,
+                userId: user.id,
+                role: { $in: ['owner', 'admin'] },
+            }, { projection: { _id: 1 } });
+            if (!isOwner && !privilegedMembership) {
+                console.warn(`⚠️ User ${user.id} denied join_company_room privileged access for ${companyId}`);
                 ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'Unauthorized company room' });
                 return;
             }
@@ -112,6 +130,47 @@ const registerRoomMembershipHandlers = ({ socket, user, identityRooms, identityR
         catch (error) {
             console.error('Failed to join company room:', error);
             ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'Failed to join company room' });
+        }
+    }));
+    socket.on('join_company_applications_room', (companyId, ack) => __awaiter(void 0, void 0, void 0, function* () {
+        if (!(user === null || user === void 0 ? void 0 : user.id) || typeof companyId !== 'string' || !companyId.trim()) {
+            ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'companyId is required' });
+            return;
+        }
+        if (!(0, db_1.isDBConnected)()) {
+            yield waitForDatabaseRuntimeInitialization();
+        }
+        if (!(0, db_1.isDBConnected)()) {
+            console.warn(`⚠️ join_company_applications_room blocked while DB is unavailable for ${companyId}`);
+            ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'Database unavailable' });
+            return;
+        }
+        try {
+            const db = (0, db_1.getDB)();
+            const company = yield db.collection('companies').findOne({ id: companyId, legacyArchived: { $ne: true } }, { projection: { ownerId: 1 } });
+            if (!company) {
+                ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'Company not found' });
+                return;
+            }
+            const isOwner = String(company.ownerId || '') === user.id;
+            const privilegedMembership = yield db.collection('company_members').findOne({
+                companyId,
+                userId: user.id,
+                role: { $in: ['owner', 'admin'] },
+            }, { projection: { _id: 1 } });
+            if (!isOwner && !privilegedMembership) {
+                console.warn(`⚠️ User ${user.id} denied join_company_applications_room for ${companyId}`);
+                ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'Unauthorized company room' });
+                return;
+            }
+            const companyApplicationsRoom = (0, roomNames_1.getCompanyApplicationRoom)(companyId);
+            socket.join(companyApplicationsRoom);
+            console.log(`🏢 User ${user.id} joined company applications room ${companyId}`);
+            ack === null || ack === void 0 ? void 0 : ack({ success: true });
+        }
+        catch (error) {
+            console.error('Failed to join company applications room:', error);
+            ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'Failed to join company applications room' });
         }
     }));
     socket.on('leave_user_room', (userId, ack) => {
@@ -139,6 +198,15 @@ const registerRoomMembershipHandlers = ({ socket, user, identityRooms, identityR
         socket.leave(`company_${companyId}`);
         identityRooms.delete(companyIdentityRoom);
         socket.leave(companyIdentityRoom);
+        ack === null || ack === void 0 ? void 0 : ack({ success: true });
+    });
+    socket.on('leave_company_applications_room', (companyId, ack) => {
+        if (!(user === null || user === void 0 ? void 0 : user.id) || typeof companyId !== 'string' || !companyId.trim()) {
+            ack === null || ack === void 0 ? void 0 : ack({ success: false, error: 'companyId is required' });
+            return;
+        }
+        const companyApplicationsRoom = (0, roomNames_1.getCompanyApplicationRoom)(companyId);
+        socket.leave(companyApplicationsRoom);
         ack === null || ack === void 0 ? void 0 : ack({ success: true });
     });
     socket.on('join_identity_room', (payload, ack) => __awaiter(void 0, void 0, void 0, function* () {

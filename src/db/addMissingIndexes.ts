@@ -1,4 +1,5 @@
 import { Db, CreateIndexesOptions, Collection } from 'mongodb';
+import { BADGE_CATALOG } from '../config/badgeCatalog';
 
 type IndexKey = Record<string, 1 | -1>;
 
@@ -189,6 +190,133 @@ const migrateAdsIndexes = async (db: Db) => {
   );
 };
 
+const migrateApplicationNotesIndexes = async (db: Db) => {
+  const collection = db.collection('application_notes');
+  await ensureIndex(
+    collection,
+    { id: 1 },
+    { name: 'idx_app_notes_id', unique: true, background: true }
+  );
+  await ensureIndex(
+    collection,
+    { applicationId: 1, createdAt: 1 },
+    { name: 'idx_app_notes_application_created', background: true }
+  );
+  await ensureIndex(
+    collection,
+    { jobId: 1, createdAt: 1 },
+    { name: 'idx_app_notes_job_created', background: true }
+  );
+  await ensureIndex(
+    collection,
+    { companyId: 1, createdAt: -1 },
+    { name: 'idx_app_notes_company_created', background: true }
+  );
+  await ensureIndex(
+    collection,
+    { authorId: 1, createdAt: -1 },
+    { name: 'idx_app_notes_author_created', background: true }
+  );
+};
+
+const migrateLearningResourcesCacheIndexes = async (db: Db) => {
+  const collection = db.collection('learning_resources_cache');
+  await ensureIndex(
+    collection,
+    { cacheKey: 1 },
+    { name: 'idx_learning_resources_cache_key', unique: true, background: true }
+  );
+  await ensureIndex(
+    collection,
+    { expiresAt: 1 },
+    { name: 'idx_learning_resources_cache_ttl', expireAfterSeconds: 0, background: true }
+  );
+};
+
+const migrateJobApplicationsIndexes = async (db: Db) => {
+  const collection = db.collection('job_applications');
+  await ensureIndex(
+    collection,
+    { companyId: 1, status: 1 },
+    { name: 'idx_job_apps_company_status', background: true }
+  );
+  await ensureIndex(
+    collection,
+    { companyId: 1, status: 1, jobId: 1 },
+    { name: 'idx_job_apps_company_status_job', background: true }
+  );
+  await ensureIndex(
+    collection,
+    { companyId: 1, status: 1, reviewedAtDate: 1, createdAtDate: 1 },
+    { name: 'idx_job_apps_company_status_review_created', background: true }
+  );
+  await ensureIndex(
+    collection,
+    { applicantUserId: 1, createdAt: -1 },
+    { name: 'idx_job_apps_applicant_created', background: true }
+  );
+};
+
+const migrateUserBadgesIndexes = async (db: Db) => {
+  const badgesCollection = db.collection('badges');
+  await ensureIndex(
+    badgesCollection,
+    { key: 1 },
+    { name: 'idx_badges_key', unique: true, background: true }
+  );
+  await ensureIndex(
+    badgesCollection,
+    { category: 1, sortOrder: 1 },
+    { name: 'idx_badges_category_sort', background: true }
+  );
+
+  const userBadgesCollection = db.collection('user_badges');
+  await ensureIndex(
+    userBadgesCollection,
+    { id: 1 },
+    { name: 'idx_user_badges_id', unique: true, background: true }
+  );
+  await ensureIndex(
+    userBadgesCollection,
+    { userId: 1, badgeKey: 1 },
+    { name: 'idx_user_badges_user_badge', unique: true, background: true }
+  );
+  await ensureIndex(
+    userBadgesCollection,
+    { userId: 1, awardedAtDate: -1, awardedAt: -1, createdAt: -1 },
+    { name: 'idx_user_badges_user_awarded_v2', background: true }
+  );
+};
+
+const seedBadgeCatalog = async (db: Db) => {
+  const nowIso = new Date().toISOString();
+  const operations = Object.values(BADGE_CATALOG).map((definition) => ({
+    updateOne: {
+      filter: { key: definition.key },
+      update: {
+        $set: {
+          key: definition.key,
+          name: definition.name,
+          description: definition.description,
+          icon: definition.icon,
+          sortOrder: definition.sortOrder,
+          category: definition.category,
+          updatedAt: nowIso,
+        },
+        $setOnInsert: {
+          id: `badge-${definition.key}`,
+          createdAt: nowIso,
+        },
+      },
+      upsert: true,
+    },
+  }));
+
+  if (operations.length > 0) {
+    await db.collection('badges').bulkWrite(operations, { ordered: false });
+  }
+};
+
 export async function runIndexMigration(db: Db): Promise<void> {
   console.log('[IndexMigration] Starting...');
   await migrateAdSubscriptionsIndexes(db);
@@ -196,5 +324,10 @@ export async function runIndexMigration(db: Db): Promise<void> {
   await migrateAdEventDedupeIndexes(db);
   await migrateAdAnalyticsIndexes(db);
   await migrateAdsIndexes(db);
+  await migrateApplicationNotesIndexes(db);
+  await migrateLearningResourcesCacheIndexes(db);
+  await migrateJobApplicationsIndexes(db);
+  await migrateUserBadgesIndexes(db);
+  await seedBadgeCatalog(db);
   console.log('[IndexMigration] Done');
 }

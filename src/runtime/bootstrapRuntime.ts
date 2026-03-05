@@ -4,8 +4,9 @@ import { parse as parseCookieHeader } from 'cookie';
 import { verifyAccessToken } from '../utils/jwtUtils';
 import { validateIdentityAccess } from '../utils/identityUtils';
 import { registerSocketServer } from '../realtime/socketHub';
+import { getCompanyApplicationRoom } from '../realtime/roomNames';
 import { CallType, getCallLogsCollection } from '../models/CallLog';
-import { connectDB, isDBConnected } from '../db';
+import { connectDB, getDB, isDBConnected } from '../db';
 import { migrateLegacyCompanies } from '../services/migrationService';
 import { startRuntimeRecurringJobs } from './recurringJobs';
 
@@ -138,9 +139,34 @@ const registerRoomMembershipHandlers = ({
     }
 
     try {
-      const hasAccess = await validateIdentityAccess(user.id, companyId);
-      if (!hasAccess) {
+      const db = getDB();
+      const hasIdentityAccess = await validateIdentityAccess(user.id, companyId);
+      if (!hasIdentityAccess) {
         console.warn(`⚠️ User ${user.id} denied join_company_room for ${companyId}`);
+        ack?.({ success: false, error: 'Unauthorized company room' });
+        return;
+      }
+
+      const company = await db.collection('companies').findOne(
+        { id: companyId, legacyArchived: { $ne: true } },
+        { projection: { ownerId: 1 } },
+      );
+      if (!company) {
+        ack?.({ success: false, error: 'Company not found' });
+        return;
+      }
+
+      const isOwner = String(company.ownerId || '') === user.id;
+      const privilegedMembership = await db.collection('company_members').findOne(
+        {
+          companyId,
+          userId: user.id,
+          role: { $in: ['owner', 'admin'] },
+        },
+        { projection: { _id: 1 } },
+      );
+      if (!isOwner && !privilegedMembership) {
+        console.warn(`⚠️ User ${user.id} denied join_company_room privileged access for ${companyId}`);
         ack?.({ success: false, error: 'Unauthorized company room' });
         return;
       }
@@ -152,6 +178,58 @@ const registerRoomMembershipHandlers = ({
     } catch (error) {
       console.error('Failed to join company room:', error);
       ack?.({ success: false, error: 'Failed to join company room' });
+    }
+  });
+
+  socket.on('join_company_applications_room', async (companyId: string, ack?: SocketAck) => {
+    if (!user?.id || typeof companyId !== 'string' || !companyId.trim()) {
+      ack?.({ success: false, error: 'companyId is required' });
+      return;
+    }
+
+    if (!isDBConnected()) {
+      await waitForDatabaseRuntimeInitialization();
+    }
+    if (!isDBConnected()) {
+      console.warn(`⚠️ join_company_applications_room blocked while DB is unavailable for ${companyId}`);
+      ack?.({ success: false, error: 'Database unavailable' });
+      return;
+    }
+
+    try {
+      const db = getDB();
+      const company = await db.collection('companies').findOne(
+        { id: companyId, legacyArchived: { $ne: true } },
+        { projection: { ownerId: 1 } },
+      );
+
+      if (!company) {
+        ack?.({ success: false, error: 'Company not found' });
+        return;
+      }
+
+      const isOwner = String(company.ownerId || '') === user.id;
+      const privilegedMembership = await db.collection('company_members').findOne(
+        {
+          companyId,
+          userId: user.id,
+          role: { $in: ['owner', 'admin'] },
+        },
+        { projection: { _id: 1 } },
+      );
+      if (!isOwner && !privilegedMembership) {
+        console.warn(`⚠️ User ${user.id} denied join_company_applications_room for ${companyId}`);
+        ack?.({ success: false, error: 'Unauthorized company room' });
+        return;
+      }
+
+      const companyApplicationsRoom = getCompanyApplicationRoom(companyId);
+      socket.join(companyApplicationsRoom);
+      console.log(`🏢 User ${user.id} joined company applications room ${companyId}`);
+      ack?.({ success: true });
+    } catch (error) {
+      console.error('Failed to join company applications room:', error);
+      ack?.({ success: false, error: 'Failed to join company applications room' });
     }
   });
 
@@ -181,6 +259,16 @@ const registerRoomMembershipHandlers = ({
     socket.leave(`company_${companyId}`);
     identityRooms.delete(companyIdentityRoom);
     socket.leave(companyIdentityRoom);
+    ack?.({ success: true });
+  });
+
+  socket.on('leave_company_applications_room', (companyId: string, ack?: SocketAck) => {
+    if (!user?.id || typeof companyId !== 'string' || !companyId.trim()) {
+      ack?.({ success: false, error: 'companyId is required' });
+      return;
+    }
+    const companyApplicationsRoom = getCompanyApplicationRoom(companyId);
+    socket.leave(companyApplicationsRoom);
     ack?.({ success: true });
   });
 

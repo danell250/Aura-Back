@@ -118,6 +118,8 @@ router.post('/:id/record-profile-view', authMiddleware_1.requireAuth, requirePer
 router.get('/:id/featured-posts', usersController_1.usersController.getFeaturedPosts);
 // PUT /api/users/:id/featured-posts - Update ordered featured posts for the authenticated personal profile
 router.put('/:id/featured-posts', authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, usersController_1.usersController.updateFeaturedPosts);
+// GET /api/users/:id/badges - Get earned profile badges
+router.get('/:id/badges', usersController_1.usersController.getUserBadges);
 // GET /api/users/:id - Get user by ID (public)
 router.get('/:id', usersController_1.usersController.getUserById);
 router.get('/:id/serendipity-matches', authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, usersController_1.usersController.getSerendipityMatches);

@@ -9,6 +9,7 @@ import { logSecurityEvent } from '../utils/securityLogger';
 import { emitToIdentity } from '../realtime/socketHub';
 import { getFullCompanyCreditBalance } from '../utils/companyAccess';
 import { createNotificationInDB } from './notificationsController';
+import { listUserBadges } from '../services/userBadgeService';
 
 const generateUniqueHandle = async (firstName: string, lastName: string): Promise<string> => {
   const db = getDB();
@@ -778,6 +779,45 @@ export const usersController = {
       res.status(500).json({
         success: false,
         error: 'Failed to cancel connection request',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // GET /api/users/:id - Get user or company by ID
+  getUserBadges: async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = getDB();
+
+      const user = await db.collection('users').findOne(
+        { id },
+        { projection: { id: 1 } }
+      );
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'Not found',
+          message: `User with ID ${id} does not exist`
+        });
+      }
+
+      const badges = await listUserBadges({
+        db,
+        userId: id,
+        limit: 40,
+      });
+
+      return res.json({
+        success: true,
+        data: badges,
+      });
+    } catch (error) {
+      console.error('Error fetching user badges:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch user badges',
         message: 'Internal server error'
       });
     }
@@ -2364,7 +2404,7 @@ export const usersController = {
       });
 
       // Trigger real-time insights update
-      emitAuthorInsightsUpdate(req.app, id);
+      emitAuthorInsightsUpdate(req.app, id, 'user');
 
       res.json({
         success: true,
@@ -2470,7 +2510,7 @@ export const usersController = {
       });
 
       // Trigger real-time insights update
-      emitAuthorInsightsUpdate(req.app, id);
+      emitAuthorInsightsUpdate(req.app, id, 'user');
 
       res.json({
         success: true,

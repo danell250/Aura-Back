@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { ObjectId } from 'mongodb';
 import { getDB } from '../db';
 import { requireAuth } from '../middleware/authMiddleware';
 import { sendCompanyInviteEmail } from '../services/emailService';
@@ -55,6 +56,7 @@ const COMPANY_NAME_MAX_LENGTH = 120;
 const COMPANY_NAME_ALLOWED_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}\s.,&'()\-+_!/]*$/u;
 const COMPANY_NAME_URL_PATTERN = /(https?:\/\/|www\.)/i;
 const COMPANY_NAME_HTML_TAG_PATTERN = /<[^>]*>/;
+const MAX_PUBLIC_COMPANY_MEDIA_ITEMS = 20;
 
 const normalizeFeaturedPostIds = (input: unknown): string[] | null => {
   if (!Array.isArray(input)) return null;
@@ -427,6 +429,138 @@ router.get('/:companyId/dashboard', requireAuth, async (req, res) => {
       success: false,
       error: 'Failed to fetch company dashboard data'
     });
+  }
+});
+
+// GET /api/companies/:companyId/profile - Public company profile payload
+router.get('/:companyId/profile', async (req, res) => {
+  try {
+    const companyId = String(req.params.companyId || '').trim();
+    if (!companyId) {
+      return res.status(400).json({ success: false, error: 'companyId is required' });
+    }
+    const requestedMediaLimit = Number(req.query.mediaLimit);
+    const mediaLimit = Number.isFinite(requestedMediaLimit)
+      ? Math.max(1, Math.min(MAX_PUBLIC_COMPANY_MEDIA_ITEMS, Math.floor(requestedMediaLimit)))
+      : MAX_PUBLIC_COMPANY_MEDIA_ITEMS;
+
+    const db = getDB();
+    const [company, posts, media] = await Promise.all([
+      db.collection('companies').findOne({
+        id: companyId,
+        legacyArchived: { $ne: true }
+      }, {
+        projection: {
+          _id: 0,
+          id: 1,
+          name: 1,
+          handle: 1,
+          bio: 1,
+          website: 1,
+          location: 1,
+          industry: 1,
+          avatar: 1,
+          avatarType: 1,
+          coverImage: 1,
+          coverType: 1,
+          isVerified: 1,
+          employeeCount: 1,
+          profileLinks: 1,
+          cultureVideoUrl: 1,
+          videoUrl: 1,
+          subscriberCount: 1,
+          createdAt: 1
+        }
+      }),
+      db.collection('posts')
+        .find({
+          ownerId: companyId,
+          visibility: 'public',
+          $or: [
+            { ownerType: 'company' },
+            { ownerType: { $exists: false } }
+          ]
+        }, {
+          projection: {
+            _id: 0,
+            id: 1,
+            ownerId: 1,
+            ownerType: 1,
+            content: 1,
+            mediaUrl: 1,
+            mediaItems: 1,
+            timestamp: 1,
+            createdAt: 1,
+            visibility: 1
+          }
+        })
+        .sort({ timestamp: -1 })
+        .hint({ ownerId: 1, visibility: 1, timestamp: -1 })
+        .limit(10)
+        .toArray(),
+      db.collection('company_media')
+        .find(
+          { companyId },
+          {
+            projection: {
+              _id: 0,
+              id: 1,
+              url: 1,
+              mediaUrl: 1,
+              src: 1,
+              type: 1,
+              mediaType: 1,
+              category: 1,
+              kind: 1,
+              title: 1,
+              caption: 1,
+              createdAt: 1
+            }
+          }
+        )
+        .sort({ createdAt: -1, _id: -1 })
+        .hint({ companyId: 1, createdAt: -1, _id: -1 })
+        .limit(mediaLimit)
+        .toArray()
+    ]);
+
+    if (!company) {
+      return res.status(404).json({ success: false, error: 'Corporate identity not found' });
+    }
+
+    const publicCompany = {
+      type: 'company' as const,
+      id: String((company as any).id || ''),
+      name: String((company as any).name || ''),
+      handle: String((company as any).handle || ''),
+      bio: String((company as any).bio || ''),
+      website: String((company as any).website || ''),
+      location: String((company as any).location || ''),
+      industry: String((company as any).industry || ''),
+      avatar: String((company as any).avatar || ''),
+      avatarType: (company as any).avatarType === 'video' ? 'video' : 'image',
+      coverImage: String((company as any).coverImage || ''),
+      coverType: (company as any).coverType === 'video' ? 'video' : 'image',
+      isVerified: Boolean((company as any).isVerified),
+      employeeCount: typeof (company as any).employeeCount === 'number' ? (company as any).employeeCount : 0,
+      profileLinks: Array.isArray((company as any).profileLinks) ? (company as any).profileLinks : [],
+      cultureVideoUrl: String((company as any).cultureVideoUrl || ''),
+      videoUrl: String((company as any).videoUrl || ''),
+      subscriberCount: typeof (company as any).subscriberCount === 'number' ? (company as any).subscriberCount : 0,
+      createdAt: (company as any).createdAt || null
+    };
+
+    return res.json({
+      success: true,
+      data: {
+        company: publicCompany,
+        posts,
+        media
+      }
+    });
+  } catch (error) {
+    console.error('Get company public profile error:', error);
+    return res.status(500).json({ success: false, error: 'Failed to fetch company profile' });
   }
 });
 
@@ -1252,7 +1386,6 @@ router.post('/:companyId/invites/:inviteId/resend', requireAuth, async (req, res
   try {
     const { companyId, inviteId } = req.params;
     const currentUser = (req as any).user;
-    const { ObjectId } = require('mongodb');
 
     const db = getDB();
 
@@ -1462,7 +1595,6 @@ router.delete('/:companyId/invites/:inviteId', requireAuth, async (req, res) => 
   try {
     const { companyId, inviteId } = req.params;
     const currentUser = (req as any).user;
-    const { ObjectId } = require('mongodb');
 
     const db = getDB();
 
@@ -1519,7 +1651,6 @@ router.post('/invites/:inviteId/accept', requireAuth, async (req, res) => {
   try {
     const { inviteId } = req.params;
     const currentUser = (req as any).user;
-    const { ObjectId } = require('mongodb');
 
     const db = getDB();
 
@@ -1610,7 +1741,6 @@ router.post('/invites/:inviteId/decline', requireAuth, async (req, res) => {
   try {
     const { inviteId } = req.params;
     const currentUser = (req as any).user;
-    const { ObjectId } = require('mongodb');
 
     const db = getDB();
 

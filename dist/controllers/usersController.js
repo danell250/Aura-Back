@@ -23,6 +23,7 @@ const securityLogger_1 = require("../utils/securityLogger");
 const socketHub_1 = require("../realtime/socketHub");
 const companyAccess_1 = require("../utils/companyAccess");
 const notificationsController_1 = require("./notificationsController");
+const userBadgeService_1 = require("../services/userBadgeService");
 const generateUniqueHandle = (firstName, lastName) => __awaiter(void 0, void 0, void 0, function* () {
     const db = (0, db_1.getDB)();
     const firstNameSafe = (firstName || 'user').toLowerCase().trim().replace(/\s+/g, '');
@@ -680,6 +681,38 @@ exports.usersController = {
             res.status(500).json({
                 success: false,
                 error: 'Failed to cancel connection request',
+                message: 'Internal server error'
+            });
+        }
+    }),
+    // GET /api/users/:id - Get user or company by ID
+    getUserBadges: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { id } = req.params;
+            const db = (0, db_1.getDB)();
+            const user = yield db.collection('users').findOne({ id }, { projection: { id: 1 } });
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Not found',
+                    message: `User with ID ${id} does not exist`
+                });
+            }
+            const badges = yield (0, userBadgeService_1.listUserBadges)({
+                db,
+                userId: id,
+                limit: 40,
+            });
+            return res.json({
+                success: true,
+                data: badges,
+            });
+        }
+        catch (error) {
+            console.error('Error fetching user badges:', error);
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to fetch user badges',
                 message: 'Internal server error'
             });
         }
@@ -1931,7 +1964,7 @@ exports.usersController = {
                 timestamp: nowIso
             });
             // Trigger real-time insights update
-            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id);
+            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id, 'user');
             res.json({
                 success: true,
                 data: {
@@ -2022,7 +2055,7 @@ exports.usersController = {
                 timestamp: new Date().toISOString()
             });
             // Trigger real-time insights update
-            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id);
+            (0, postsController_1.emitAuthorInsightsUpdate)(req.app, id, 'user');
             res.json({
                 success: true,
                 data: {

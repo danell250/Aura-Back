@@ -6,7 +6,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const authMiddleware_1 = require("../middleware/authMiddleware");
+const partnerAuth_1 = require("../middleware/partnerAuth");
 const jobsController_1 = require("../controllers/jobsController");
+const applicationNotesController_1 = require("../controllers/applicationNotesController");
 const securityLogger_1 = require("../utils/securityLogger");
 const router = (0, express_1.Router)();
 const jobsWriteRateLimiter = (0, express_rate_limit_1.default)({
@@ -57,9 +59,13 @@ const jobsApplyRateLimiter = (0, express_rate_limit_1.default)({
 });
 // Public company jobs feed (v1 discovery surface)
 router.get('/companies/:companyId/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listCompanyJobs);
+router.get('/partner/jobs', partnerAuth_1.partnerAuth, jobsController_1.jobsController.getJobsForSyndication);
+router.get('/companies/:companyId/job-analytics', authMiddleware_1.requireAuth, jobsController_1.jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', authMiddleware_1.requireAuth, jobsController_1.jobsController.getCompanyApplicationAttentionCount);
 router.get('/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listPublicJobs);
+router.get('/jobs/salary-insights', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getSalaryInsights);
 router.get('/jobs/slug/:jobSlug', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getJobBySlug);
+router.get('/jobs/:jobId/network-count', authMiddleware_1.requireAuth, jobsController_1.jobsController.getJobNetworkCount);
 // Public job detail
 router.get('/jobs/:jobId', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getJobById);
 // Company owner/admin job management
@@ -71,6 +77,8 @@ router.delete('/jobs/:jobId', jobsWriteRateLimiter, authMiddleware_1.requireAuth
 router.post('/jobs/:jobId/applications', jobsApplyRateLimiter, authMiddleware_1.requireAuth, jobsController_1.jobsController.createJobApplication);
 router.get('/jobs/:jobId/applications', authMiddleware_1.requireAuth, jobsController_1.jobsController.listJobApplications);
 router.get('/applications/:applicationId', authMiddleware_1.requireAuth, jobsController_1.jobsController.getJobApplicationById);
+router.get('/applications/:applicationId/notes', authMiddleware_1.requireAuth, applicationNotesController_1.applicationNotesController.listApplicationNotes);
+router.post('/applications/:applicationId/notes', authMiddleware_1.requireAuth, applicationNotesController_1.applicationNotesController.createApplicationNote);
 router.patch('/applications/:applicationId/status', authMiddleware_1.requireAuth, jobsController_1.jobsController.updateJobApplicationStatus);
 router.get('/applications/:applicationId/resume/view-url', authMiddleware_1.requireAuth, jobsController_1.jobsController.getApplicationResumeViewUrl);
 router.post('/applications/:applicationId/withdraw', authMiddleware_1.requireAuth, jobsController_1.jobsController.withdrawMyApplication);

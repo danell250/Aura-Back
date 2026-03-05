@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
+import { partnerAuth } from '../middleware/partnerAuth';
 import { jobsController } from '../controllers/jobsController';
+import { applicationNotesController } from '../controllers/applicationNotesController';
 import { logSecurityEvent } from '../utils/securityLogger';
 
 const router = Router();
@@ -58,9 +60,13 @@ const jobsApplyRateLimiter = rateLimit({
 
 // Public company jobs feed (v1 discovery surface)
 router.get('/companies/:companyId/jobs', optionalAuth, jobsController.listCompanyJobs);
+router.get('/partner/jobs', partnerAuth, jobsController.getJobsForSyndication);
+router.get('/companies/:companyId/job-analytics', requireAuth, jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', requireAuth, jobsController.getCompanyApplicationAttentionCount);
 router.get('/jobs', optionalAuth, jobsController.listPublicJobs);
+router.get('/jobs/salary-insights', optionalAuth, jobsController.getSalaryInsights);
 router.get('/jobs/slug/:jobSlug', optionalAuth, jobsController.getJobBySlug);
+router.get('/jobs/:jobId/network-count', requireAuth, jobsController.getJobNetworkCount);
 
 // Public job detail
 router.get('/jobs/:jobId', optionalAuth, jobsController.getJobById);
@@ -75,6 +81,8 @@ router.delete('/jobs/:jobId', jobsWriteRateLimiter, requireAuth, jobsController.
 router.post('/jobs/:jobId/applications', jobsApplyRateLimiter, requireAuth, jobsController.createJobApplication);
 router.get('/jobs/:jobId/applications', requireAuth, jobsController.listJobApplications);
 router.get('/applications/:applicationId', requireAuth, jobsController.getJobApplicationById);
+router.get('/applications/:applicationId/notes', requireAuth, applicationNotesController.listApplicationNotes);
+router.post('/applications/:applicationId/notes', requireAuth, applicationNotesController.createApplicationNote);
 router.patch('/applications/:applicationId/status', requireAuth, jobsController.updateJobApplicationStatus);
 router.get('/applications/:applicationId/resume/view-url', requireAuth, jobsController.getApplicationResumeViewUrl);
 router.post('/applications/:applicationId/withdraw', requireAuth, jobsController.withdrawMyApplication);

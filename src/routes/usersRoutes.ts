@@ -148,6 +148,9 @@ router.get('/:id/featured-posts', usersController.getFeaturedPosts);
 // PUT /api/users/:id/featured-posts - Update ordered featured posts for the authenticated personal profile
 router.put('/:id/featured-posts', requireAuth, requirePersonalIdentity, requireSelfParam, usersController.updateFeaturedPosts);
 
+// GET /api/users/:id/badges - Get earned profile badges
+router.get('/:id/badges', usersController.getUserBadges);
+
 // GET /api/users/:id - Get user by ID (public)
 router.get('/:id', usersController.getUserById);
 

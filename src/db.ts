@@ -133,6 +133,8 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('company_invites').createIndex({ email: 1 });
         await db.collection('company_invites').createIndex({ companyId: 1 });
         await db.collection('company_invites').createIndex({ invitedByUserId: 1, createdAt: -1 });
+        await db.collection('company_media').createIndex({ companyId: 1, createdAt: -1 });
+        await db.collection('company_media').createIndex({ companyId: 1, createdAt: -1, _id: -1 });
         console.log("✅ Company and Invite indexes initialized");
       } catch (companyIndexError) {
         console.warn("⚠️  Warning: Could not initialize company indexes:", companyIndexError);
@@ -144,6 +146,7 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('posts').createIndex({ id: 1 }, { unique: true });
         await db.collection('posts').createIndex({ timestamp: -1 });
         await db.collection('posts').createIndex({ visibility: 1 });
+        await db.collection('posts').createIndex({ ownerId: 1, visibility: 1, timestamp: -1 });
         await db.collection('posts').createIndex({ isTimeCapsule: 1, unlockDate: 1 });
         await db.collection('posts').createIndex({ hashtags: 1 });
         await db.collection('posts').createIndex({ energy: 1 });
@@ -168,6 +171,13 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('job_applications').createIndex({ companyId: 1, status: 1, createdAt: -1 });
         await db.collection('job_applications').createIndex({ applicantUserId: 1, createdAt: -1 });
         await db.collection('job_applications').createIndex({ jobId: 1, status: 1, createdAt: -1 });
+        await db.collection('application_notes').createIndex({ id: 1 }, { unique: true });
+        await db.collection('application_notes').createIndex({ applicationId: 1, createdAt: 1 });
+        await db.collection('application_notes').createIndex({ jobId: 1, createdAt: 1 });
+        await db.collection('application_notes').createIndex({ companyId: 1, createdAt: -1 });
+        await db.collection('application_notes').createIndex({ authorId: 1, createdAt: -1 });
+        await db.collection('learning_resources_cache').createIndex({ cacheKey: 1 }, { unique: true });
+        await db.collection('learning_resources_cache').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
         console.log("✅ Jobs collection indexes initialized");
       } catch (jobsIndexError) {
         console.warn("⚠️  Warning: Could not initialize jobs indexes:", jobsIndexError);
