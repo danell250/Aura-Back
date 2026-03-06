@@ -12,7 +12,7 @@ import {
   fetchPrioritizedRecommendationCandidateJobs,
 } from '../services/jobRecommendationResultService';
 import { buildJobHeatResponseFields, listJobPulseSnapshots } from '../services/jobPulseSnapshotService';
-import { toJobResponse } from './jobsController';
+import { toJobResponse } from '../services/jobResponseService';
 import { parsePositiveInt, readString } from '../utils/inputSanitizers';
 
 const USERS_COLLECTION = 'users';
@@ -102,7 +102,7 @@ const buildRecommendationPayload = async (params: {
           breakdown: entry.breakdown,
           matchTier: entry.matchTier,
         }),
-        ...buildJobHeatResponseFields(pulseSnapshotsByJobId.get(readString(entry?.job?.id, 120))),
+        ...buildJobHeatResponseFields({ snapshot: pulseSnapshotsByJobId.get(readString(entry?.job?.id, 120)) }),
       };
     }),
     groups,

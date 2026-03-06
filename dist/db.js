@@ -125,7 +125,7 @@ function connectDB() {
                         sparse: true,
                         name: 'company_handle_unique_case_insensitive'
                     });
-                    yield db.collection('company_members').createIndex({ companyId: 1, userId: 1 }, { unique: true });
+                    yield db.collection('company_members').createIndex({ companyId: 1, userId: 1 }, { unique: true, name: 'companyId_1_userId_1' });
                     yield db.collection('company_members').createIndex({ userId: 1 });
                     yield db.collection('company_invites').createIndex({ token: 1 }, { unique: true });
                     yield db.collection('company_invites').createIndex({ email: 1 });
@@ -181,6 +181,8 @@ function connectDB() {
                     yield db.collection('job_applications').createIndex({ companyId: 1, status: 1, createdAt: -1 });
                     yield db.collection('job_applications').createIndex({ applicantUserId: 1, createdAt: -1 });
                     yield db.collection('job_applications').createIndex({ jobId: 1, status: 1, createdAt: -1 });
+                    yield db.collection('job_applications').createIndex({ jobId: 1, applicantNameNormalized: 1, createdAt: -1 }, { name: 'job_application_job_name_search_idx' });
+                    yield db.collection('job_applications').createIndex({ jobId: 1, applicantEmailNormalized: 1, createdAt: -1 }, { name: 'job_application_job_email_search_idx' });
                     yield db.collection('application_notes').createIndex({ id: 1 }, { unique: true });
                     yield db.collection('application_notes').createIndex({ applicationId: 1, createdAt: 1 });
                     yield db.collection('application_notes').createIndex({ jobId: 1, createdAt: 1 });

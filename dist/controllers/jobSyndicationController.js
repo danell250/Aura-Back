@@ -12,8 +12,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.jobSyndicationController = void 0;
 const db_1 = require("../db");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
+const jobDiscoveryQueryService_1 = require("../services/jobDiscoveryQueryService");
+const jobResponseService_1 = require("../services/jobResponseService");
 const jobSyndicationService_1 = require("../services/jobSyndicationService");
-const jobsController_1 = require("./jobsController");
 const JOBS_COLLECTION = 'jobs';
 const ALLOWED_JOB_STATUSES = new Set(['open', 'closed', 'archived']);
 const OPEN_JOBS_FEED_DEFAULT_LIMIT = 50;
@@ -128,7 +129,7 @@ exports.jobSyndicationController = {
                 });
             }
             const db = (0, db_1.getDB)();
-            const querySpec = (0, jobsController_1.buildPublicJobsQuerySpec)({
+            const querySpec = (0, jobDiscoveryQueryService_1.buildPublicJobsQuerySpec)({
                 allowTextSearch: true,
                 workModelRaw,
                 employmentTypeRaw,
@@ -212,7 +213,7 @@ exports.jobSyndicationController = {
                 .sort({ publishedAt: -1, createdAt: -1 })
                 .limit(limit)
                 .toArray();
-            const feed = (0, jobSyndicationService_1.buildJobsSyndicationFeed)(jobs.map(jobsController_1.toJobResponse));
+            const feed = (0, jobSyndicationService_1.buildJobsSyndicationFeed)(jobs.map(jobResponseService_1.toJobResponse));
             res.setHeader('Content-Type', 'application/feed+json; charset=utf-8');
             return res.status(200).json(feed);
         }

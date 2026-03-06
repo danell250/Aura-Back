@@ -3,6 +3,9 @@ import crypto from 'crypto';
 import { readString } from '../utils/inputSanitizers';
 import { normalizeEmailAddress, normalizeExternalUrl } from '../utils/contactNormalization';
 import { yieldToEventLoop } from '../utils/concurrencyUtils';
+import { buildJobRecommendationPrecomputedFields } from './jobRecommendationService';
+import { registerJobMarketDemandSeedContexts } from './jobMarketDemandSeedContextRegistryService';
+import { buildDemandRoleFields, buildJobMarketDemandPrecomputedFields } from './openToWorkDemandService';
 
 const JOBS_COLLECTION = 'jobs';
 export const MAX_INTERNAL_AGGREGATED_INGEST_ITEMS = 500;
@@ -255,6 +258,31 @@ const buildAggregatedIngestMutation = (params: {
     applicationCount: params.compensation.applicationCount,
     updatedAt: params.nowIso,
   };
+  Object.assign(
+    setFields,
+    buildJobRecommendationPrecomputedFields({
+      title: params.core.title,
+      summary: params.core.summary,
+      description: params.core.description,
+      locationText: params.core.locationText,
+      tags: params.core.tags,
+      workModel: params.core.workModel,
+      salaryMin: params.compensation.salaryMin,
+      salaryMax: params.compensation.salaryMax,
+      createdAt: params.meta.createdAt,
+      publishedAt: params.meta.publishedAt,
+    }),
+  );
+  Object.assign(setFields, buildDemandRoleFields(params.core.title) || {});
+  Object.assign(
+    setFields,
+    buildJobMarketDemandPrecomputedFields({
+      createdAt: params.meta.createdAt,
+      publishedAt: params.meta.publishedAt,
+      salaryMin: params.compensation.salaryMin,
+      salaryMax: params.compensation.salaryMax,
+    }),
+  );
 
   if (params.core.originalId) {
     setFields.originalId = params.core.originalId;
@@ -452,6 +480,12 @@ export const ingestAggregatedJobsBatch = async (
   try {
     const result = await db.collection(JOBS_COLLECTION).bulkWrite(operations, { ordered: false });
     applyBulkWriteResultToStats(stats, result, operationMetaByBulkIndex);
+    void registerJobMarketDemandSeedContexts({
+      db,
+      jobs: Array.isArray(jobs) ? jobs as Array<{ locationText?: unknown; workModel?: unknown; status?: unknown }> : [],
+    }).catch((error) => {
+      console.warn('Register job market demand seed contexts error:', error);
+    });
     return stats;
   } catch (bulkError: any) {
     const partialResult = bulkError?.result;
@@ -476,6 +510,12 @@ export const ingestAggregatedJobsBatch = async (
       ? bulkError.writeConcernErrors
       : [];
     addWriteConcernErrorSample(stats, writeConcernErrors);
+    void registerJobMarketDemandSeedContexts({
+      db,
+      jobs: Array.isArray(jobs) ? jobs as Array<{ locationText?: unknown; workModel?: unknown; status?: unknown }> : [],
+    }).catch((error) => {
+      console.warn('Register job market demand seed contexts error:', error);
+    });
     console.error('Internal aggregated jobs ingest bulk write error:', bulkError);
     return stats;
   }

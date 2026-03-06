@@ -9,8 +9,14 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const partnerAuth_1 = require("../middleware/partnerAuth");
 const internalApiAuth_1 = require("../middleware/internalApiAuth");
 const jobPulseController_1 = require("../controllers/jobPulseController");
+const jobMarketDemandController_1 = require("../controllers/jobMarketDemandController");
+const jobApplicationController_1 = require("../controllers/jobApplicationController");
 const jobApplicationAccessController_1 = require("../controllers/jobApplicationAccessController");
+const jobDiscoveryController_1 = require("../controllers/jobDiscoveryController");
+const jobMatchShareController_1 = require("../controllers/jobMatchShareController");
+const jobNetworkController_1 = require("../controllers/jobNetworkController");
 const jobsController_1 = require("../controllers/jobsController");
+const jobSeoController_1 = require("../controllers/jobSeoController");
 const jobSyndicationController_1 = require("../controllers/jobSyndicationController");
 const internalJobsController_1 = require("../controllers/internalJobsController");
 const jobRecommendationsController_1 = require("../controllers/jobRecommendationsController");
@@ -155,14 +161,39 @@ const jobsPreviewRateLimiter = (0, express_rate_limit_1.default)({
         });
     },
 });
+const jobsMarketDemandRateLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+        (0, securityLogger_1.logSecurityEvent)({
+            req,
+            type: 'rate_limit_triggered',
+            route: '/jobs/market-demand',
+            metadata: {
+                key: 'jobs_market_demand_read',
+                max: 120,
+                windowMs: 60 * 1000,
+            },
+        });
+        return res.status(429).json({
+            success: false,
+            error: 'Too many requests',
+            message: 'Too many market demand requests. Please retry shortly.',
+        });
+    },
+});
 // Public company jobs feed (v1 discovery surface)
 router.post('/internal/jobs/aggregated', internalJobsIngestRateLimiter, internalApiAuth_1.internalApiAuth, internalJobsController_1.internalJobsController.ingestAggregatedJobs);
 router.get('/companies/:companyId/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listCompanyJobs);
 router.get('/partner/jobs', partnerAuth_1.partnerAuth, jobSyndicationController_1.jobSyndicationController.getJobsForSyndication);
 router.get('/companies/:companyId/job-analytics', authMiddleware_1.requireAuth, jobsController_1.jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', authMiddleware_1.requireAuth, jobApplicationAccessController_1.jobApplicationAccessController.getCompanyApplicationAttentionCount);
-router.get('/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listPublicJobs);
+router.get('/jobs', authMiddleware_1.optionalAuth, jobDiscoveryController_1.jobDiscoveryController.listPublicJobs);
 router.get('/jobs/hot', jobsPulseRateLimiter, authMiddleware_1.optionalAuth, jobsController_1.jobsController.listHotJobs);
+router.get('/jobs/market-demand', jobsMarketDemandRateLimiter, authMiddleware_1.optionalAuth, jobMarketDemandController_1.jobMarketDemandController.getJobMarketDemand);
+router.get('/jobs/sitemap.xml', jobSeoController_1.jobSeoController.getJobsSitemap);
 router.get('/jobs/for-you', jobsPreviewRateLimiter, authMiddleware_1.optionalAuth, jobRecommendationsController_1.jobRecommendationsController.listPreviewJobs);
 router.get('/jobs/pulse', jobsPulseRateLimiter, authMiddleware_1.optionalAuth, jobPulseController_1.jobPulseController.getJobsPulse);
 router.options('/jobs/open-feed', (_req, res) => {
@@ -173,10 +204,10 @@ router.options('/jobs/open-feed', (_req, res) => {
 });
 router.get('/jobs/open-feed', openJobsFeedRateLimiter, jobSyndicationController_1.jobSyndicationController.getOpenJobsFeed);
 router.get('/jobs/recommended', authMiddleware_1.requireAuth, jobRecommendationsController_1.jobRecommendationsController.listRecommendedJobs);
-router.get('/jobs/matches/:handle', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getPublicJobMatchesByHandle);
-router.get('/jobs/salary-insights', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getSalaryInsights);
+router.get('/jobs/matches/:handle', authMiddleware_1.optionalAuth, jobMatchShareController_1.jobMatchShareController.getPublicJobMatchesByHandle);
+router.get('/jobs/salary-insights', authMiddleware_1.optionalAuth, jobDiscoveryController_1.jobDiscoveryController.getSalaryInsights);
 router.get('/jobs/slug/:jobSlug', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getJobBySlug);
-router.get('/jobs/:jobId/network-count', authMiddleware_1.requireAuth, jobsController_1.jobsController.getJobNetworkCount);
+router.get('/jobs/:jobId/network-count', authMiddleware_1.requireAuth, jobNetworkController_1.jobNetworkController.getJobNetworkCount);
 // Public job detail
 router.get('/jobs/:jobId', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getJobById);
 // Company owner/admin job management
@@ -185,12 +216,12 @@ router.put('/jobs/:jobId', jobsWriteRateLimiter, authMiddleware_1.requireAuth, j
 router.patch('/jobs/:jobId/status', jobsWriteRateLimiter, authMiddleware_1.requireAuth, jobsController_1.jobsController.updateJobStatus);
 router.delete('/jobs/:jobId', jobsWriteRateLimiter, authMiddleware_1.requireAuth, jobsController_1.jobsController.deleteJob);
 // Applications
-router.post('/jobs/:jobId/applications', jobsApplyRateLimiter, authMiddleware_1.requireAuth, jobsController_1.jobsController.createJobApplication);
-router.get('/jobs/:jobId/applications', authMiddleware_1.requireAuth, jobsController_1.jobsController.listJobApplications);
+router.post('/jobs/:jobId/applications', jobsApplyRateLimiter, authMiddleware_1.requireAuth, jobApplicationController_1.jobApplicationController.createJobApplication);
+router.get('/jobs/:jobId/applications', authMiddleware_1.requireAuth, jobApplicationController_1.jobApplicationController.listJobApplications);
 router.get('/applications/:applicationId', authMiddleware_1.requireAuth, jobApplicationAccessController_1.jobApplicationAccessController.getJobApplicationById);
 router.get('/applications/:applicationId/notes', authMiddleware_1.requireAuth, applicationNotesController_1.applicationNotesController.listApplicationNotes);
 router.post('/applications/:applicationId/notes', authMiddleware_1.requireAuth, applicationNotesController_1.applicationNotesController.createApplicationNote);
-router.patch('/applications/:applicationId/status', authMiddleware_1.requireAuth, jobsController_1.jobsController.updateJobApplicationStatus);
+router.patch('/applications/:applicationId/status', authMiddleware_1.requireAuth, jobApplicationController_1.jobApplicationController.updateJobApplicationStatus);
 router.get('/applications/:applicationId/resume/view-url', authMiddleware_1.requireAuth, jobApplicationAccessController_1.jobApplicationAccessController.getApplicationResumeViewUrl);
 router.post('/applications/:applicationId/withdraw', authMiddleware_1.requireAuth, jobApplicationAccessController_1.jobApplicationAccessController.withdrawMyApplication);
 router.post('/applications/review-portal/resolve', authMiddleware_1.requireAuth, jobApplicationAccessController_1.jobApplicationAccessController.resolveApplicationReviewPortalToken);

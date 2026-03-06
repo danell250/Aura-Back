@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
 import { getDB, isDBConnected } from '../db';
 import { parsePositiveInt, readString } from '../utils/inputSanitizers';
+import { buildPublicJobsQuerySpec } from '../services/jobDiscoveryQueryService';
+import { toJobResponse } from '../services/jobResponseService';
 import { buildJobsSyndicationFeed } from '../services/jobSyndicationService';
-import { buildPublicJobsQuerySpec, toJobResponse } from './jobsController';
 
 const JOBS_COLLECTION = 'jobs';
 const ALLOWED_JOB_STATUSES = new Set(['open', 'closed', 'archived']);

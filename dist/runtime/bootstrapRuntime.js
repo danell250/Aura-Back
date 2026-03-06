@@ -66,9 +66,6 @@ const waitForDatabaseRuntimeInitialization = (...args_1) => __awaiter(void 0, [.
     }
     return (0, db_1.isDBConnected)();
 });
-const waitForDatabaseRuntimeReadyOrFailure = () => __awaiter(void 0, void 0, void 0, function* () {
-    return waitForDatabaseRuntimeInitialization(15000);
-});
 const registerRoomMembershipHandlers = ({ socket, user, identityRooms, identityRoom, joinIdentity, }) => {
     socket.on('join_user_room', (userId, ack) => {
         if (!(user === null || user === void 0 ? void 0 : user.id)) {
@@ -613,10 +610,7 @@ function initSocketRuntime(configOrServer, legacyApp, legacyAllowedOrigins) {
     io.use((socket, next) => __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c;
         if (!(0, db_1.isDBConnected)()) {
-            const databaseReady = yield waitForDatabaseRuntimeReadyOrFailure();
-            if (!databaseReady) {
-                return next(new Error('Service unavailable: database is not ready'));
-            }
+            return next(new Error('Service unavailable: database is not ready'));
         }
         let token = (_a = socket.handshake.auth) === null || _a === void 0 ? void 0 : _a.token;
         const cookieHeader = (_c = (_b = socket.handshake) === null || _b === void 0 ? void 0 : _b.headers) === null || _c === void 0 ? void 0 : _c.cookie;
@@ -673,10 +667,16 @@ const startRecurringRuntimeJobs = () => {
     (0, recurringJobs_1.startRuntimeRecurringJobs)();
 };
 exports.startRecurringRuntimeJobs = startRecurringRuntimeJobs;
-const registerGracefulShutdownHandlers = (server) => {
+const registerGracefulShutdownHandlers = (server, beforeExit) => {
     const gracefulShutdown = (signal) => {
         console.log(`\\n🔄 Received ${signal}. Shutting down gracefully...`);
         server.close(() => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                yield (beforeExit === null || beforeExit === void 0 ? void 0 : beforeExit());
+            }
+            catch (error) {
+                console.error('Graceful shutdown pre-exit task failed:', error);
+            }
             console.log('✅ HTTP server closed');
             process.exit(0);
         }));

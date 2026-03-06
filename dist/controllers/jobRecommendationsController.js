@@ -15,7 +15,7 @@ const jobRecommendationService_1 = require("../services/jobRecommendationService
 const jobRecommendationQueryBuilder_1 = require("../services/jobRecommendationQueryBuilder");
 const jobRecommendationResultService_1 = require("../services/jobRecommendationResultService");
 const jobPulseSnapshotService_1 = require("../services/jobPulseSnapshotService");
-const jobsController_1 = require("./jobsController");
+const jobResponseService_1 = require("../services/jobResponseService");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const USERS_COLLECTION = 'users';
 const normalizePreviewSkills = (value) => {
@@ -32,7 +32,7 @@ const normalizePreviewSkills = (value) => {
         .filter((item) => item.length > 0)
         .slice(0, 20);
 };
-const toRecommendationResponseEntry = (job, recommendation) => (Object.assign(Object.assign({}, (0, jobsController_1.toJobResponse)(job)), { recommendationScore: recommendation.score, recommendationReasons: recommendation.reasons.slice(0, 3), matchedSkills: recommendation.matchedSkills.slice(0, 5), recommendationBreakdown: recommendation.breakdown, matchTier: recommendation.matchTier }));
+const toRecommendationResponseEntry = (job, recommendation) => (Object.assign(Object.assign({}, (0, jobResponseService_1.toJobResponse)(job)), { recommendationScore: recommendation.score, recommendationReasons: recommendation.reasons.slice(0, 3), matchedSkills: recommendation.matchedSkills.slice(0, 5), recommendationBreakdown: recommendation.breakdown, matchTier: recommendation.matchTier }));
 const buildRecommendationPayload = (params) => __awaiter(void 0, void 0, void 0, function* () {
     if (params.candidateJobs.length === 0) {
         return {
@@ -61,7 +61,7 @@ const buildRecommendationPayload = (params) => __awaiter(void 0, void 0, void 0,
                 matchedSkills: entry.matchedSkills,
                 breakdown: entry.breakdown,
                 matchTier: entry.matchTier,
-            })), (0, jobPulseSnapshotService_1.buildJobHeatResponseFields)(pulseSnapshotsByJobId.get((0, inputSanitizers_1.readString)((_a = entry === null || entry === void 0 ? void 0 : entry.job) === null || _a === void 0 ? void 0 : _a.id, 120))));
+            })), (0, jobPulseSnapshotService_1.buildJobHeatResponseFields)({ snapshot: pulseSnapshotsByJobId.get((0, inputSanitizers_1.readString)((_a = entry === null || entry === void 0 ? void 0 : entry.job) === null || _a === void 0 ? void 0 : _a.id, 120)) }));
         }),
         groups,
         pagination: {

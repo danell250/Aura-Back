@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const usersController_1 = require("../controllers/usersController");
+const userDashboardController_1 = require("../controllers/userDashboardController");
 const userOpportunityController_1 = require("../controllers/userOpportunityController");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const uploadMiddleware_1 = require("../middleware/uploadMiddleware");
@@ -68,7 +69,7 @@ console.log('Users routes loaded successfully');
 // GET /api/users - Get all users (public)
 router.get('/', usersController_1.usersController.getAllUsers);
 // GET /api/users/me/dashboard - Get creator dashboard data
-router.get('/me/dashboard', authMiddleware_1.requireAuth, requirePersonalIdentity, usersController_1.usersController.getMyDashboard);
+router.get('/me/dashboard', authMiddleware_1.requireAuth, requirePersonalIdentity, userDashboardController_1.userDashboardController.getMyDashboard);
 // GET /api/users/search - Search users (public)
 router.get('/search', usersController_1.usersController.searchUsers);
 // GET /api/users/handle/:handle - Get user by handle (public)

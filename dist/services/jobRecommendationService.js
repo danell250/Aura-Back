@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.buildJobRecommendationScore = exports.buildRecommendationCandidateCriteria = exports.buildRecommendationProfile = exports.buildJobRecommendationPrecomputedFields = exports.resolveRecommendationMatchTier = exports.MATCH_TIER_GOOD_MIN_SCORE = exports.MATCH_TIER_BEST_MIN_SCORE = void 0;
+exports.buildJobRecommendationScore = exports.buildRecommendationCandidateCriteria = exports.buildRecommendationProfile = exports.buildJobRecommendationPrecomputedFields = exports.tokenizeRecommendationText = exports.resolveRecommendationMatchTier = exports.MATCH_TIER_GOOD_MIN_SCORE = exports.MATCH_TIER_BEST_MIN_SCORE = void 0;
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const RECOMMENDATION_WEIGHTS = {
     skillPerMatch: 16,
@@ -53,6 +53,7 @@ const tokenizeRecommendationText = (value, maxTokens = 120) => {
         .filter((token) => token.length > 0)
         .slice(0, maxTokens);
 };
+exports.tokenizeRecommendationText = tokenizeRecommendationText;
 const readRecommendationSkillTokens = (value, maxItems = 80) => {
     if (!Array.isArray(value))
         return [];
@@ -229,13 +230,13 @@ const buildRecommendationLocationTokens = (job) => {
     const storedLocationTokens = readRecommendationTokenArray(job === null || job === void 0 ? void 0 : job.recommendationLocationTokens, 40);
     return new Set(storedLocationTokens.length > 0
         ? storedLocationTokens
-        : tokenizeRecommendationText(job === null || job === void 0 ? void 0 : job.locationText, 20).filter((token) => token.length >= 3));
+        : (0, exports.tokenizeRecommendationText)(job === null || job === void 0 ? void 0 : job.locationText, 20).filter((token) => token.length >= 3));
 };
 const buildRecommendationSemanticTokens = (job) => {
     const storedSemanticTokens = readRecommendationTokenArray(job === null || job === void 0 ? void 0 : job.recommendationSemanticTokens, 320);
     return new Set(storedSemanticTokens.length > 0
         ? storedSemanticTokens
-        : tokenizeRecommendationText(`${(0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.title, 120)} ${(0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.summary, 220)} ${(0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.description, 1200)}`, 260).filter((token) => token.length >= 3));
+        : (0, exports.tokenizeRecommendationText)(`${(0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.title, 120)} ${(0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.summary, 220)} ${(0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.description, 1200)}`, 260).filter((token) => token.length >= 3));
 };
 const resolveRecommendationPublishedTs = (job) => {
     const storedPublishedTs = Number(job === null || job === void 0 ? void 0 : job.recommendationPublishedTs);
@@ -342,11 +343,11 @@ const buildJobRecommendationPrecomputedFields = (source) => {
             continue;
         recommendationSkillLabelByToken[normalized] = label;
     }
-    const recommendationLocationTokens = tokenizeRecommendationText(source === null || source === void 0 ? void 0 : source.locationText, 20)
+    const recommendationLocationTokens = (0, exports.tokenizeRecommendationText)(source === null || source === void 0 ? void 0 : source.locationText, 20)
         .filter((token) => token.length >= 3)
         .slice(0, 40);
     const semanticText = `${(0, inputSanitizers_1.readString)(source === null || source === void 0 ? void 0 : source.title, 120)} ${(0, inputSanitizers_1.readString)(source === null || source === void 0 ? void 0 : source.summary, 220)} ${(0, inputSanitizers_1.readString)(source === null || source === void 0 ? void 0 : source.description, 1200)}`;
-    const recommendationSemanticTokens = tokenizeRecommendationText(semanticText, 260)
+    const recommendationSemanticTokens = (0, exports.tokenizeRecommendationText)(semanticText, 260)
         .filter((token) => token.length >= 3)
         .slice(0, 320);
     const publishedAtRaw = (0, inputSanitizers_1.readString)(source === null || source === void 0 ? void 0 : source.publishedAt, 80) || (0, inputSanitizers_1.readString)(source === null || source === void 0 ? void 0 : source.createdAt, 80);
@@ -374,15 +375,15 @@ const buildRecommendationProfile = (user) => {
         ...readRecommendationSkillTokens(user === null || user === void 0 ? void 0 : user.skills, 80),
         ...readRecommendationSkillTokens(user === null || user === void 0 ? void 0 : user.profileSkills, 80),
     ]);
-    const roleTokens = new Set(tokenizeRecommendationText((user === null || user === void 0 ? void 0 : user.title)
+    const roleTokens = new Set((0, exports.tokenizeRecommendationText)((user === null || user === void 0 ? void 0 : user.title)
         || (user === null || user === void 0 ? void 0 : user.role)
         || (user === null || user === void 0 ? void 0 : user.desiredRole)
         || (user === null || user === void 0 ? void 0 : user.jobTitle), 20).filter((token) => token.length >= 3));
     const locationTokens = new Set([
-        ...tokenizeRecommendationText(user === null || user === void 0 ? void 0 : user.location, 20).filter((token) => token.length >= 3),
-        ...tokenizeRecommendationText(user === null || user === void 0 ? void 0 : user.country, 8).filter((token) => token.length >= 3),
+        ...(0, exports.tokenizeRecommendationText)(user === null || user === void 0 ? void 0 : user.location, 20).filter((token) => token.length >= 3),
+        ...(0, exports.tokenizeRecommendationText)(user === null || user === void 0 ? void 0 : user.country, 8).filter((token) => token.length >= 3),
     ]);
-    const industryTokens = new Set(tokenizeRecommendationText(user === null || user === void 0 ? void 0 : user.industry, 20).filter((token) => token.length >= 3));
+    const industryTokens = new Set((0, exports.tokenizeRecommendationText)(user === null || user === void 0 ? void 0 : user.industry, 20).filter((token) => token.length >= 3));
     const preferredWorkModels = readPreferredWorkModels(user);
     const experienceLevel = resolveExperienceLevel(user);
     const profile = {

@@ -16,6 +16,13 @@ export type OpenToWorkDemandJobSnapshot = {
   publishedAt?: unknown;
 };
 
+type JobMarketDemandPrecomputeSource = {
+  publishedAt?: unknown;
+  createdAt?: unknown;
+  salaryMin?: unknown;
+  salaryMax?: unknown;
+};
+
 const DEMAND_LABEL_CACHE_MAX_KEYS = 600;
 const PROFILE_VIEW_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const demandLabelCache = new Map<string, { roleFamily: string; label: string } | null>();
@@ -66,7 +73,13 @@ const resolveTimestampMs = (value: unknown): number => {
   return 0;
 };
 
-const normalizeDemandLabel = (rawTitle: unknown): { roleFamily: string; label: string } | null => {
+const resolveNonNegativeNumber = (value: unknown): number | null => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return numeric;
+};
+
+export const normalizeDemandRoleFamily = (rawTitle: unknown): { roleFamily: string; label: string } | null => {
   const normalized = readString(rawTitle, 160).toLowerCase();
   if (!normalized) return null;
 
@@ -107,12 +120,43 @@ const normalizeDemandLabel = (rawTitle: unknown): { roleFamily: string; label: s
   return result;
 };
 
+export const buildDemandRoleFields = (rawTitle: unknown): { demandRoleFamily: string; demandRoleLabel: string } | null => {
+  const normalized = normalizeDemandRoleFamily(rawTitle);
+  if (!normalized) return null;
+  return {
+    demandRoleFamily: normalized.roleFamily,
+    demandRoleLabel: normalized.label,
+  };
+};
+
+export const buildJobMarketDemandPrecomputedFields = (
+  source: JobMarketDemandPrecomputeSource,
+): { marketDemandFreshnessTs: number; marketDemandSalaryValue: number | null } => {
+  const freshnessTs = resolveTimestampMs(source?.publishedAt) || resolveTimestampMs(source?.createdAt);
+  const salaryMin = resolveNonNegativeNumber(source?.salaryMin);
+  const salaryMax = resolveNonNegativeNumber(source?.salaryMax);
+
+  let marketDemandSalaryValue: number | null = null;
+  if (salaryMin != null && salaryMax != null) {
+    marketDemandSalaryValue = Math.round((salaryMin + salaryMax) / 2);
+  } else if (salaryMin != null) {
+    marketDemandSalaryValue = Math.round(salaryMin);
+  } else if (salaryMax != null) {
+    marketDemandSalaryValue = Math.round(salaryMax);
+  }
+
+  return {
+    marketDemandFreshnessTs: freshnessTs > 0 ? freshnessTs : 0,
+    marketDemandSalaryValue,
+  };
+};
+
 export const computeDemandSignals = (jobs: OpenToWorkDemandJobSnapshot[]): OpenToWorkDemandSignal[] => {
   const freshThresholdMs = Date.now() - PROFILE_VIEW_WINDOW_MS;
   const grouped = new Map<string, { roleFamily: string; label: string; activeJobs: number; freshJobs7d: number }>();
 
   for (const job of jobs) {
-    const normalized = normalizeDemandLabel(job?.title);
+    const normalized = normalizeDemandRoleFamily(job?.title);
     if (!normalized) continue;
 
     const existing = grouped.get(normalized.roleFamily) || {

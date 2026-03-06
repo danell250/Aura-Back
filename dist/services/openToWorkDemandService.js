@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.computeDemandSignals = void 0;
+exports.computeDemandSignals = exports.buildJobMarketDemandPrecomputedFields = exports.buildDemandRoleFields = exports.normalizeDemandRoleFamily = void 0;
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const DEMAND_LABEL_CACHE_MAX_KEYS = 600;
 const PROFILE_VIEW_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -47,7 +47,13 @@ const resolveTimestampMs = (value) => {
     }
     return 0;
 };
-const normalizeDemandLabel = (rawTitle) => {
+const resolveNonNegativeNumber = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0)
+        return null;
+    return numeric;
+};
+const normalizeDemandRoleFamily = (rawTitle) => {
     const normalized = (0, inputSanitizers_1.readString)(rawTitle, 160).toLowerCase();
     if (!normalized)
         return null;
@@ -83,11 +89,42 @@ const normalizeDemandLabel = (rawTitle) => {
     storeDemandLabelCache(normalized, result);
     return result;
 };
+exports.normalizeDemandRoleFamily = normalizeDemandRoleFamily;
+const buildDemandRoleFields = (rawTitle) => {
+    const normalized = (0, exports.normalizeDemandRoleFamily)(rawTitle);
+    if (!normalized)
+        return null;
+    return {
+        demandRoleFamily: normalized.roleFamily,
+        demandRoleLabel: normalized.label,
+    };
+};
+exports.buildDemandRoleFields = buildDemandRoleFields;
+const buildJobMarketDemandPrecomputedFields = (source) => {
+    const freshnessTs = resolveTimestampMs(source === null || source === void 0 ? void 0 : source.publishedAt) || resolveTimestampMs(source === null || source === void 0 ? void 0 : source.createdAt);
+    const salaryMin = resolveNonNegativeNumber(source === null || source === void 0 ? void 0 : source.salaryMin);
+    const salaryMax = resolveNonNegativeNumber(source === null || source === void 0 ? void 0 : source.salaryMax);
+    let marketDemandSalaryValue = null;
+    if (salaryMin != null && salaryMax != null) {
+        marketDemandSalaryValue = Math.round((salaryMin + salaryMax) / 2);
+    }
+    else if (salaryMin != null) {
+        marketDemandSalaryValue = Math.round(salaryMin);
+    }
+    else if (salaryMax != null) {
+        marketDemandSalaryValue = Math.round(salaryMax);
+    }
+    return {
+        marketDemandFreshnessTs: freshnessTs > 0 ? freshnessTs : 0,
+        marketDemandSalaryValue,
+    };
+};
+exports.buildJobMarketDemandPrecomputedFields = buildJobMarketDemandPrecomputedFields;
 const computeDemandSignals = (jobs) => {
     const freshThresholdMs = Date.now() - PROFILE_VIEW_WINDOW_MS;
     const grouped = new Map();
     for (const job of jobs) {
-        const normalized = normalizeDemandLabel(job === null || job === void 0 ? void 0 : job.title);
+        const normalized = (0, exports.normalizeDemandRoleFamily)(job === null || job === void 0 ? void 0 : job.title);
         if (!normalized)
             continue;
         const existing = grouped.get(normalized.roleFamily) || {

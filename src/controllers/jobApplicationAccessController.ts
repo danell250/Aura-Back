@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
 import { getDB, isDBConnected } from '../db';
 import {
-  getPagination,
   hashSecureToken,
+  ALLOWED_APPLICATION_STATUSES,
   toApplicationResponse,
-  toJobResponse,
-} from './jobsController';
+} from '../services/jobApplicationResponseService';
+import { getPagination } from '../services/jobDiscoveryQueryService';
+import { listApplicantJobApplications } from '../services/jobApplicationListService';
 import {
   canReadJobApplication,
   resolveOwnerAdminCompanyAccess,
@@ -18,8 +19,7 @@ import { resolveIdentityActor } from '../utils/identityUtils';
 const JOBS_COLLECTION = 'jobs';
 const JOB_APPLICATIONS_COLLECTION = 'job_applications';
 const JOB_APPLICATION_REVIEW_LINKS_COLLECTION = 'job_application_review_links';
-const COMPANIES_COLLECTION = 'companies';
-const ALLOWED_APPLICATION_STATUSES = new Set(['submitted', 'in_review', 'shortlisted', 'rejected', 'hired', 'withdrawn']);
+const WITHDRAWABLE_APPLICATION_STATUSES = new Set(['submitted', 'in_review']);
 
 export const jobApplicationAccessController = {
   // GET /api/applications/:applicationId
@@ -36,34 +36,22 @@ export const jobApplicationAccessController = {
 
       const { applicationId } = req.params;
       const db = getDB();
-      const applicantApplication = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({
-        id: applicationId,
-        applicantUserId: currentUserId,
-      });
-      if (applicantApplication) {
-        return res.json({ success: true, data: toApplicationResponse(applicantApplication) });
+      const application = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
+      if (!application) {
+        return res.status(404).json({ success: false, error: 'Application not found' });
       }
 
-      const companyProbe = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne(
-        { id: applicationId },
-        { projection: { companyId: 1 } },
-      );
-      const companyId = readString(companyProbe?.companyId, 120);
+      if (String(application.applicantUserId || '') === currentUserId) {
+        return res.json({ success: true, data: toApplicationResponse(application) });
+      }
+
+      const companyId = readString(application?.companyId, 120);
       if (!companyId) {
         return res.status(404).json({ success: false, error: 'Application not found' });
       }
-
       const access = await resolveOwnerAdminCompanyAccess(companyId, currentUserId);
       if (!access.allowed) {
-        return res.status(404).json({ success: false, error: 'Application not found' });
-      }
-
-      const application = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({
-        id: applicationId,
-        companyId,
-      });
-      if (!application) {
-        return res.status(404).json({ success: false, error: 'Application not found' });
+        return res.status(403).json({ success: false, error: access.error || 'Unauthorized' });
       }
 
       return res.json({ success: true, data: toApplicationResponse(application) });
@@ -161,22 +149,28 @@ export const jobApplicationAccessController = {
         return res.status(404).json({ success: false, error: 'Application for this review link was not found' });
       }
 
+      const recipientUserId = readString((link as any)?.recipientUserId, 120);
+      if (recipientUserId && recipientUserId !== currentUserId) {
+        return res.status(403).json({ success: false, error: 'This review link is not assigned to your account' });
+      }
+
       const companyId = readString(application.companyId, 120);
       const linkedCompanyId = readString(link.companyId, 120);
       if (!companyId || (linkedCompanyId && linkedCompanyId !== companyId)) {
         return res.status(403).json({ success: false, error: 'This review link is no longer valid' });
       }
-      const access = await resolveOwnerAdminCompanyAccess(companyId, currentUserId);
-      if (!access.allowed) {
-        return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
-      }
-
       const jobId = readString(application.jobId, 120);
       const linkedJobId = readString(link.jobId, 120);
       if (!jobId || (linkedJobId && linkedJobId !== jobId)) {
         return res.status(403).json({ success: false, error: 'This review link is no longer valid' });
       }
-      const job = await db.collection(JOBS_COLLECTION).findOne({ id: jobId });
+      const [access, job] = await Promise.all([
+        resolveOwnerAdminCompanyAccess(companyId, currentUserId),
+        db.collection(JOBS_COLLECTION).findOne({ id: jobId }),
+      ]);
+      if (!access.allowed) {
+        return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
+      }
 
       const nowIso = new Date().toISOString();
       await db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).updateOne(
@@ -307,65 +301,17 @@ export const jobApplicationAccessController = {
       }
 
       const db = getDB();
-      const filter: Record<string, unknown> = {
+      const { items, total } = await listApplicantJobApplications({
+        db,
         applicantUserId: currentUserId,
-      };
-      if (status) filter.status = status;
-
-      const [items, total] = await Promise.all([
-        db.collection(JOB_APPLICATIONS_COLLECTION)
-          .find(filter)
-          .sort({ createdAt: -1 })
-          .skip(pagination.skip)
-          .limit(pagination.limit)
-          .toArray(),
-        db.collection(JOB_APPLICATIONS_COLLECTION).countDocuments(filter),
-      ]);
-
-      const jobIds = Array.from(
-        new Set(
-          items
-            .map((item: any) => String(item?.jobId || '').trim())
-            .filter((id: string) => id.length > 0),
-        ),
-      );
-      const jobs = await db.collection(JOBS_COLLECTION).find({ id: { $in: jobIds } }).toArray();
-      const jobsById = new Map<string, any>(jobs.map((job: any) => [String(job.id), job]));
-
-      const companyIds = Array.from(
-        new Set(
-          jobs
-            .map((job: any) => String(job?.companyId || '').trim())
-            .filter((id: string) => id.length > 0),
-        ),
-      );
-      const companies = await db.collection(COMPANIES_COLLECTION)
-        .find({ id: { $in: companyIds }, legacyArchived: { $ne: true } })
-        .project({ id: 1, name: 1, handle: 1, avatar: 1, avatarType: 1 })
-        .toArray();
-      const companiesById = new Map<string, any>(companies.map((company: any) => [String(company.id), company]));
-
-      const data = items.map((application: any) => {
-        const job = jobsById.get(String(application.jobId || ''));
-        const company = companiesById.get(String(job?.companyId || ''));
-        return {
-          ...toApplicationResponse(application),
-          job: job ? toJobResponse(job) : null,
-          company: company
-            ? {
-                id: String(company.id || ''),
-                name: String(company.name || ''),
-                handle: String(company.handle || ''),
-                avatar: String(company.avatar || ''),
-                avatarType: String(company.avatarType || 'image'),
-              }
-            : null,
-        };
+        status: status || undefined,
+        skip: pagination.skip,
+        limit: pagination.limit,
       });
 
       return res.json({
         success: true,
-        data,
+        data: items,
         pagination: {
           page: pagination.page,
           limit: pagination.limit,
@@ -402,10 +348,38 @@ export const jobApplicationAccessController = {
         return res.status(403).json({ success: false, error: 'Only the applicant can withdraw this application' });
       }
 
+      const currentStatus = readString(application.status, 40).toLowerCase();
+      if (!WITHDRAWABLE_APPLICATION_STATUSES.has(currentStatus)) {
+        return res.status(409).json({
+          success: false,
+          error: 'This application can no longer be withdrawn',
+        });
+      }
+
+      const jobId = readString(application.jobId, 120);
+      const companyId = readString(application.companyId, 120);
+      const job = await db.collection(JOBS_COLLECTION).findOne(
+        { id: jobId },
+        { projection: { companyId: 1, status: 1 } },
+      );
+      if (!job) {
+        return res.status(404).json({ success: false, error: 'Job not found for this application' });
+      }
+      if (readString(job.companyId, 120) !== companyId) {
+        return res.status(403).json({ success: false, error: 'Application company context is invalid' });
+      }
+      if (readString(job.status, 40).toLowerCase() === 'archived') {
+        return res.status(409).json({ success: false, error: 'This application can no longer be withdrawn' });
+      }
+
       const nowIso = new Date().toISOString();
       const nowDate = new Date(nowIso);
-      await db.collection(JOB_APPLICATIONS_COLLECTION).updateOne(
-        { id: applicationId },
+      const updateResult = await db.collection(JOB_APPLICATIONS_COLLECTION).updateOne(
+        {
+          id: applicationId,
+          applicantUserId: currentUserId,
+          status: { $in: Array.from(WITHDRAWABLE_APPLICATION_STATUSES) },
+        },
         {
           $set: {
             status: 'withdrawn',
@@ -415,7 +389,13 @@ export const jobApplicationAccessController = {
           },
         },
       );
-      invalidateCompanyJobAnalyticsCache(String(application.companyId || ''));
+      if (!updateResult.matchedCount) {
+        return res.status(409).json({
+          success: false,
+          error: 'This application can no longer be withdrawn',
+        });
+      }
+      invalidateCompanyJobAnalyticsCache(companyId);
 
       const updated = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
       return res.json({ success: true, data: toApplicationResponse(updated) });

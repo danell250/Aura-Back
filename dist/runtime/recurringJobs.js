@@ -13,8 +13,15 @@ exports.startRuntimeRecurringJobs = void 0;
 const db_1 = require("../db");
 const trustService_1 = require("../services/trustService");
 const notificationsController_1 = require("../controllers/notificationsController");
+const jobMarketDemandSnapshotService_1 = require("../services/jobMarketDemandSnapshotService");
 const reverseJobMatchDigestService_1 = require("../services/reverseJobMatchDigestService");
+const jobSeoSitemapService_1 = require("../services/jobSeoSitemapService");
+const runtimeRecurringTaskService_1 = require("../services/runtimeRecurringTaskService");
 const NOTIFICATION_BATCH_SIZE = 25;
+const JOB_MARKET_DEMAND_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const JOBS_SITEMAP_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const JOB_MARKET_DEMAND_SNAPSHOT_LOCK_TTL_MS = 90 * 60 * 1000;
+const JOBS_SITEMAP_REFRESH_LOCK_TTL_MS = 30 * 60 * 1000;
 const runInBatches = (items, batchSize, task) => __awaiter(void 0, void 0, void 0, function* () {
     for (let index = 0; index < items.length; index += batchSize) {
         const batch = items.slice(index, index + batchSize);
@@ -104,10 +111,56 @@ const startReverseJobMatchDigestJob = () => {
         }
     }), 24 * 60 * 60 * 1000);
 };
+const startJobMarketDemandSnapshotJob = () => {
+    (0, runtimeRecurringTaskService_1.startRecurringTaskRunner)({
+        intervalMs: JOB_MARKET_DEMAND_SNAPSHOT_INTERVAL_MS,
+        run: () => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                const result = yield (0, runtimeRecurringTaskService_1.runLockedRecurringTask)({
+                    jobKey: 'job-market-demand-snapshots',
+                    ttlMs: JOB_MARKET_DEMAND_SNAPSHOT_LOCK_TTL_MS,
+                    task: (db) => (0, jobMarketDemandSnapshotService_1.syncJobMarketDemandSnapshots)({ db }),
+                });
+                if (!result) {
+                    console.log('⏭️ Skipped job market demand snapshots sync (lock held by another instance)');
+                    return;
+                }
+                console.log(`🧭 Job market demand snapshots synced (${result.contexts} contexts for ${result.bucketDate})`);
+            }
+            catch (error) {
+                console.error('❌ Failed job market demand snapshot sync:', error);
+            }
+        }),
+    });
+};
+const startJobsSitemapRefreshJob = () => {
+    (0, runtimeRecurringTaskService_1.startRecurringTaskRunner)({
+        intervalMs: JOBS_SITEMAP_REFRESH_INTERVAL_MS,
+        run: () => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                const filePath = yield (0, runtimeRecurringTaskService_1.runLockedRecurringTask)({
+                    jobKey: 'jobs-sitemap-refresh',
+                    ttlMs: JOBS_SITEMAP_REFRESH_LOCK_TTL_MS,
+                    task: () => __awaiter(void 0, void 0, void 0, function* () { return (0, jobSeoSitemapService_1.refreshJobsSitemapCache)(); }),
+                });
+                if (!filePath) {
+                    console.log('⏭️ Skipped jobs sitemap cache refresh (lock held by another instance)');
+                    return;
+                }
+                console.log('🗺️ Jobs sitemap cache refreshed');
+            }
+            catch (error) {
+                console.error('❌ Failed jobs sitemap cache refresh:', error);
+            }
+        }),
+    });
+};
 const startRuntimeRecurringJobs = () => {
     startDatabaseHealthCheckJob();
     startTrustScoreRecalculationJob();
     startTimeCapsuleUnlockNotificationJob();
     startReverseJobMatchDigestJob();
+    startJobMarketDemandSnapshotJob();
+    startJobsSitemapRefreshJob();
 };
 exports.startRuntimeRecurringJobs = startRuntimeRecurringJobs;

@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { usersController } from '../controllers/usersController';
+import { userDashboardController } from '../controllers/userDashboardController';
 import { userOpportunityController } from '../controllers/userOpportunityController';
 import { requireAuth, requireAdmin } from '../middleware/authMiddleware';
 import { upload } from '../middleware/uploadMiddleware';
@@ -71,7 +72,7 @@ console.log('Users routes loaded successfully');
 router.get('/', usersController.getAllUsers);
 
 // GET /api/users/me/dashboard - Get creator dashboard data
-router.get('/me/dashboard', requireAuth, requirePersonalIdentity, usersController.getMyDashboard);
+router.get('/me/dashboard', requireAuth, requirePersonalIdentity, userDashboardController.getMyDashboard);
 
 // GET /api/users/search - Search users (public)
 router.get('/search', usersController.searchUsers);

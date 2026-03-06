@@ -720,17 +720,20 @@ const listJobPulseSnapshots = (params) => __awaiter(void 0, void 0, void 0, func
     return normalizedSnapshots;
 });
 exports.listJobPulseSnapshots = listJobPulseSnapshots;
-const buildJobHeatResponseFields = (snapshot) => ({
-    sourceType: (snapshot === null || snapshot === void 0 ? void 0 : snapshot.identity.sourceType) === 'aura' ? 'aura' : 'aggregated',
-    canDisplayAuraApplicants: Boolean(snapshot === null || snapshot === void 0 ? void 0 : snapshot.identity.canDisplayAuraApplicants),
-    heatScore: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.scores.heatScore)) ? Math.max(0, Math.round(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.scores.heatScore))) : 0,
-    heatLabel: (snapshot === null || snapshot === void 0 ? void 0 : snapshot.scores.heatLabel) || 'low',
-    applicationsLast2h: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.applicationsLast2h)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.applicationsLast2h))) : 0,
-    applicationsToday: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.applicationsToday)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.applicationsToday))) : 0,
-    viewsLast1h: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.viewsLast1h)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.viewsLast1h))) : 0,
-    savesToday: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.savesToday)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.savesToday))) : 0,
-    auraApplicationCount: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.auraApplicationCount)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.auraApplicationCount))) : 0,
-    auraViewCount: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.auraViewCount)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.auraViewCount))) : 0,
-    lastActivityAt: (0, inputSanitizers_1.readString)(snapshot === null || snapshot === void 0 ? void 0 : snapshot.timing.lastActivityAt, 80) || null,
-});
+const buildJobHeatResponseFields = (params = {}) => {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t;
+    return ({
+        sourceType: ((_a = params.snapshot) === null || _a === void 0 ? void 0 : _a.identity.sourceType) === 'aura' ? 'aura' : 'aggregated',
+        canDisplayAuraApplicants: Boolean((_b = params.snapshot) === null || _b === void 0 ? void 0 : _b.identity.canDisplayAuraApplicants),
+        heatScore: Number.isFinite(Number((_c = params.snapshot) === null || _c === void 0 ? void 0 : _c.scores.heatScore)) ? Math.max(0, Math.round(Number((_d = params.snapshot) === null || _d === void 0 ? void 0 : _d.scores.heatScore))) : 0,
+        heatLabel: ((_e = params.snapshot) === null || _e === void 0 ? void 0 : _e.scores.heatLabel) || 'low',
+        applicationsLast2h: Number.isFinite(Number((_f = params.snapshot) === null || _f === void 0 ? void 0 : _f.metrics.applicationsLast2h)) ? Math.max(0, Math.floor(Number((_g = params.snapshot) === null || _g === void 0 ? void 0 : _g.metrics.applicationsLast2h))) : 0,
+        applicationsToday: Number.isFinite(Number((_h = params.snapshot) === null || _h === void 0 ? void 0 : _h.metrics.applicationsToday)) ? Math.max(0, Math.floor(Number((_j = params.snapshot) === null || _j === void 0 ? void 0 : _j.metrics.applicationsToday))) : 0,
+        viewsLast1h: Number.isFinite(Number((_k = params.snapshot) === null || _k === void 0 ? void 0 : _k.metrics.viewsLast1h)) ? Math.max(0, Math.floor(Number((_l = params.snapshot) === null || _l === void 0 ? void 0 : _l.metrics.viewsLast1h))) : 0,
+        savesToday: Number.isFinite(Number((_m = params.snapshot) === null || _m === void 0 ? void 0 : _m.metrics.savesToday)) ? Math.max(0, Math.floor(Number((_o = params.snapshot) === null || _o === void 0 ? void 0 : _o.metrics.savesToday))) : 0,
+        auraApplicationCount: Number.isFinite(Number((_p = params.snapshot) === null || _p === void 0 ? void 0 : _p.metrics.auraApplicationCount)) ? Math.max(0, Math.floor(Number((_q = params.snapshot) === null || _q === void 0 ? void 0 : _q.metrics.auraApplicationCount))) : 0,
+        auraViewCount: Number.isFinite(Number((_r = params.snapshot) === null || _r === void 0 ? void 0 : _r.metrics.auraViewCount)) ? Math.max(0, Math.floor(Number((_s = params.snapshot) === null || _s === void 0 ? void 0 : _s.metrics.auraViewCount))) : 0,
+        lastActivityAt: (0, inputSanitizers_1.readString)((_t = params.snapshot) === null || _t === void 0 ? void 0 : _t.timing.lastActivityAt, 80) || null,
+    });
+};
 exports.buildJobHeatResponseFields = buildJobHeatResponseFields;

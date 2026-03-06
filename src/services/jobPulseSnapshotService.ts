@@ -961,17 +961,17 @@ export type JobHeatResponseFields = {
 };
 
 export const buildJobHeatResponseFields = (
-  snapshot?: JobPulseSnapshot | null,
+  params: { snapshot?: JobPulseSnapshot | null } = {},
 ): JobHeatResponseFields => ({
-  sourceType: snapshot?.identity.sourceType === 'aura' ? 'aura' : 'aggregated',
-  canDisplayAuraApplicants: Boolean(snapshot?.identity.canDisplayAuraApplicants),
-  heatScore: Number.isFinite(Number(snapshot?.scores.heatScore)) ? Math.max(0, Math.round(Number(snapshot?.scores.heatScore))) : 0,
-  heatLabel: snapshot?.scores.heatLabel || 'low',
-  applicationsLast2h: Number.isFinite(Number(snapshot?.metrics.applicationsLast2h)) ? Math.max(0, Math.floor(Number(snapshot?.metrics.applicationsLast2h))) : 0,
-  applicationsToday: Number.isFinite(Number(snapshot?.metrics.applicationsToday)) ? Math.max(0, Math.floor(Number(snapshot?.metrics.applicationsToday))) : 0,
-  viewsLast1h: Number.isFinite(Number(snapshot?.metrics.viewsLast1h)) ? Math.max(0, Math.floor(Number(snapshot?.metrics.viewsLast1h))) : 0,
-  savesToday: Number.isFinite(Number(snapshot?.metrics.savesToday)) ? Math.max(0, Math.floor(Number(snapshot?.metrics.savesToday))) : 0,
-  auraApplicationCount: Number.isFinite(Number(snapshot?.metrics.auraApplicationCount)) ? Math.max(0, Math.floor(Number(snapshot?.metrics.auraApplicationCount))) : 0,
-  auraViewCount: Number.isFinite(Number(snapshot?.metrics.auraViewCount)) ? Math.max(0, Math.floor(Number(snapshot?.metrics.auraViewCount))) : 0,
-  lastActivityAt: readString(snapshot?.timing.lastActivityAt, 80) || null,
+  sourceType: params.snapshot?.identity.sourceType === 'aura' ? 'aura' : 'aggregated',
+  canDisplayAuraApplicants: Boolean(params.snapshot?.identity.canDisplayAuraApplicants),
+  heatScore: Number.isFinite(Number(params.snapshot?.scores.heatScore)) ? Math.max(0, Math.round(Number(params.snapshot?.scores.heatScore))) : 0,
+  heatLabel: params.snapshot?.scores.heatLabel || 'low',
+  applicationsLast2h: Number.isFinite(Number(params.snapshot?.metrics.applicationsLast2h)) ? Math.max(0, Math.floor(Number(params.snapshot?.metrics.applicationsLast2h))) : 0,
+  applicationsToday: Number.isFinite(Number(params.snapshot?.metrics.applicationsToday)) ? Math.max(0, Math.floor(Number(params.snapshot?.metrics.applicationsToday))) : 0,
+  viewsLast1h: Number.isFinite(Number(params.snapshot?.metrics.viewsLast1h)) ? Math.max(0, Math.floor(Number(params.snapshot?.metrics.viewsLast1h))) : 0,
+  savesToday: Number.isFinite(Number(params.snapshot?.metrics.savesToday)) ? Math.max(0, Math.floor(Number(params.snapshot?.metrics.savesToday))) : 0,
+  auraApplicationCount: Number.isFinite(Number(params.snapshot?.metrics.auraApplicationCount)) ? Math.max(0, Math.floor(Number(params.snapshot?.metrics.auraApplicationCount))) : 0,
+  auraViewCount: Number.isFinite(Number(params.snapshot?.metrics.auraViewCount)) ? Math.max(0, Math.floor(Number(params.snapshot?.metrics.auraViewCount))) : 0,
+  lastActivityAt: readString(params.snapshot?.timing.lastActivityAt, 80) || null,
 });

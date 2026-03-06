@@ -1,9 +1,16 @@
 import { checkDBHealth, getDB, isDBConnected } from '../db';
 import { recalculateAllTrustScores } from '../services/trustService';
 import { createNotificationInDB } from '../controllers/notificationsController';
+import { syncJobMarketDemandSnapshots } from '../services/jobMarketDemandSnapshotService';
 import { sendDailyReverseJobMatchDigests } from '../services/reverseJobMatchDigestService';
+import { refreshJobsSitemapCache } from '../services/jobSeoSitemapService';
+import { runLockedRecurringTask, startRecurringTaskRunner } from '../services/runtimeRecurringTaskService';
 
 const NOTIFICATION_BATCH_SIZE = 25;
+const JOB_MARKET_DEMAND_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const JOBS_SITEMAP_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const JOB_MARKET_DEMAND_SNAPSHOT_LOCK_TTL_MS = 90 * 60 * 1000;
+const JOBS_SITEMAP_REFRESH_LOCK_TTL_MS = 30 * 60 * 1000;
 
 const runInBatches = async <T>(
   items: T[],
@@ -113,9 +120,55 @@ const startReverseJobMatchDigestJob = () => {
   }, 24 * 60 * 60 * 1000);
 };
 
+const startJobMarketDemandSnapshotJob = () => {
+  startRecurringTaskRunner({
+    intervalMs: JOB_MARKET_DEMAND_SNAPSHOT_INTERVAL_MS,
+    run: async () => {
+      try {
+        const result = await runLockedRecurringTask({
+          jobKey: 'job-market-demand-snapshots',
+          ttlMs: JOB_MARKET_DEMAND_SNAPSHOT_LOCK_TTL_MS,
+          task: (db) => syncJobMarketDemandSnapshots({ db }),
+        });
+        if (!result) {
+          console.log('⏭️ Skipped job market demand snapshots sync (lock held by another instance)');
+          return;
+        }
+        console.log(`🧭 Job market demand snapshots synced (${result.contexts} contexts for ${result.bucketDate})`);
+      } catch (error) {
+        console.error('❌ Failed job market demand snapshot sync:', error);
+      }
+    },
+  });
+};
+
+const startJobsSitemapRefreshJob = () => {
+  startRecurringTaskRunner({
+    intervalMs: JOBS_SITEMAP_REFRESH_INTERVAL_MS,
+    run: async () => {
+      try {
+        const filePath = await runLockedRecurringTask({
+          jobKey: 'jobs-sitemap-refresh',
+          ttlMs: JOBS_SITEMAP_REFRESH_LOCK_TTL_MS,
+          task: async () => refreshJobsSitemapCache(),
+        });
+        if (!filePath) {
+          console.log('⏭️ Skipped jobs sitemap cache refresh (lock held by another instance)');
+          return;
+        }
+        console.log('🗺️ Jobs sitemap cache refreshed');
+      } catch (error) {
+        console.error('❌ Failed jobs sitemap cache refresh:', error);
+      }
+    },
+  });
+};
+
 export const startRuntimeRecurringJobs = () => {
   startDatabaseHealthCheckJob();
   startTrustScoreRecalculationJob();
   startTimeCapsuleUnlockNotificationJob();
   startReverseJobMatchDigestJob();
+  startJobMarketDemandSnapshotJob();
+  startJobsSitemapRefreshJob();
 };

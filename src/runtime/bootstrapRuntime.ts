@@ -91,10 +91,6 @@ const waitForDatabaseRuntimeInitialization = async (timeoutMs = 3000) => {
   return isDBConnected();
 };
 
-const waitForDatabaseRuntimeReadyOrFailure = async () => {
-  return waitForDatabaseRuntimeInitialization(15000);
-};
-
 const registerRoomMembershipHandlers = ({
   socket,
   user,
@@ -778,10 +774,7 @@ export function initSocketRuntime(
 
   io.use(async (socket, next) => {
     if (!isDBConnected()) {
-      const databaseReady = await waitForDatabaseRuntimeReadyOrFailure();
-      if (!databaseReady) {
-        return next(new Error('Service unavailable: database is not ready'));
-      }
+      return next(new Error('Service unavailable: database is not ready'));
     }
 
     let token = socket.handshake.auth?.token;
@@ -856,10 +849,18 @@ export const startRecurringRuntimeJobs = () => {
   startRuntimeRecurringJobs();
 };
 
-export const registerGracefulShutdownHandlers = (server: HttpServerInstance) => {
+export const registerGracefulShutdownHandlers = (
+  server: HttpServerInstance,
+  beforeExit?: () => Promise<void> | void,
+) => {
   const gracefulShutdown = (signal: string) => {
     console.log(`\\n🔄 Received ${signal}. Shutting down gracefully...`);
     server.close(async () => {
+      try {
+        await beforeExit?.();
+      } catch (error) {
+        console.error('Graceful shutdown pre-exit task failed:', error);
+      }
       console.log('✅ HTTP server closed');
       process.exit(0);
     });

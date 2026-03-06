@@ -127,7 +127,10 @@ export async function connectDB(): Promise<Db | null> {
             name: 'company_handle_unique_case_insensitive'
           }
         );
-        await db.collection('company_members').createIndex({ companyId: 1, userId: 1 }, { unique: true });
+        await db.collection('company_members').createIndex(
+          { companyId: 1, userId: 1 },
+          { unique: true, name: 'companyId_1_userId_1' },
+        );
         await db.collection('company_members').createIndex({ userId: 1 });
         await db.collection('company_invites').createIndex({ token: 1 }, { unique: true });
         await db.collection('company_invites').createIndex({ email: 1 });
@@ -193,6 +196,14 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('job_applications').createIndex({ companyId: 1, status: 1, createdAt: -1 });
         await db.collection('job_applications').createIndex({ applicantUserId: 1, createdAt: -1 });
         await db.collection('job_applications').createIndex({ jobId: 1, status: 1, createdAt: -1 });
+        await db.collection('job_applications').createIndex(
+          { jobId: 1, applicantNameNormalized: 1, createdAt: -1 },
+          { name: 'job_application_job_name_search_idx' }
+        );
+        await db.collection('job_applications').createIndex(
+          { jobId: 1, applicantEmailNormalized: 1, createdAt: -1 },
+          { name: 'job_application_job_email_search_idx' }
+        );
         await db.collection('application_notes').createIndex({ id: 1 }, { unique: true });
         await db.collection('application_notes').createIndex({ applicationId: 1, createdAt: 1 });
         await db.collection('application_notes').createIndex({ jobId: 1, createdAt: 1 });

@@ -43,7 +43,7 @@ const normalizeRecommendationToken = (value: unknown, maxLength = 100): string =
   return normalized;
 };
 
-const tokenizeRecommendationText = (value: unknown, maxTokens = 120): string[] => {
+export const tokenizeRecommendationText = (value: unknown, maxTokens = 120): string[] => {
   const normalized = normalizeRecommendationToken(value, 800);
   if (!normalized) return [];
   return normalized

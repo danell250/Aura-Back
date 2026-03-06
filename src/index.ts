@@ -29,7 +29,10 @@ import reportsRoutes, { startReportScheduleWorker } from './routes/reportsRoutes
 import ownerControlRoutes from './routes/ownerControlRoutes';
 import jobsRoutes from './routes/jobsRoutes';
 import { startNotificationCleanupWorker } from './controllers/notificationsController';
-import { ensureJobsTextIndex, registerJobViewCountShutdownHooks } from './controllers/jobsController';
+import { flushRegisteredJobViewCountBuffer, registerJobViewCountShutdownHooks } from './services/jobViewBufferService';
+import { ensureJobsTextIndex } from './services/jobDiscoveryQueryService';
+import { ensureJobMarketDemandIndexes } from './services/jobMarketDemandStorageService';
+import { ensureJobMarketDemandSeedContextRegistryIndexes } from './services/jobMarketDemandSeedContextRegistryService';
 import { ensureJobPulseIndexes } from './services/jobPulseService';
 import { ensureJobPulseSnapshotCleanupTimer } from './services/jobPulseSnapshotService';
 import { warmReverseMatchIndexes } from './services/reverseJobMatchService';
@@ -87,13 +90,25 @@ const triggerFatalShutdown = (source: 'uncaughtException' | 'unhandledRejection'
 
   if (runtimeServer) {
     runtimeServer.close(() => {
-      clearTimeout(forceExitTimer);
-      process.exit(1);
+      void flushRegisteredJobViewCountBuffer()
+        .catch((flushError) => {
+          console.error('Flush buffered job view counts during fatal shutdown failed:', flushError);
+        })
+        .finally(() => {
+          clearTimeout(forceExitTimer);
+          process.exit(1);
+        });
     });
     return;
   }
 
-  process.exit(1);
+  void flushRegisteredJobViewCountBuffer()
+    .catch((flushError) => {
+      console.error('Flush buffered job view counts during fatal shutdown failed:', flushError);
+    })
+    .finally(() => {
+      process.exit(1);
+    });
 };
 
 // Security & Optimization Middleware
@@ -693,14 +708,14 @@ async function bootstrapServerRuntime() {
       loadDemoAdsIfEmpty,
       onDatabaseReady: async () => {
         void ensureJobsTextIndex(getDB())
-          .then((ready) => {
+          .then((ready: boolean) => {
             if (ready) {
               console.log('🔎 Jobs text search index ready');
             } else {
               console.warn('⚠️ Jobs text search index warmup did not complete');
             }
           })
-          .catch((indexError) => {
+          .catch((indexError: unknown) => {
             console.error('⚠️ Jobs text search index warmup failed:', indexError);
           });
         void ensureJobPulseIndexes(getDB())
@@ -709,6 +724,20 @@ async function bootstrapServerRuntime() {
           })
           .catch((indexError) => {
             console.error('⚠️ Job pulse index warmup failed:', indexError);
+          });
+        void ensureJobMarketDemandIndexes(getDB())
+          .then(() => {
+            console.log('🧭 Job market demand indexes ready');
+          })
+          .catch((indexError) => {
+            console.error('⚠️ Job market demand index warmup failed:', indexError);
+          });
+        void ensureJobMarketDemandSeedContextRegistryIndexes(getDB())
+          .then(() => {
+            console.log('🗂️ Job market demand seed context indexes ready');
+          })
+          .catch((indexError) => {
+            console.error('⚠️ Job market demand seed context index warmup failed:', indexError);
           });
         ensureJobPulseSnapshotCleanupTimer();
         void warmReverseMatchIndexes(getDB())
@@ -727,7 +756,7 @@ async function bootstrapServerRuntime() {
       },
     });
     startRecurringRuntimeJobs();
-    registerGracefulShutdownHandlers(server);
+    registerGracefulShutdownHandlers(server, () => flushRegisteredJobViewCountBuffer());
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);
