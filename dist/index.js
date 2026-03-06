@@ -76,6 +76,7 @@ const reportsRoutes_1 = __importStar(require("./routes/reportsRoutes"));
 const ownerControlRoutes_1 = __importDefault(require("./routes/ownerControlRoutes"));
 const jobsRoutes_1 = __importDefault(require("./routes/jobsRoutes"));
 const notificationsController_1 = require("./controllers/notificationsController");
+const jobsController_1 = require("./controllers/jobsController");
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const csrfMiddleware_1 = require("./middleware/csrfMiddleware");
 const path_1 = __importDefault(require("path"));
@@ -106,6 +107,7 @@ exports.app = app;
 const PORT = process.env.PORT || 5000;
 let runtimeServer = null;
 let fatalShutdownInitiated = false;
+(0, jobsController_1.registerJobViewCountShutdownHooks)();
 const triggerFatalShutdown = (source, error) => {
     if (fatalShutdownInitiated) {
         return;
@@ -145,6 +147,8 @@ const parseEnvOriginList = (value) => {
         .map(normalizeOrigin);
 };
 const STATIC_ALLOWED_ORIGINS = [
+    "https://aura.social",
+    "https://www.aura.social",
     "https://www.aurasocial.world",
     "https://auraso.vercel.app",
     "https://www.auraso.vercel.app",
@@ -618,6 +622,18 @@ function bootstrapServerRuntime() {
                 loadDemoPostsIfEmpty: demoBootstrap_1.loadDemoPostsIfEmpty,
                 loadDemoAdsIfEmpty: demoBootstrap_1.loadDemoAdsIfEmpty,
                 onDatabaseReady: () => __awaiter(this, void 0, void 0, function* () {
+                    void (0, jobsController_1.ensureJobsTextIndex)((0, db_1.getDB)())
+                        .then((ready) => {
+                        if (ready) {
+                            console.log('🔎 Jobs text search index ready');
+                        }
+                        else {
+                            console.warn('⚠️ Jobs text search index warmup did not complete');
+                        }
+                    })
+                        .catch((indexError) => {
+                        console.error('⚠️ Jobs text search index warmup failed:', indexError);
+                    });
                     (0, reportsRoutes_1.startReportScheduleWorker)();
                     console.log('📬 Scheduled report worker started');
                     (0, notificationsController_1.startNotificationCleanupWorker)();

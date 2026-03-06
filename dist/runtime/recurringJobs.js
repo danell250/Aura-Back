@@ -13,6 +13,7 @@ exports.startRuntimeRecurringJobs = void 0;
 const db_1 = require("../db");
 const trustService_1 = require("../services/trustService");
 const notificationsController_1 = require("../controllers/notificationsController");
+const reverseJobMatchDigestService_1 = require("../services/reverseJobMatchDigestService");
 const NOTIFICATION_BATCH_SIZE = 25;
 const runInBatches = (items, batchSize, task) => __awaiter(void 0, void 0, void 0, function* () {
     for (let index = 0; index < items.length; index += batchSize) {
@@ -90,9 +91,23 @@ const startTimeCapsuleUnlockNotificationJob = () => {
         }
     }), 5 * 60 * 1000);
 };
+const startReverseJobMatchDigestJob = () => {
+    setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            if (!(0, db_1.isDBConnected)())
+                return;
+            const db = (0, db_1.getDB)();
+            yield (0, reverseJobMatchDigestService_1.sendDailyReverseJobMatchDigests)(db);
+        }
+        catch (error) {
+            console.error('Error running reverse job match digest job:', error);
+        }
+    }), 24 * 60 * 60 * 1000);
+};
 const startRuntimeRecurringJobs = () => {
     startDatabaseHealthCheckJob();
     startTrustScoreRecalculationJob();
     startTimeCapsuleUnlockNotificationJob();
+    startReverseJobMatchDigestJob();
 };
 exports.startRuntimeRecurringJobs = startRuntimeRecurringJobs;

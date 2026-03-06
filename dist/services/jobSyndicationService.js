@@ -12,12 +12,12 @@ const readString = (value, maxLength = 10000) => {
 const getFrontendBaseUrl = () => {
     const configured = readString(process.env.FRONTEND_URL || '', 300) ||
         readString(process.env.VITE_FRONTEND_URL || '', 300);
-    return configured ? configured.replace(/\/$/, '') : 'https://www.aurasocial.world';
+    return configured ? configured.replace(/\/$/, '') : 'https://aura.social';
 };
 const getBackendBaseUrl = () => {
     const configured = readString(process.env.BACKEND_URL || '', 300) ||
         readString(process.env.PUBLIC_BACKEND_URL || '', 300);
-    return configured ? configured.replace(/\/$/, '') : 'https://api.aurasocial.world';
+    return configured ? configured.replace(/\/$/, '') : 'https://api.aura.social';
 };
 const toCompactText = (value, maxLength = 16000) => readString(String(value || ''), maxLength).replace(/\s+/g, ' ').trim();
 const toSyndicationItem = (job) => {

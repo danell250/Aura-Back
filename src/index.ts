@@ -28,6 +28,7 @@ import reportsRoutes, { startReportScheduleWorker } from './routes/reportsRoutes
 import ownerControlRoutes from './routes/ownerControlRoutes';
 import jobsRoutes from './routes/jobsRoutes';
 import { startNotificationCleanupWorker } from './controllers/notificationsController';
+import { ensureJobsTextIndex, registerJobViewCountShutdownHooks } from './controllers/jobsController';
 import { attachUser, requireAuth } from './middleware/authMiddleware';
 import { createCsrfProtection } from './middleware/csrfMiddleware';
 import path from 'path';
@@ -64,6 +65,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 let runtimeServer: ReturnType<express.Application['listen']> | null = null;
 let fatalShutdownInitiated = false;
+
+registerJobViewCountShutdownHooks();
 
 const triggerFatalShutdown = (source: 'uncaughtException' | 'unhandledRejection', error: unknown) => {
   if (fatalShutdownInitiated) {
@@ -111,6 +114,8 @@ const parseEnvOriginList = (value: string | undefined): string[] => {
 };
 
 const STATIC_ALLOWED_ORIGINS = [
+  "https://aura.social",
+  "https://www.aura.social",
   "https://www.aurasocial.world",
   "https://auraso.vercel.app",
   "https://www.auraso.vercel.app",
@@ -650,6 +655,17 @@ async function bootstrapServerRuntime() {
       loadDemoPostsIfEmpty,
       loadDemoAdsIfEmpty,
       onDatabaseReady: async () => {
+        void ensureJobsTextIndex(getDB())
+          .then((ready) => {
+            if (ready) {
+              console.log('🔎 Jobs text search index ready');
+            } else {
+              console.warn('⚠️ Jobs text search index warmup did not complete');
+            }
+          })
+          .catch((indexError) => {
+            console.error('⚠️ Jobs text search index warmup failed:', indexError);
+          });
         startReportScheduleWorker();
         console.log('📬 Scheduled report worker started');
         startNotificationCleanupWorker();

@@ -285,6 +285,7 @@ const buildAggregatedIngestMutation = (params: {
       createdAt: params.meta.createdAt,
       updatedAt: params.nowIso,
       announcementPostId: null,
+      viewCount: 0,
     },
   };
 };

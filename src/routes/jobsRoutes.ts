@@ -4,6 +4,7 @@ import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
 import { partnerAuth } from '../middleware/partnerAuth';
 import { internalApiAuth } from '../middleware/internalApiAuth';
 import { jobsController } from '../controllers/jobsController';
+import { jobSyndicationController } from '../controllers/jobSyndicationController';
 import { internalJobsController } from '../controllers/internalJobsController';
 import { jobRecommendationsController } from '../controllers/jobRecommendationsController';
 import { applicationNotesController } from '../controllers/applicationNotesController';
@@ -86,14 +87,47 @@ const internalJobsIngestRateLimiter = rateLimit({
   },
 });
 
+const openJobsFeedRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logSecurityEvent({
+      req,
+      type: 'rate_limit_triggered',
+      route: '/jobs/open-feed',
+      metadata: {
+        key: 'jobs_open_feed_read',
+        max: 120,
+        windowMs: 60 * 1000,
+      },
+    });
+
+    return res.status(429).json({
+      success: false,
+      error: 'Too many requests',
+      message: 'Too many open feed requests. Please retry shortly.',
+    });
+  },
+});
+
 // Public company jobs feed (v1 discovery surface)
 router.post('/internal/jobs/aggregated', internalJobsIngestRateLimiter, internalApiAuth, internalJobsController.ingestAggregatedJobs);
 router.get('/companies/:companyId/jobs', optionalAuth, jobsController.listCompanyJobs);
-router.get('/partner/jobs', partnerAuth, jobsController.getJobsForSyndication);
+router.get('/partner/jobs', partnerAuth, jobSyndicationController.getJobsForSyndication);
 router.get('/companies/:companyId/job-analytics', requireAuth, jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', requireAuth, jobsController.getCompanyApplicationAttentionCount);
 router.get('/jobs', optionalAuth, jobsController.listPublicJobs);
+router.options('/jobs/open-feed', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
+  return res.status(204).send();
+});
+router.get('/jobs/open-feed', openJobsFeedRateLimiter, jobSyndicationController.getOpenJobsFeed);
 router.get('/jobs/recommended', requireAuth, jobRecommendationsController.listRecommendedJobs);
+router.get('/jobs/matches/:handle', optionalAuth, jobsController.getPublicJobMatchesByHandle);
 router.get('/jobs/salary-insights', optionalAuth, jobsController.getSalaryInsights);
 router.get('/jobs/slug/:jobSlug', optionalAuth, jobsController.getJobBySlug);
 router.get('/jobs/:jobId/network-count', requireAuth, jobsController.getJobNetworkCount);

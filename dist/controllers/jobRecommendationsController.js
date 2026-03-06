@@ -15,9 +15,20 @@ const jobRecommendationService_1 = require("../services/jobRecommendationService
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const JOBS_COLLECTION = 'jobs';
 const USERS_COLLECTION = 'users';
+const CAREER_PAGE_SOURCE_SITES = new Set(['greenhouse', 'lever', 'workday', 'smartrecruiters', 'careers']);
+const resolveSourceSite = (sourceValue) => {
+    const source = (0, inputSanitizers_1.readString)(sourceValue, 120).toLowerCase();
+    if (!source)
+        return '';
+    const [, suffix = source] = source.split(':', 2);
+    return (0, inputSanitizers_1.readString)(suffix, 120).toLowerCase();
+};
 const toRecommendedJobResponse = (job) => ({
     id: String((job === null || job === void 0 ? void 0 : job.id) || ''),
     slug: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.slug, 220),
+    source: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.source, 120) || null,
+    sourceSite: resolveSourceSite(job === null || job === void 0 ? void 0 : job.source) || null,
+    isCareerPageSource: CAREER_PAGE_SOURCE_SITES.has(resolveSourceSite(job === null || job === void 0 ? void 0 : job.source)),
     companyId: String((job === null || job === void 0 ? void 0 : job.companyId) || ''),
     companyName: String((job === null || job === void 0 ? void 0 : job.companyName) || ''),
     companyHandle: String((job === null || job === void 0 ? void 0 : job.companyHandle) || ''),
@@ -44,6 +55,7 @@ const toRecommendedJobResponse = (job) => ({
     applicationUrl: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationUrl, 600),
     applicationEmail: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationEmail, 200),
     applicationCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.applicationCount) ? Number(job.applicationCount) : 0,
+    viewCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.viewCount) ? Number(job.viewCount) : 0,
 });
 const fetchRecommendationCandidateJobs = (params) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
@@ -57,7 +69,7 @@ const fetchRecommendationCandidateJobs = (params) => __awaiter(void 0, void 0, v
             .limit(params.candidateLimit)
             .toArray();
     }
-    const coarseLimit = Math.min(1200, Math.max(params.candidateLimit * 4, 480));
+    const coarseLimit = Math.min(600, Math.max(params.candidateLimit * 2, 160));
     return params.db.collection(JOBS_COLLECTION)
         .aggregate([
         { $match: { status: 'open' } },
@@ -80,6 +92,7 @@ const buildRecommendationPayload = (params) => {
     if (params.candidateJobs.length === 0) {
         return {
             data: [],
+            groups: { best: 0, good: 0, other: 0 },
             pagination: { page: 1, limit: params.limit, total: 0, pages: 0 },
         };
     }
@@ -90,14 +103,25 @@ const buildRecommendationPayload = (params) => {
     const rankedMatches = scoredJobs
         .filter((entry) => entry.score > 0)
         .sort((a, b) => (b.score - a.score) || (b.publishedTs - a.publishedTs));
-    const selectedEntries = (rankedMatches.length > 0 ? rankedMatches : scoredJobs)
-        .slice(0, params.limit);
+    const selectedEntries = (rankedMatches.length > 0 ? rankedMatches : scoredJobs).slice(0, params.limit);
+    const groupedEntries = selectedEntries.map((entry) => (Object.assign(Object.assign({}, entry), { matchTier: (0, jobRecommendationService_1.resolveRecommendationMatchTier)(entry.score) })));
+    const orderedEntries = [
+        ...groupedEntries.filter((entry) => entry.matchTier === 'best'),
+        ...groupedEntries.filter((entry) => entry.matchTier === 'good'),
+        ...groupedEntries.filter((entry) => entry.matchTier === 'other'),
+    ];
+    const groups = {
+        best: groupedEntries.filter((entry) => entry.matchTier === 'best').length,
+        good: groupedEntries.filter((entry) => entry.matchTier === 'good').length,
+        other: groupedEntries.filter((entry) => entry.matchTier === 'other').length,
+    };
     return {
-        data: selectedEntries.map((entry) => (Object.assign(Object.assign({}, toRecommendedJobResponse(entry.job)), { recommendationScore: entry.score, recommendationReasons: entry.reasons.slice(0, 3), matchedSkills: entry.matchedSkills.slice(0, 5) }))),
+        data: orderedEntries.map((entry) => (Object.assign(Object.assign({}, toRecommendedJobResponse(entry.job)), { recommendationScore: entry.score, recommendationReasons: entry.reasons.slice(0, 3), matchedSkills: entry.matchedSkills.slice(0, 5), matchTier: entry.matchTier }))),
+        groups,
         pagination: {
             page: 1,
             limit: params.limit,
-            total: selectedEntries.length,
+            total: orderedEntries.length,
             pages: 1,
         },
     };
@@ -120,7 +144,7 @@ exports.jobRecommendationsController = {
             }
             const db = (0, db_1.getDB)();
             const limit = (0, inputSanitizers_1.parsePositiveInt)((_b = req.query) === null || _b === void 0 ? void 0 : _b.limit, 20, 1, 40);
-            const candidateLimit = (0, inputSanitizers_1.parsePositiveInt)((_c = req.query) === null || _c === void 0 ? void 0 : _c.candidateLimit, 120, 40, 160);
+            const candidateLimit = (0, inputSanitizers_1.parsePositiveInt)((_c = req.query) === null || _c === void 0 ? void 0 : _c.candidateLimit, 100, 30, 120);
             const user = yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId }, {
                 projection: {
                     id: 1,
@@ -129,6 +153,18 @@ exports.jobRecommendationsController = {
                     location: 1,
                     country: 1,
                     industry: 1,
+                    remotePreference: 1,
+                    workPreference: 1,
+                    preferredWorkModel: 1,
+                    preferredWorkModels: 1,
+                    workPreferences: 1,
+                    experienceLevel: 1,
+                    seniority: 1,
+                    roleLevel: 1,
+                    jobSeniorityPreference: 1,
+                    yearsOfExperience: 1,
+                    experienceYears: 1,
+                    totalExperienceYears: 1,
                 },
             });
             if (!user) {

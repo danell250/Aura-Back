@@ -1,6 +1,7 @@
 import { checkDBHealth, getDB, isDBConnected } from '../db';
 import { recalculateAllTrustScores } from '../services/trustService';
 import { createNotificationInDB } from '../controllers/notificationsController';
+import { sendDailyReverseJobMatchDigests } from '../services/reverseJobMatchDigestService';
 
 const NOTIFICATION_BATCH_SIZE = 25;
 
@@ -100,8 +101,21 @@ const startTimeCapsuleUnlockNotificationJob = () => {
   }, 5 * 60 * 1000);
 };
 
+const startReverseJobMatchDigestJob = () => {
+  setInterval(async () => {
+    try {
+      if (!isDBConnected()) return;
+      const db = getDB();
+      await sendDailyReverseJobMatchDigests(db);
+    } catch (error) {
+      console.error('Error running reverse job match digest job:', error);
+    }
+  }, 24 * 60 * 60 * 1000);
+};
+
 export const startRuntimeRecurringJobs = () => {
   startDatabaseHealthCheckJob();
   startTrustScoreRecalculationJob();
   startTimeCapsuleUnlockNotificationJob();
+  startReverseJobMatchDigestJob();
 };

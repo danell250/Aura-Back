@@ -4,6 +4,9 @@ const RECOMMENDATION_WEIGHTS = {
   skillPerMatch: 16,
   skillCap: 48,
   remoteBonus: 18,
+  workModelPreferenceBonus: 14,
+  experienceDirectBonus: 10,
+  experienceNearBonus: 5,
   locationBonus: 24,
   industryPerMatch: 6,
   industryCap: 12,
@@ -12,6 +15,16 @@ const RECOMMENDATION_WEIGHTS = {
   freshnessWeekBonus: 6,
   freshnessMonthBonus: 3,
 } as const;
+
+export const MATCH_TIER_BEST_MIN_SCORE = 70;
+export const MATCH_TIER_GOOD_MIN_SCORE = 40;
+export type RecommendationMatchTier = 'best' | 'good' | 'other';
+
+export const resolveRecommendationMatchTier = (score: number): RecommendationMatchTier => {
+  if (score >= MATCH_TIER_BEST_MIN_SCORE) return 'best';
+  if (score >= MATCH_TIER_GOOD_MIN_SCORE) return 'good';
+  return 'other';
+};
 
 const normalizeRecommendationToken = (value: unknown, maxLength = 100): string => {
   const normalized = readString(String(value || ''), maxLength)
@@ -76,6 +89,127 @@ const readRecommendationSkillLabelMap = (value: unknown): Map<string, string> =>
   return next;
 };
 
+export type RecommendationWorkModel = 'onsite' | 'hybrid' | 'remote';
+type RecommendationExperienceLevel = 'junior' | 'mid' | 'senior' | 'lead';
+
+const normalizeWorkModelPreference = (value: unknown): RecommendationWorkModel | null => {
+  const normalized = readString(value, 40).toLowerCase();
+  if (normalized === 'remote') return 'remote';
+  if (normalized === 'hybrid') return 'hybrid';
+  if (normalized === 'onsite' || normalized === 'on_site' || normalized === 'on-site') return 'onsite';
+  return null;
+};
+
+const readPreferredWorkModels = (user: any): Set<RecommendationWorkModel> => {
+  const candidates: unknown[] = [];
+  const listFields = [
+    (user as any)?.preferredWorkModels,
+    (user as any)?.workPreferences,
+    (user as any)?.jobWorkModels,
+  ];
+  for (const field of listFields) {
+    if (!Array.isArray(field)) continue;
+    candidates.push(...field);
+  }
+  candidates.push(
+    (user as any)?.preferredWorkModel,
+    (user as any)?.workPreference,
+    (user as any)?.remotePreference,
+  );
+
+  const next = new Set<RecommendationWorkModel>();
+  for (const value of candidates) {
+    const normalized = normalizeWorkModelPreference(value);
+    if (normalized) next.add(normalized);
+  }
+  return next;
+};
+
+const parseFiniteNumber = (value: unknown): number | null => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+};
+
+const normalizeExperienceLevel = (value: unknown): RecommendationExperienceLevel | null => {
+  const normalized = readString(value, 60).toLowerCase();
+  if (!normalized) return null;
+  if (
+    normalized.includes('lead')
+    || normalized.includes('principal')
+    || normalized.includes('staff')
+    || normalized.includes('director')
+    || normalized.includes('vp')
+  ) {
+    return 'lead';
+  }
+  if (normalized.includes('senior') || normalized === 'sr' || normalized.startsWith('sr ')) {
+    return 'senior';
+  }
+  if (normalized.includes('mid') || normalized.includes('intermediate')) {
+    return 'mid';
+  }
+  if (
+    normalized.includes('junior')
+    || normalized.includes('entry')
+    || normalized.includes('graduate')
+    || normalized.includes('intern')
+  ) {
+    return 'junior';
+  }
+  return null;
+};
+
+const inferExperienceLevelFromYears = (years: number | null): RecommendationExperienceLevel | null => {
+  if (years == null || years < 0) return null;
+  if (years <= 2) return 'junior';
+  if (years <= 5) return 'mid';
+  if (years <= 9) return 'senior';
+  return 'lead';
+};
+
+const resolveExperienceLevel = (user: any): RecommendationExperienceLevel | null => {
+  const explicit = normalizeExperienceLevel(
+    (user as any)?.experienceLevel
+      || (user as any)?.seniority
+      || (user as any)?.roleLevel
+      || (user as any)?.jobSeniorityPreference,
+  );
+  if (explicit) return explicit;
+
+  const years = parseFiniteNumber(
+    (user as any)?.yearsOfExperience
+      ?? (user as any)?.experienceYears
+      ?? (user as any)?.totalExperienceYears,
+  );
+  return inferExperienceLevelFromYears(years);
+};
+
+const inferJobExperienceLevel = (job: any): RecommendationExperienceLevel | null => {
+  const semanticText = normalizeRecommendationToken(
+    `${readString(job?.title, 120)} ${readString(job?.summary, 220)} ${readString(job?.description, 1200)}`,
+    1800,
+  );
+  if (!semanticText) return null;
+
+  if (
+    /\b(principal|staff|head|director|vp|lead)\b/.test(semanticText)
+  ) {
+    return 'lead';
+  }
+  if (/\b(senior|sr)\b/.test(semanticText)) {
+    return 'senior';
+  }
+  if (/\b(mid|intermediate)\b/.test(semanticText)) {
+    return 'mid';
+  }
+  if (/\b(junior|entry level|entry-level|graduate|intern)\b/.test(semanticText)) {
+    return 'junior';
+  }
+
+  return null;
+};
+
 const countSetIntersection = <T>(source: Set<T>, target: Set<T>): number => {
   if (source.size === 0 || target.size === 0) return 0;
   let count = 0;
@@ -89,6 +223,8 @@ export type RecommendationProfile = {
   skillTokens: Set<string>;
   locationTokens: Set<string>;
   industryTokens: Set<string>;
+  preferredWorkModels: Set<RecommendationWorkModel>;
+  experienceLevel: RecommendationExperienceLevel | null;
 };
 
 export type RecommendationScoreResult = {
@@ -98,6 +234,12 @@ export type RecommendationScoreResult = {
   publishedTs: number;
 };
 
+type RecommendationSignalResult = {
+  score: number;
+  reason?: string;
+  matchedSkills?: string[];
+};
+
 type JobRecommendationMetadata = {
   skillLabelByToken: Map<string, string>;
   locationTokens: Set<string>;
@@ -105,9 +247,11 @@ type JobRecommendationMetadata = {
   publishedTs: number;
   hasSalarySignal: boolean;
   isRemoteRole: boolean;
+  workModel: RecommendationWorkModel;
+  inferredExperienceLevel: RecommendationExperienceLevel | null;
 };
 
-const buildJobRecommendationMetadata = (job: any): JobRecommendationMetadata => {
+const buildRecommendationSkillMap = (job: any): Map<string, string> => {
   let skillLabelByToken = readRecommendationSkillLabelMap(job?.recommendationSkillLabelByToken);
   if (skillLabelByToken.size === 0) {
     skillLabelByToken = new Map<string, string>();
@@ -118,16 +262,21 @@ const buildJobRecommendationMetadata = (job: any): JobRecommendationMetadata => 
       skillLabelByToken.set(normalized, label);
     }
   }
+  return skillLabelByToken;
+};
 
+const buildRecommendationLocationTokens = (job: any): Set<string> => {
   const storedLocationTokens = readRecommendationTokenArray(job?.recommendationLocationTokens, 40);
-  const locationTokens = new Set<string>(
+  return new Set<string>(
     storedLocationTokens.length > 0
       ? storedLocationTokens
       : tokenizeRecommendationText(job?.locationText, 20).filter((token) => token.length >= 3),
   );
+};
 
+const buildRecommendationSemanticTokens = (job: any): Set<string> => {
   const storedSemanticTokens = readRecommendationTokenArray(job?.recommendationSemanticTokens, 320);
-  const semanticTokens = new Set<string>(
+  return new Set<string>(
     storedSemanticTokens.length > 0
       ? storedSemanticTokens
       : tokenizeRecommendationText(
@@ -135,25 +284,40 @@ const buildJobRecommendationMetadata = (job: any): JobRecommendationMetadata => 
           260,
         ).filter((token) => token.length >= 3),
   );
+};
 
+const resolveRecommendationPublishedTs = (job: any): number => {
   const storedPublishedTs = Number(job?.recommendationPublishedTs);
   const publishedAtRaw = readString(job?.publishedAt, 80) || readString(job?.createdAt, 80);
   const publishedAtTs = publishedAtRaw ? new Date(publishedAtRaw).getTime() : 0;
-  const publishedTs = Number.isFinite(storedPublishedTs)
+  return Number.isFinite(storedPublishedTs)
     ? storedPublishedTs
     : (Number.isFinite(publishedAtTs) ? publishedAtTs : 0);
+};
 
+const resolveRecommendationHasSalarySignal = (job: any): boolean => {
   const storedHasSalarySignal = (job as any)?.recommendationHasSalarySignal;
-  const hasSalarySignal =
-    typeof storedHasSalarySignal === 'boolean'
-      ? storedHasSalarySignal
-      : (typeof job?.salaryMin === 'number' || typeof job?.salaryMax === 'number');
+  return typeof storedHasSalarySignal === 'boolean'
+    ? storedHasSalarySignal
+    : (typeof job?.salaryMin === 'number' || typeof job?.salaryMax === 'number');
+};
 
+const resolveRecommendationIsRemoteRole = (job: any): boolean => {
   const storedIsRemoteRole = (job as any)?.recommendationIsRemoteRole;
-  const isRemoteRole =
-    typeof storedIsRemoteRole === 'boolean'
-      ? storedIsRemoteRole
-      : (String(job?.workModel || '').toLowerCase() === 'remote');
+  return typeof storedIsRemoteRole === 'boolean'
+    ? storedIsRemoteRole
+    : (String(job?.workModel || '').toLowerCase() === 'remote');
+};
+
+const buildJobRecommendationMetadata = (job: any): JobRecommendationMetadata => {
+  const skillLabelByToken = buildRecommendationSkillMap(job);
+  const locationTokens = buildRecommendationLocationTokens(job);
+  const semanticTokens = buildRecommendationSemanticTokens(job);
+  const publishedTs = resolveRecommendationPublishedTs(job);
+  const hasSalarySignal = resolveRecommendationHasSalarySignal(job);
+  const isRemoteRole = resolveRecommendationIsRemoteRole(job);
+  const workModel = normalizeWorkModelPreference(job?.workModel) || (isRemoteRole ? 'remote' : 'onsite');
+  const inferredExperienceLevel = inferJobExperienceLevel(job);
 
   return {
     skillLabelByToken,
@@ -162,6 +326,8 @@ const buildJobRecommendationMetadata = (job: any): JobRecommendationMetadata => 
     publishedTs,
     hasSalarySignal,
     isRemoteRole,
+    workModel,
+    inferredExperienceLevel,
   };
 };
 
@@ -229,11 +395,15 @@ export const buildRecommendationProfile = (user: any): RecommendationProfile => 
   const industryTokens = new Set<string>(
     tokenizeRecommendationText((user as any)?.industry, 20).filter((token) => token.length >= 3),
   );
+  const preferredWorkModels = readPreferredWorkModels(user);
+  const experienceLevel = resolveExperienceLevel(user);
 
   return {
     skillTokens,
     locationTokens,
     industryTokens,
+    preferredWorkModels,
+    experienceLevel,
   };
 };
 
@@ -241,10 +411,14 @@ export const buildRecommendationCandidateFilter = (
   profile: RecommendationProfile,
 ): Record<string, unknown> => {
   const skillTokens = Array.from(profile.skillTokens).slice(0, 20);
+  const preferredWorkModels = Array.from(profile.preferredWorkModels);
   const orFilters: Array<Record<string, unknown>> = [];
 
   if (skillTokens.length > 0) {
     orFilters.push({ tags: { $in: skillTokens } });
+  }
+  if (preferredWorkModels.length > 0) {
+    orFilters.push({ workModel: { $in: preferredWorkModels } });
   }
 
   if (orFilters.length === 0) {
@@ -279,11 +453,32 @@ const scoreSkillMatch = (
   };
 };
 
-const scoreRemoteRole = (metadata: JobRecommendationMetadata): { score: number; reason?: string } => {
+const scoreRemoteRole = (
+  metadata: JobRecommendationMetadata,
+  profile: RecommendationProfile,
+): { score: number; reason?: string } => {
   if (!metadata.isRemoteRole) return { score: 0 };
+  if (
+    profile.preferredWorkModels.size > 0
+    && !profile.preferredWorkModels.has('remote')
+  ) {
+    return { score: 0 };
+  }
   return {
     score: RECOMMENDATION_WEIGHTS.remoteBonus,
     reason: 'Remote role',
+  };
+};
+
+const scoreWorkModelPreference = (
+  metadata: JobRecommendationMetadata,
+  profile: RecommendationProfile,
+): { score: number; reason?: string } => {
+  if (profile.preferredWorkModels.size === 0) return { score: 0 };
+  if (!profile.preferredWorkModels.has(metadata.workModel)) return { score: 0 };
+  return {
+    score: RECOMMENDATION_WEIGHTS.workModelPreferenceBonus,
+    reason: 'Work model preference matched',
   };
 };
 
@@ -315,6 +510,43 @@ const scoreIndustryAlignment = (
   };
 };
 
+const EXPERIENCE_LEVEL_INDEX: Record<RecommendationExperienceLevel, number> = {
+  junior: 0,
+  mid: 1,
+  senior: 2,
+  lead: 3,
+};
+
+const toExperienceLevelIndex = (value: unknown): number | null => {
+  const normalized = normalizeExperienceLevel(value);
+  if (!normalized) return null;
+  return EXPERIENCE_LEVEL_INDEX[normalized];
+};
+
+const scoreExperienceAlignment = (
+  metadata: JobRecommendationMetadata,
+  profile: RecommendationProfile,
+): { score: number; reason?: string } => {
+  const profileIndex = toExperienceLevelIndex(profile.experienceLevel);
+  const jobIndex = toExperienceLevelIndex(metadata.inferredExperienceLevel);
+  if (profileIndex == null || jobIndex == null) return { score: 0 };
+
+  const distance = Math.abs(profileIndex - jobIndex);
+  if (distance === 0) {
+    return {
+      score: RECOMMENDATION_WEIGHTS.experienceDirectBonus,
+      reason: 'Experience level aligned',
+    };
+  }
+  if (distance === 1) {
+    return {
+      score: RECOMMENDATION_WEIGHTS.experienceNearBonus,
+      reason: 'Experience level near match',
+    };
+  }
+  return { score: 0 };
+};
+
 const scoreSalarySignal = (metadata: JobRecommendationMetadata): number =>
   metadata.hasSalarySignal ? RECOMMENDATION_WEIGHTS.salarySignalBonus : 0;
 
@@ -327,46 +559,59 @@ const scoreFreshness = (publishedTs: number): number => {
   return 0;
 };
 
+const runRecommendationSignals = (
+  signals: Array<() => RecommendationSignalResult>,
+): { score: number; reasons: string[]; matchedSkills: string[] } => {
+  const reasons: string[] = [];
+  let totalScore = 0;
+  let matchedSkills: string[] = [];
+
+  for (const nextSignal of signals) {
+    const signal = nextSignal();
+    if (signal.score > 0) {
+      totalScore += signal.score;
+      if (signal.reason) reasons.push(signal.reason);
+    }
+    if (signal.matchedSkills && signal.matchedSkills.length > 0) {
+      matchedSkills = signal.matchedSkills;
+    }
+  }
+
+  return {
+    score: totalScore,
+    reasons,
+    matchedSkills,
+  };
+};
+
 export const buildJobRecommendationScore = (
   job: any,
   profile: RecommendationProfile,
 ): RecommendationScoreResult => {
-  const reasons: string[] = [];
-  let score = 0;
   const metadata = buildJobRecommendationMetadata(job);
-  const skillSignal = scoreSkillMatch(metadata, profile);
-  if (skillSignal.score > 0) {
-    score += skillSignal.score;
-    if (skillSignal.reason) reasons.push(skillSignal.reason);
-  }
-
-  const remoteSignal = scoreRemoteRole(metadata);
-  if (remoteSignal.score > 0) {
-    score += remoteSignal.score;
-    if (remoteSignal.reason) reasons.push(remoteSignal.reason);
-  }
-
-  const locationSignal = scoreLocationAlignment(metadata, profile);
-  if (locationSignal.score > 0) {
-    score += locationSignal.score;
-    if (locationSignal.reason) reasons.push(locationSignal.reason);
-  }
-
-  const industrySignal = scoreIndustryAlignment(metadata, profile);
-  if (industrySignal.score > 0) {
-    score += industrySignal.score;
-    if (industrySignal.reason) reasons.push(industrySignal.reason);
-  }
-
-  score += scoreSalarySignal(metadata);
-
   const publishedTs = metadata.publishedTs;
-  score += scoreFreshness(publishedTs);
+  const scoredSignals = runRecommendationSignals([
+    () => {
+      const signal = scoreSkillMatch(metadata, profile);
+      return {
+        score: signal.score,
+        reason: signal.reason,
+        matchedSkills: signal.matchedSkills,
+      };
+    },
+    () => scoreRemoteRole(metadata, profile),
+    () => scoreWorkModelPreference(metadata, profile),
+    () => scoreLocationAlignment(metadata, profile),
+    () => scoreExperienceAlignment(metadata, profile),
+    () => scoreIndustryAlignment(metadata, profile),
+    () => ({ score: scoreSalarySignal(metadata) }),
+    () => ({ score: scoreFreshness(publishedTs) }),
+  ]);
 
   return {
-    score,
-    reasons,
-    matchedSkills: skillSignal.matchedSkills,
+    score: scoredSignals.score,
+    reasons: scoredSignals.reasons,
+    matchedSkills: scoredSignals.matchedSkills,
     publishedTs,
   };
 };

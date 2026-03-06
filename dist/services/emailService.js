@@ -17,6 +17,7 @@ exports.sendMagicLinkEmail = sendMagicLinkEmail;
 exports.sendCompanyInviteEmail = sendCompanyInviteEmail;
 exports.sendReportPreviewEmail = sendReportPreviewEmail;
 exports.sendJobApplicationReviewEmail = sendJobApplicationReviewEmail;
+exports.sendReverseJobMatchDigestEmail = sendReverseJobMatchDigestEmail;
 const mail_1 = __importDefault(require("@sendgrid/mail"));
 mail_1.default.setApiKey(process.env.SENDGRID_API_KEY || '');
 const isEmailDeliveryConfigured = () => typeof process.env.SENDGRID_API_KEY === 'string' && process.env.SENDGRID_API_KEY.trim().length > 0;
@@ -493,6 +494,93 @@ function sendJobApplicationReviewEmail(to, payload) {
         }
         catch (error) {
             console.error('Error sending job application review email:', error);
+            if (error === null || error === void 0 ? void 0 : error.response) {
+                console.error(error.response.body);
+            }
+            throw error;
+        }
+    });
+}
+function sendReverseJobMatchDigestEmail(to, payload) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const from = `${process.env.SENDGRID_FROM_NAME || 'Aura©'} <${process.env.SENDGRID_FROM_EMAIL || 'no-reply@aurasocila.world'}>`;
+        const safeRecipientName = safeHtmlText(payload.recipientName || 'there');
+        const jobs = Array.isArray(payload.jobs) ? payload.jobs.slice(0, 10) : [];
+        const shareUrl = typeof payload.shareUrl === 'string' ? payload.shareUrl.trim() : '';
+        if (jobs.length === 0) {
+            return { delivered: false, provider: (0, exports.isEmailDeliveryConfigured)() ? 'sendgrid' : 'disabled', reason: 'No jobs to send' };
+        }
+        if (!(0, exports.isEmailDeliveryConfigured)()) {
+            console.warn('⚠️ SendGrid credentials not found. Reverse match digest email will be logged to console only.');
+            console.log('--- REVERSE MATCH DIGEST ---');
+            console.log(`To: ${to}`);
+            console.log(`Jobs: ${jobs.length}`);
+            console.log(`Share URL: ${shareUrl || 'n/a'}`);
+            console.log('----------------------------');
+            return {
+                delivered: false,
+                provider: 'disabled',
+                reason: 'SENDGRID_API_KEY is not configured',
+            };
+        }
+        const rowsHtml = jobs
+            .map((job) => {
+            const title = safeHtmlText(job.title || 'Job match');
+            const companyName = safeHtmlText(job.companyName || 'Hiring Team');
+            const locationText = safeHtmlText(job.locationText || 'Flexible');
+            const url = safeHtmlText(job.url || '#');
+            const score = Math.max(0, Math.round(Number(job.score || 0)));
+            return `
+        <tr>
+          <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;">
+            <a href="${url}" style="color:#0f172a;font-weight:700;text-decoration:none;">${title}</a>
+            <div style="font-size:12px;color:#475569;margin-top:2px;">${companyName} • ${locationText}</div>
+          </td>
+          <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:800;color:#059669;">
+            ${score}%
+          </td>
+        </tr>
+      `;
+        })
+            .join('');
+        try {
+            yield mail_1.default.send({
+                to,
+                from,
+                subject: `${jobs.length} jobs you're a strong match for today`,
+                html: `
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:680px;margin:0 auto;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+          <div style="background:linear-gradient(135deg,#0f172a 0%,#052e2b 100%);padding:24px;color:#fff;">
+            <p style="margin:0;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#86efac;font-weight:800;">Aura Reverse Match</p>
+            <h2 style="margin:10px 0 6px 0;font-size:22px;line-height:1.25;">${jobs.length} jobs match your profile</h2>
+            <p style="margin:0;color:#cbd5e1;font-size:13px;">Hi ${safeRecipientName}, these opportunities were discovered and scored for your profile.</p>
+          </div>
+          <div style="padding:22px 24px;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead>
+                <tr>
+                  <th style="text-align:left;padding:0 8px 8px 8px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.08em;">Role</th>
+                  <th style="text-align:right;padding:0 8px 8px 8px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:0.08em;">Match</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+            ${shareUrl ? `
+              <p style="margin:16px 0 0 0;font-size:12px;color:#64748b;">
+                Share your top matches:
+                <a href="${safeHtmlText(shareUrl)}" style="color:#0f766e;text-decoration:none;font-weight:700;">${safeHtmlText(shareUrl)}</a>
+              </p>
+            ` : ''}
+          </div>
+        </div>
+      `,
+            });
+            return { delivered: true, provider: 'sendgrid' };
+        }
+        catch (error) {
+            console.error('Error sending reverse job match digest email:', error);
             if (error === null || error === void 0 ? void 0 : error.response) {
                 console.error(error.response.body);
             }

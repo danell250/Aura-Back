@@ -12,9 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.jobsController = void 0;
-const client_s3_1 = require("@aws-sdk/client-s3");
-const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
+exports.jobsController = exports.registerJobViewCountShutdownHooks = exports.toJobResponse = exports.buildPublicJobsQuerySpec = exports.ensureJobsTextIndex = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const db_1 = require("../db");
 const identityUtils_1 = require("../utils/identityUtils");
@@ -26,9 +24,10 @@ const jobSkillGapService_1 = require("../services/jobSkillGapService");
 const jobRecommendationService_1 = require("../services/jobRecommendationService");
 const companyJobAnalyticsService_1 = require("../services/companyJobAnalyticsService");
 const jobApplicationReviewService_1 = require("../services/jobApplicationReviewService");
-const jobSyndicationService_1 = require("../services/jobSyndicationService");
 const resumeParsingService_1 = require("../services/resumeParsingService");
 const resumeEnrichmentQueueService_1 = require("../services/resumeEnrichmentQueueService");
+const jobResumeStorageService_1 = require("../services/jobResumeStorageService");
+const reverseJobMatchService_1 = require("../services/reverseJobMatchService");
 const userBadgeService_1 = require("../services/userBadgeService");
 const JOBS_COLLECTION = 'jobs';
 const JOB_APPLICATIONS_COLLECTION = 'job_applications';
@@ -47,8 +46,18 @@ const ALLOWED_RESUME_MIME_TYPES = new Set([
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
 const MAX_NETWORK_COUNT_SCAN_IDS = 5000;
-const MAX_NETWORK_COUNT_QUERY_BATCH_SIZE = 500;
 const JOB_SKILL_GAP_TIMEOUT_MS = 180;
+const CAREER_PAGE_SOURCE_SITES = new Set(['greenhouse', 'lever', 'workday', 'smartrecruiters', 'careers']);
+const JOB_VIEW_FLUSH_INTERVAL_MS = 5000;
+const JOB_VIEW_BUFFER_MAX_KEYS = 400;
+const JOB_RECOMMENDATION_PROFILE_CACHE_TTL_MS = 60000;
+const JOB_DISCOVERED_WINDOW_MINUTES = 30;
+const JOB_DISCOVERED_COUNT_CACHE_TTL_MS = 60000;
+const JOB_DISCOVERED_COUNT_CACHE_MAX_KEYS = 200;
+const AURA_PUBLIC_WEB_BASE_URL = ((0, inputSanitizers_1.readString)(process.env.AURA_PUBLIC_WEB_URL, 320)
+    || (0, inputSanitizers_1.readString)(process.env.FRONTEND_URL, 320)
+    || (0, inputSanitizers_1.readString)(process.env.VITE_FRONTEND_URL, 320)
+    || 'https://aura.social').replace(/\/+$/, '');
 const readStringList = (value, maxItems = 10, maxLength = 40) => {
     if (!Array.isArray(value))
         return [];
@@ -136,6 +145,13 @@ const parseDelimitedAllowedValues = (raw, allowed) => raw
     .split(',')
     .map((item) => item.trim().toLowerCase())
     .filter((item) => item.length > 0 && allowed.has(item));
+const parseSourceSite = (value) => {
+    const source = (0, inputSanitizers_1.readString)(value, 120).toLowerCase();
+    if (!source)
+        return '';
+    const [, suffix = source] = source.split(':', 2);
+    return (0, inputSanitizers_1.readString)(suffix, 120).toLowerCase();
+};
 let jobsTextIndexEnsured = false;
 const ensureJobsTextIndex = (db) => __awaiter(void 0, void 0, void 0, function* () {
     if (jobsTextIndexEnsured)
@@ -176,6 +192,7 @@ const ensureJobsTextIndex = (db) => __awaiter(void 0, void 0, void 0, function* 
         return false;
     }
 });
+exports.ensureJobsTextIndex = ensureJobsTextIndex;
 const buildPublicJobsQuerySpec = (params) => {
     const workModels = params.workModelRaw
         ? parseDelimitedAllowedValues(params.workModelRaw, ALLOWED_WORK_MODELS)
@@ -184,6 +201,7 @@ const buildPublicJobsQuerySpec = (params) => {
         ? parseDelimitedAllowedValues(params.employmentTypeRaw, ALLOWED_EMPLOYMENT_TYPES)
         : [];
     const locationRegex = sanitizeSearchRegex(params.locationRaw);
+    const companyRegex = sanitizeSearchRegex(params.companyRaw);
     const searchText = (0, inputSanitizers_1.readString)(params.searchRaw, 120);
     const andClauses = [];
     if (params.status === 'all') {
@@ -201,11 +219,31 @@ const buildPublicJobsQuerySpec = (params) => {
     if (locationRegex) {
         andClauses.push({ locationText: locationRegex });
     }
+    if (companyRegex) {
+        andClauses.push({ companyName: companyRegex });
+    }
     if (Number.isFinite(params.minSalary) && params.minSalary > 0) {
         andClauses.push({
             $or: [
                 { salaryMax: { $gte: params.minSalary } },
                 { salaryMin: { $gte: params.minSalary } },
+            ],
+        });
+    }
+    if (Number.isFinite(params.maxSalary) && params.maxSalary > 0) {
+        andClauses.push({
+            $or: [
+                { salaryMin: { $lte: params.maxSalary } },
+                { salaryMax: { $lte: params.maxSalary } },
+            ],
+        });
+    }
+    if (Number.isFinite(params.postedWithinHours) && params.postedWithinHours > 0) {
+        const thresholdIso = new Date(Date.now() - (params.postedWithinHours * 60 * 60 * 1000)).toISOString();
+        andClauses.push({
+            $or: [
+                { publishedAt: { $gte: thresholdIso } },
+                { createdAt: { $gte: thresholdIso } },
             ],
         });
     }
@@ -231,6 +269,7 @@ const buildPublicJobsQuerySpec = (params) => {
         searchText,
     };
 };
+exports.buildPublicJobsQuerySpec = buildPublicJobsQuerySpec;
 const slugifySegment = (value, maxLength = 80) => {
     const normalized = (0, inputSanitizers_1.readString)(String(value || ''), 240)
         .normalize('NFKD')
@@ -407,6 +446,9 @@ const scheduleApplicationPostCreateEffects = (params) => {
 const toJobResponse = (job) => ({
     id: String((job === null || job === void 0 ? void 0 : job.id) || ''),
     slug: buildPersistentJobSlug(job),
+    source: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.source, 120) || null,
+    sourceSite: parseSourceSite(job === null || job === void 0 ? void 0 : job.source) || null,
+    isCareerPageSource: CAREER_PAGE_SOURCE_SITES.has(parseSourceSite(job === null || job === void 0 ? void 0 : job.source)),
     companyId: String((job === null || job === void 0 ? void 0 : job.companyId) || ''),
     companyName: String((job === null || job === void 0 ? void 0 : job.companyName) || ''),
     companyHandle: String((job === null || job === void 0 ? void 0 : job.companyHandle) || ''),
@@ -433,7 +475,9 @@ const toJobResponse = (job) => ({
     applicationUrl: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationUrl, 600),
     applicationEmail: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationEmail, 200),
     applicationCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.applicationCount) ? Number(job.applicationCount) : 0,
+    viewCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.viewCount) ? Number(job.viewCount) : 0,
 });
+exports.toJobResponse = toJobResponse;
 const toApplicationResponse = (application) => ({
     id: String((application === null || application === void 0 ? void 0 : application.id) || ''),
     jobId: String((application === null || application === void 0 ? void 0 : application.jobId) || ''),
@@ -455,21 +499,145 @@ const toApplicationResponse = (application) => ({
     reviewedAt: (application === null || application === void 0 ? void 0 : application.reviewedAt) || null,
     statusNote: (application === null || application === void 0 ? void 0 : application.statusNote) || null,
 });
-let s3Client = null;
-const getS3Client = () => {
-    const region = process.env.S3_REGION;
-    const accessKeyId = process.env.S3_ACCESS_KEY_ID;
-    const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY;
-    if (!region || !accessKeyId || !secretAccessKey)
-        return null;
-    if (s3Client)
-        return s3Client;
-    s3Client = new client_s3_1.S3Client({
-        region,
-        credentials: { accessKeyId, secretAccessKey },
-    });
-    return s3Client;
+const pendingJobViewCount = new Map();
+let isJobViewFlushScheduled = false;
+let isJobViewShutdownHookRegistered = false;
+const recommendationProfileCache = new Map();
+const discoveredCountCache = new Map();
+const flushJobViewCountBuffer = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    if (pendingJobViewCount.size === 0)
+        return;
+    const snapshot = Array.from(pendingJobViewCount.entries());
+    pendingJobViewCount.clear();
+    const operations = snapshot.map(([jobId, count]) => ({
+        updateOne: {
+            filter: { id: jobId, status: { $ne: 'archived' } },
+            update: { $inc: { viewCount: count } },
+        },
+    }));
+    try {
+        yield db.collection(JOBS_COLLECTION).bulkWrite(operations, { ordered: false });
+    }
+    catch (error) {
+        for (const [jobId, count] of snapshot) {
+            pendingJobViewCount.set(jobId, (pendingJobViewCount.get(jobId) || 0) + count);
+        }
+        console.warn('Flush job view count buffer error:', error);
+    }
+});
+const scheduleJobViewCountFlush = (db) => {
+    if (isJobViewFlushScheduled)
+        return;
+    isJobViewFlushScheduled = true;
+    setTimeout(() => {
+        isJobViewFlushScheduled = false;
+        void flushJobViewCountBuffer(db);
+    }, JOB_VIEW_FLUSH_INTERVAL_MS);
 };
+const registerJobViewCountShutdownHooks = () => {
+    if (isJobViewShutdownHookRegistered)
+        return;
+    isJobViewShutdownHookRegistered = true;
+    const flushOnShutdown = () => {
+        if (!(0, db_1.isDBConnected)())
+            return;
+        void flushJobViewCountBuffer((0, db_1.getDB)());
+    };
+    process.once('SIGINT', flushOnShutdown);
+    process.once('SIGTERM', flushOnShutdown);
+    process.once('beforeExit', flushOnShutdown);
+};
+exports.registerJobViewCountShutdownHooks = registerJobViewCountShutdownHooks;
+const incrementJobViewCountAsync = (db, jobId) => {
+    if (!jobId)
+        return;
+    pendingJobViewCount.set(jobId, (pendingJobViewCount.get(jobId) || 0) + 1);
+    if (pendingJobViewCount.size >= JOB_VIEW_BUFFER_MAX_KEYS) {
+        void flushJobViewCountBuffer(db);
+        return;
+    }
+    scheduleJobViewCountFlush(db);
+};
+const resolveCachedRecommendationProfile = (db, currentUserId) => __awaiter(void 0, void 0, void 0, function* () {
+    if (!currentUserId)
+        return null;
+    const now = Date.now();
+    const cached = recommendationProfileCache.get(currentUserId);
+    if (cached && cached.expiresAt > now)
+        return cached.profile;
+    const recommendationUser = yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId }, {
+        projection: {
+            id: 1,
+            skills: 1,
+            profileSkills: 1,
+            location: 1,
+            country: 1,
+            industry: 1,
+            remotePreference: 1,
+            workPreference: 1,
+            preferredWorkModel: 1,
+            preferredWorkModels: 1,
+            workPreferences: 1,
+            experienceLevel: 1,
+            seniority: 1,
+            roleLevel: 1,
+            jobSeniorityPreference: 1,
+            yearsOfExperience: 1,
+            experienceYears: 1,
+            totalExperienceYears: 1,
+        },
+    });
+    if (!recommendationUser) {
+        recommendationProfileCache.delete(currentUserId);
+        return null;
+    }
+    const recommendationProfile = (0, jobRecommendationService_1.buildRecommendationProfile)(recommendationUser);
+    recommendationProfileCache.set(currentUserId, {
+        profile: recommendationProfile,
+        expiresAt: now + JOB_RECOMMENDATION_PROFILE_CACHE_TTL_MS,
+    });
+    return recommendationProfile;
+});
+const withOptimisticViewCount = (job) => (Object.assign(Object.assign({}, job), { viewCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.viewCount)
+        ? Number(job.viewCount) + 1
+        : 1 }));
+const buildDiscoveredWindowFilter = (baseFilter, thresholdIso) => {
+    const hasBaseFilter = baseFilter && Object.keys(baseFilter).length > 0;
+    const discoveredClause = { createdAt: { $gte: thresholdIso } };
+    if (!hasBaseFilter)
+        return discoveredClause;
+    return { $and: [baseFilter, discoveredClause] };
+};
+const buildDiscoveredCountCacheKey = (parts) => {
+    const normalizedParts = Object.entries(parts)
+        .map(([key, value]) => `${key}=${encodeURIComponent(String(value !== null && value !== void 0 ? value : ''))}`)
+        .join('&');
+    return crypto_1.default.createHash('sha256').update(normalizedParts).digest('hex');
+};
+const resolveCachedDiscoveredCount = (db, filter, cacheKey) => __awaiter(void 0, void 0, void 0, function* () {
+    const now = Date.now();
+    for (const [key, cacheValue] of discoveredCountCache.entries()) {
+        if (cacheValue.expiresAt <= now) {
+            discoveredCountCache.delete(key);
+        }
+    }
+    const cached = discoveredCountCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+        return cached.count;
+    }
+    const count = yield db.collection(JOBS_COLLECTION).countDocuments(filter);
+    while (discoveredCountCache.size >= JOB_DISCOVERED_COUNT_CACHE_MAX_KEYS) {
+        const oldestKey = discoveredCountCache.keys().next().value;
+        if (!oldestKey)
+            break;
+        discoveredCountCache.delete(oldestKey);
+    }
+    discoveredCountCache.set(cacheKey, {
+        count,
+        expiresAt: now + JOB_DISCOVERED_COUNT_CACHE_TTL_MS,
+    });
+    return count;
+});
 exports.jobsController = {
     // GET /api/companies/:companyId/jobs
     listCompanyJobs: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -507,7 +675,7 @@ exports.jobsController = {
             ]);
             return res.json({
                 success: true,
-                data: items.map(toJobResponse),
+                data: items.map(exports.toJobResponse),
                 pagination: {
                     page: pagination.page,
                     limit: pagination.limit,
@@ -523,6 +691,7 @@ exports.jobsController = {
     }),
     // GET /api/jobs
     listPublicJobs: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             if (!(0, db_1.isDBConnected)()) {
                 return res.json({
@@ -540,28 +709,52 @@ exports.jobsController = {
             const workModelRaw = (0, inputSanitizers_1.readString)(req.query.workModel, 80).toLowerCase();
             const employmentTypeRaw = (0, inputSanitizers_1.readString)(req.query.employmentType, 80).toLowerCase();
             const locationRaw = (0, inputSanitizers_1.readString)(req.query.location, 100);
+            const companyRaw = (0, inputSanitizers_1.readString)(req.query.company, 100);
             const searchRaw = (0, inputSanitizers_1.readString)(req.query.q, 120);
             const minSalary = Number(req.query.salaryMin);
+            const maxSalary = Number(req.query.salaryMax);
+            const postedWithinHours = Number(req.query.postedWithinHours);
             const sortBy = (0, inputSanitizers_1.readString)(req.query.sort, 40).toLowerCase() || 'latest';
             const pagination = getPagination(req.query);
-            const allowTextSearch = yield ensureJobsTextIndex(db);
+            if (Number.isFinite(minSalary) && Number.isFinite(maxSalary) && minSalary > 0 && maxSalary > 0 && maxSalary < minSalary) {
+                return res.status(400).json({ success: false, error: 'salaryMax cannot be less than salaryMin' });
+            }
+            const allowTextSearch = yield (0, exports.ensureJobsTextIndex)(db);
             if (searchRaw && !allowTextSearch) {
                 return res.status(503).json({
                     success: false,
                     error: 'Search index is warming up. Please retry in a moment.',
                 });
             }
-            const querySpec = buildPublicJobsQuerySpec({
+            const querySpec = (0, exports.buildPublicJobsQuerySpec)({
                 status,
                 workModelRaw,
                 employmentTypeRaw,
                 locationRaw,
+                companyRaw,
                 searchRaw,
                 minSalary,
+                maxSalary,
+                postedWithinHours,
                 sortBy,
                 allowTextSearch,
             });
-            const [items, total] = yield Promise.all([
+            const currentUserId = (0, inputSanitizers_1.readString)((_a = req.user) === null || _a === void 0 ? void 0 : _a.id, 120);
+            const recommendationProfilePromise = resolveCachedRecommendationProfile(db, currentUserId);
+            const discoveredThresholdIso = new Date(Date.now() - (JOB_DISCOVERED_WINDOW_MINUTES * 60 * 1000)).toISOString();
+            const discoveredFilter = buildDiscoveredWindowFilter(querySpec.filter, discoveredThresholdIso);
+            const discoveredCountCacheKey = buildDiscoveredCountCacheKey({
+                status,
+                workModelRaw,
+                employmentTypeRaw,
+                locationRaw,
+                companyRaw,
+                searchRaw,
+                minSalary: Number.isFinite(minSalary) ? minSalary : '',
+                maxSalary: Number.isFinite(maxSalary) ? maxSalary : '',
+                postedWithinHours: Number.isFinite(postedWithinHours) ? postedWithinHours : '',
+            });
+            const [items, total, discoveredLast30Minutes, recommendationProfile] = yield Promise.all([
                 db.collection(JOBS_COLLECTION)
                     .find(querySpec.filter, querySpec.usesTextSearch
                     ? {
@@ -573,10 +766,25 @@ exports.jobsController = {
                     .limit(pagination.limit)
                     .toArray(),
                 db.collection(JOBS_COLLECTION).countDocuments(querySpec.filter),
+                resolveCachedDiscoveredCount(db, discoveredFilter, discoveredCountCacheKey),
+                recommendationProfilePromise,
             ]);
+            const jobsWithRecommendations = items.map((item) => {
+                const base = (0, exports.toJobResponse)(item);
+                if (!recommendationProfile)
+                    return base;
+                const recommendation = (0, jobRecommendationService_1.buildJobRecommendationScore)(item, recommendationProfile);
+                const roundedScore = Math.max(0, Math.round(recommendation.score));
+                return Object.assign(Object.assign({}, base), { recommendationScore: roundedScore, recommendationReasons: recommendation.reasons.slice(0, 3), matchedSkills: recommendation.matchedSkills.slice(0, 5), matchTier: (0, jobRecommendationService_1.resolveRecommendationMatchTier)(roundedScore) });
+            });
             return res.json({
                 success: true,
-                data: items.map(toJobResponse),
+                data: jobsWithRecommendations,
+                meta: {
+                    discoveredLast30Minutes: Number.isFinite(discoveredLast30Minutes) && discoveredLast30Minutes > 0
+                        ? Number(discoveredLast30Minutes)
+                        : 0,
+                },
                 pagination: {
                     page: pagination.page,
                     limit: pagination.limit,
@@ -590,39 +798,85 @@ exports.jobsController = {
             return res.status(500).json({ success: false, error: 'Failed to fetch jobs' });
         }
     }),
-    // GET /api/partner/jobs
-    getJobsForSyndication: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
+    // GET /api/jobs/matches/:handle
+    getPublicJobMatchesByHandle: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
         try {
             if (!(0, db_1.isDBConnected)()) {
                 return res.status(503).json({ success: false, error: 'Database service unavailable' });
             }
+            const rawHandle = (0, inputSanitizers_1.readString)(req.params.handle, 120).replace(/^@+/, '');
+            if (!rawHandle) {
+                return res.status(400).json({ success: false, error: 'Handle is required' });
+            }
             const db = (0, db_1.getDB)();
-            const limit = (0, inputSanitizers_1.parsePositiveInt)((_a = req.query) === null || _a === void 0 ? void 0 : _a.limit, 100, 1, 250);
-            const statusRaw = (0, inputSanitizers_1.readString)((_b = req.query) === null || _b === void 0 ? void 0 : _b.status, 40).toLowerCase();
-            const status = statusRaw || 'open';
-            const filter = {};
-            if (status === 'all') {
-                filter.status = { $ne: 'archived' };
+            const handleRegex = new RegExp(`^@?${escapeRegexPattern(rawHandle)}$`, 'i');
+            const user = yield db.collection(USERS_COLLECTION).findOne({ handle: handleRegex }, {
+                projection: {
+                    id: 1,
+                    handle: 1,
+                    firstName: 1,
+                    name: 1,
+                    title: 1,
+                    skills: 1,
+                    profileSkills: 1,
+                    location: 1,
+                    country: 1,
+                    industry: 1,
+                    remotePreference: 1,
+                    workPreference: 1,
+                    preferredWorkModel: 1,
+                    preferredWorkModels: 1,
+                    workPreferences: 1,
+                    experienceLevel: 1,
+                    seniority: 1,
+                    roleLevel: 1,
+                    jobSeniorityPreference: 1,
+                    yearsOfExperience: 1,
+                    experienceYears: 1,
+                    totalExperienceYears: 1,
+                    jobMatchShareEnabled: 1,
+                },
+            });
+            if (!user) {
+                return res.status(404).json({ success: false, error: 'User not found' });
             }
-            else if (ALLOWED_JOB_STATUSES.has(status)) {
-                filter.status = status;
+            if ((user === null || user === void 0 ? void 0 : user.jobMatchShareEnabled) === false) {
+                return res.status(403).json({ success: false, error: 'This match feed is private' });
             }
-            else {
-                return res.status(400).json({ success: false, error: 'Invalid status filter' });
-            }
-            const jobs = yield db.collection(JOBS_COLLECTION)
-                .find(filter)
-                .sort({ publishedAt: -1, createdAt: -1 })
-                .limit(limit)
-                .toArray();
-            const feed = (0, jobSyndicationService_1.buildJobsSyndicationFeed)(jobs.map(toJobResponse));
-            res.setHeader('Content-Type', 'application/feed+json; charset=utf-8');
-            return res.status(200).json(feed);
+            const limit = (0, inputSanitizers_1.parsePositiveInt)((_a = req.query) === null || _a === void 0 ? void 0 : _a.limit, 20, 1, 40);
+            const matchedJobs = yield (0, reverseJobMatchService_1.listTopJobMatchesForUser)({
+                db,
+                user,
+                limit,
+            });
+            const normalizedHandle = (0, inputSanitizers_1.readString)(user === null || user === void 0 ? void 0 : user.handle, 120) || `@${rawHandle.toLowerCase()}`;
+            return res.json({
+                success: true,
+                data: matchedJobs.map((job) => (Object.assign(Object.assign({}, (0, exports.toJobResponse)(job)), { recommendationScore: Number.isFinite(job === null || job === void 0 ? void 0 : job.recommendationScore) && Number(job === null || job === void 0 ? void 0 : job.recommendationScore) > 0
+                        ? Number(job.recommendationScore)
+                        : 0, recommendationReasons: Array.isArray(job === null || job === void 0 ? void 0 : job.recommendationReasons)
+                        ? job.recommendationReasons.slice(0, 3)
+                        : [], matchedSkills: Array.isArray(job === null || job === void 0 ? void 0 : job.matchedSkills)
+                        ? job.matchedSkills.slice(0, 5)
+                        : [], matchTier: (job === null || job === void 0 ? void 0 : job.matchTier) === 'best' || (job === null || job === void 0 ? void 0 : job.matchTier) === 'good' || (job === null || job === void 0 ? void 0 : job.matchTier) === 'other'
+                        ? job.matchTier
+                        : 'other' }))),
+                meta: {
+                    user: {
+                        id: String((user === null || user === void 0 ? void 0 : user.id) || ''),
+                        handle: normalizedHandle,
+                        name: (0, inputSanitizers_1.readString)(user === null || user === void 0 ? void 0 : user.name, 160)
+                            || (0, inputSanitizers_1.readString)(user === null || user === void 0 ? void 0 : user.firstName, 120)
+                            || normalizedHandle,
+                    },
+                    shareUrl: `${AURA_PUBLIC_WEB_BASE_URL}/jobs/${encodeURIComponent(normalizedHandle)}`,
+                },
+            });
         }
         catch (error) {
-            console.error('Get jobs for syndication error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to build jobs syndication feed' });
+            console.error('Get public job matches by handle error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to fetch public job matches' });
         }
     }),
     // GET /api/jobs/salary-insights
@@ -637,7 +891,7 @@ exports.jobsController = {
                 return res.status(400).json({ success: false, error: 'jobTitle and location are required' });
             }
             const db = (0, db_1.getDB)();
-            const allowTextSearch = yield ensureJobsTextIndex(db);
+            const allowTextSearch = yield (0, exports.ensureJobsTextIndex)(db);
             if (!allowTextSearch) {
                 return res.status(503).json({
                     success: false,
@@ -735,17 +989,19 @@ exports.jobsController = {
             if (slugJobId) {
                 const byId = yield db.collection(JOBS_COLLECTION).findOne({ id: slugJobId, status: { $ne: 'archived' } });
                 if (byId) {
+                    incrementJobViewCountAsync(db, slugJobId);
+                    const byIdWithView = withOptimisticViewCount(byId);
                     const skillGap = currentUserId
                         ? yield resolveJobSkillGap({
                             db,
                             currentUserId,
                             viewer: req.user,
-                            job: byId,
+                            job: byIdWithView,
                         })
                         : null;
                     return res.json({
                         success: true,
-                        data: Object.assign(Object.assign({}, toJobResponse(byId)), (skillGap ? { skillGap } : {})),
+                        data: Object.assign(Object.assign({}, (0, exports.toJobResponse)(byIdWithView)), (skillGap ? { skillGap } : {})),
                     });
                 }
             }
@@ -756,17 +1012,19 @@ exports.jobsController = {
             if (!bySlug) {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
+            incrementJobViewCountAsync(db, (0, inputSanitizers_1.readString)(bySlug === null || bySlug === void 0 ? void 0 : bySlug.id, 120));
+            const bySlugWithView = withOptimisticViewCount(bySlug);
             const skillGap = currentUserId
                 ? yield resolveJobSkillGap({
                     db,
                     currentUserId,
                     viewer: req.user,
-                    job: bySlug,
+                    job: bySlugWithView,
                 })
                 : null;
             return res.json({
                 success: true,
-                data: Object.assign(Object.assign({}, toJobResponse(bySlug)), (skillGap ? { skillGap } : {})),
+                data: Object.assign(Object.assign({}, (0, exports.toJobResponse)(bySlugWithView)), (skillGap ? { skillGap } : {})),
             });
         }
         catch (error) {
@@ -784,21 +1042,23 @@ exports.jobsController = {
             const { jobId } = req.params;
             const db = (0, db_1.getDB)();
             const currentUserId = (0, inputSanitizers_1.readString)((_a = req.user) === null || _a === void 0 ? void 0 : _a.id, 120);
-            const job = yield db.collection(JOBS_COLLECTION).findOne({ id: jobId });
-            if (!job || job.status === 'archived') {
+            const job = yield db.collection(JOBS_COLLECTION).findOne({ id: jobId, status: { $ne: 'archived' } });
+            if (!job) {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
+            incrementJobViewCountAsync(db, jobId);
+            const jobWithView = withOptimisticViewCount(job);
             const skillGap = currentUserId
                 ? yield resolveJobSkillGap({
                     db,
                     currentUserId,
                     viewer: req.user,
-                    job,
+                    job: jobWithView,
                 })
                 : null;
             return res.json({
                 success: true,
-                data: Object.assign(Object.assign({}, toJobResponse(job)), (skillGap ? { skillGap } : {})),
+                data: Object.assign(Object.assign({}, (0, exports.toJobResponse)(jobWithView)), (skillGap ? { skillGap } : {})),
             });
         }
         catch (error) {
@@ -840,29 +1100,10 @@ exports.jobsController = {
                 return res.json({ success: true, data: { count: 0, companyId } });
             }
             const scannedAcquaintanceIds = acquaintanceIds.slice(0, MAX_NETWORK_COUNT_SCAN_IDS);
-            const batches = [];
-            for (let index = 0; index < scannedAcquaintanceIds.length; index += MAX_NETWORK_COUNT_QUERY_BATCH_SIZE) {
-                const batch = scannedAcquaintanceIds.slice(index, index + MAX_NETWORK_COUNT_QUERY_BATCH_SIZE);
-                if (batch.length > 0) {
-                    batches.push(batch);
-                }
-            }
-            const maxConcurrentBatchQueries = 2;
-            const partialCounts = new Array(batches.length);
-            let batchCursor = 0;
-            const runBatchWorker = () => __awaiter(void 0, void 0, void 0, function* () {
-                while (batchCursor < batches.length) {
-                    const nextIndex = batchCursor;
-                    batchCursor += 1;
-                    const batch = batches[nextIndex];
-                    partialCounts[nextIndex] = yield db.collection(COMPANY_MEMBERS_COLLECTION).countDocuments({
-                        companyId,
-                        userId: { $in: batch },
-                    });
-                }
+            const count = yield db.collection(COMPANY_MEMBERS_COLLECTION).countDocuments({
+                companyId,
+                userId: { $in: scannedAcquaintanceIds },
             });
-            yield Promise.all(Array.from({ length: Math.min(maxConcurrentBatchQueries, batches.length) }, () => runBatchWorker()));
-            const count = partialCounts.reduce((sum, value) => sum + value, 0);
             return res.json({
                 success: true,
                 data: {
@@ -964,6 +1205,7 @@ exports.jobsController = {
                 salaryCurrency,
                 applicationDeadline,
                 status: 'open',
+                source: 'aura:company',
                 tags,
                 createdByUserId: currentUserId,
                 createdAt: nowIso,
@@ -973,6 +1215,7 @@ exports.jobsController = {
                 applicationUrl,
                 applicationEmail,
                 applicationCount: 0,
+                viewCount: 0,
             };
             job.slug = buildPersistentJobSlug(job);
             const db = (0, db_1.getDB)();
@@ -1062,7 +1305,7 @@ exports.jobsController = {
             yield db.collection(JOBS_COLLECTION).insertOne(job);
             return res.status(201).json({
                 success: true,
-                data: toJobResponse(job),
+                data: (0, exports.toJobResponse)(job),
             });
         }
         catch (error) {
@@ -1203,7 +1446,7 @@ exports.jobsController = {
             const updatedJob = yield db.collection(JOBS_COLLECTION).findOne({ id: jobId });
             return res.json({
                 success: true,
-                data: toJobResponse(updatedJob),
+                data: (0, exports.toJobResponse)(updatedJob),
             });
         }
         catch (error) {
@@ -1259,19 +1502,9 @@ exports.jobsController = {
                     : null,
             };
             Object.assign(nextUpdate, (0, jobRecommendationService_1.buildJobRecommendationPrecomputedFields)(recommendationSource));
-            if (nextStatus !== 'open') {
-                Object.assign(nextUpdate, {
-                    recommendationPublishedTs: 0,
-                    recommendationSkillLabelByToken: {},
-                    recommendationLocationTokens: [],
-                    recommendationSemanticTokens: [],
-                    recommendationHasSalarySignal: false,
-                    recommendationIsRemoteRole: false,
-                });
-            }
             yield db.collection(JOBS_COLLECTION).updateOne({ id: jobId }, { $set: nextUpdate });
             const updatedJob = yield db.collection(JOBS_COLLECTION).findOne({ id: jobId });
-            return res.json({ success: true, data: toJobResponse(updatedJob) });
+            return res.json({ success: true, data: (0, exports.toJobResponse)(updatedJob) });
         }
         catch (error) {
             console.error('Update job status error:', error);
@@ -1580,7 +1813,7 @@ exports.jobsController = {
             const { applicationId } = req.params;
             const nextStatus = (0, inputSanitizers_1.readString)((_b = req.body) === null || _b === void 0 ? void 0 : _b.status, 40).toLowerCase();
             const statusNote = (0, inputSanitizers_1.readStringOrNull)((_c = req.body) === null || _c === void 0 ? void 0 : _c.statusNote, 1000);
-            if (!ALLOWED_APPLICATION_STATUSES.has(nextStatus) || nextStatus === 'withdrawn') {
+            if (!ALLOWED_APPLICATION_STATUSES.has(nextStatus)) {
                 return res.status(400).json({ success: false, error: 'Invalid application status' });
             }
             const db = (0, db_1.getDB)();
@@ -1646,24 +1879,19 @@ exports.jobsController = {
             if (!resumeKey) {
                 return res.status(404).json({ success: false, error: 'Resume key not available for this application' });
             }
-            const bucketName = process.env.S3_BUCKET_NAME;
-            const client = getS3Client();
-            if (!bucketName || !client) {
+            const expiresInSeconds = 600;
+            const url = yield (0, jobResumeStorageService_1.getApplicationResumeSignedUrl)(resumeKey, expiresInSeconds);
+            if (!url) {
                 return res.status(503).json({
                     success: false,
                     error: 'Resume preview service is not configured',
                 });
             }
-            const command = new client_s3_1.GetObjectCommand({
-                Bucket: bucketName,
-                Key: resumeKey,
-            });
-            const url = yield (0, s3_request_presigner_1.getSignedUrl)(client, command, { expiresIn: 600 });
             return res.json({
                 success: true,
                 data: {
                     url,
-                    expiresIn: 600,
+                    expiresIn: expiresInSeconds,
                 },
             });
         }
@@ -1884,7 +2112,7 @@ exports.jobsController = {
             const data = items.map((application) => {
                 const job = jobsById.get(String(application.jobId || ''));
                 const company = companiesById.get(String((job === null || job === void 0 ? void 0 : job.companyId) || ''));
-                return Object.assign(Object.assign({}, toApplicationResponse(application)), { job: job ? toJobResponse(job) : null, company: company
+                return Object.assign(Object.assign({}, toApplicationResponse(application)), { job: job ? (0, exports.toJobResponse)(job) : null, company: company
                         ? {
                             id: String(company.id || ''),
                             name: String(company.name || ''),

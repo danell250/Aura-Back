@@ -4,14 +4,18 @@ import {
   buildJobRecommendationScore,
   buildRecommendationCandidateFilter,
   buildRecommendationProfile,
+  resolveRecommendationMatchTier,
+  type RecommendationMatchTier,
 } from '../services/jobRecommendationService';
 import { parsePositiveInt, readString, readStringOrNull } from '../utils/inputSanitizers';
 
 const JOBS_COLLECTION = 'jobs';
 const USERS_COLLECTION = 'users';
+const CAREER_PAGE_SOURCE_SITES = new Set(['greenhouse', 'lever', 'workday', 'smartrecruiters', 'careers']);
 
 type RecommendationPayload = {
   data: any[];
+  groups: Record<RecommendationMatchTier, number>;
   pagination: {
     page: number;
     limit: number;
@@ -20,9 +24,19 @@ type RecommendationPayload = {
   };
 };
 
+const resolveSourceSite = (sourceValue: unknown): string => {
+  const source = readString(sourceValue, 120).toLowerCase();
+  if (!source) return '';
+  const [, suffix = source] = source.split(':', 2);
+  return readString(suffix, 120).toLowerCase();
+};
+
 const toRecommendedJobResponse = (job: any) => ({
   id: String(job?.id || ''),
   slug: readString(job?.slug, 220),
+  source: readString(job?.source, 120) || null,
+  sourceSite: resolveSourceSite(job?.source) || null,
+  isCareerPageSource: CAREER_PAGE_SOURCE_SITES.has(resolveSourceSite(job?.source)),
   companyId: String(job?.companyId || ''),
   companyName: String(job?.companyName || ''),
   companyHandle: String(job?.companyHandle || ''),
@@ -49,6 +63,7 @@ const toRecommendedJobResponse = (job: any) => ({
   applicationUrl: readStringOrNull(job?.applicationUrl, 600),
   applicationEmail: readStringOrNull(job?.applicationEmail, 200),
   applicationCount: Number.isFinite(job?.applicationCount) ? Number(job.applicationCount) : 0,
+  viewCount: Number.isFinite(job?.viewCount) ? Number(job.viewCount) : 0,
 });
 
 const fetchRecommendationCandidateJobs = async (params: {
@@ -68,7 +83,7 @@ const fetchRecommendationCandidateJobs = async (params: {
       .toArray();
   }
 
-  const coarseLimit = Math.min(1200, Math.max(params.candidateLimit * 4, 480));
+  const coarseLimit = Math.min(600, Math.max(params.candidateLimit * 2, 160));
   return params.db.collection(JOBS_COLLECTION)
     .aggregate([
       { $match: { status: 'open' } },
@@ -96,6 +111,7 @@ const buildRecommendationPayload = (params: {
   if (params.candidateJobs.length === 0) {
     return {
       data: [],
+      groups: { best: 0, good: 0, other: 0 },
       pagination: { page: 1, limit: params.limit, total: 0, pages: 0 },
     };
   }
@@ -112,20 +128,35 @@ const buildRecommendationPayload = (params: {
     .filter((entry) => entry.score > 0)
     .sort((a, b) => (b.score - a.score) || (b.publishedTs - a.publishedTs));
 
-  const selectedEntries = (rankedMatches.length > 0 ? rankedMatches : scoredJobs)
-    .slice(0, params.limit);
+  const selectedEntries = (rankedMatches.length > 0 ? rankedMatches : scoredJobs).slice(0, params.limit);
+  const groupedEntries = selectedEntries.map((entry) => ({
+    ...entry,
+    matchTier: resolveRecommendationMatchTier(entry.score),
+  }));
+  const orderedEntries = [
+    ...groupedEntries.filter((entry) => entry.matchTier === 'best'),
+    ...groupedEntries.filter((entry) => entry.matchTier === 'good'),
+    ...groupedEntries.filter((entry) => entry.matchTier === 'other'),
+  ];
+  const groups: Record<RecommendationMatchTier, number> = {
+    best: groupedEntries.filter((entry) => entry.matchTier === 'best').length,
+    good: groupedEntries.filter((entry) => entry.matchTier === 'good').length,
+    other: groupedEntries.filter((entry) => entry.matchTier === 'other').length,
+  };
 
   return {
-    data: selectedEntries.map((entry) => ({
+    data: orderedEntries.map((entry) => ({
       ...toRecommendedJobResponse(entry.job),
       recommendationScore: entry.score,
       recommendationReasons: entry.reasons.slice(0, 3),
       matchedSkills: entry.matchedSkills.slice(0, 5),
+      matchTier: entry.matchTier,
     })),
+    groups,
     pagination: {
       page: 1,
       limit: params.limit,
-      total: selectedEntries.length,
+      total: orderedEntries.length,
       pages: 1,
     },
   };
@@ -150,7 +181,7 @@ export const jobRecommendationsController = {
 
       const db = getDB();
       const limit = parsePositiveInt((req.query as any)?.limit, 20, 1, 40);
-      const candidateLimit = parsePositiveInt((req.query as any)?.candidateLimit, 120, 40, 160);
+      const candidateLimit = parsePositiveInt((req.query as any)?.candidateLimit, 100, 30, 120);
       const user = await db.collection(USERS_COLLECTION).findOne(
         { id: currentUserId },
         {
@@ -161,6 +192,18 @@ export const jobRecommendationsController = {
             location: 1,
             country: 1,
             industry: 1,
+            remotePreference: 1,
+            workPreference: 1,
+            preferredWorkModel: 1,
+            preferredWorkModels: 1,
+            workPreferences: 1,
+            experienceLevel: 1,
+            seniority: 1,
+            roleLevel: 1,
+            jobSeniorityPreference: 1,
+            yearsOfExperience: 1,
+            experienceYears: 1,
+            totalExperienceYears: 1,
           },
         },
       );
