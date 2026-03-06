@@ -1,6 +1,8 @@
 import type { AnyBulkWriteOperation } from 'mongodb';
 import crypto from 'crypto';
 import { readString } from '../utils/inputSanitizers';
+import { normalizeEmailAddress, normalizeExternalUrl } from '../utils/contactNormalization';
+import { yieldToEventLoop } from '../utils/concurrencyUtils';
 
 const JOBS_COLLECTION = 'jobs';
 export const MAX_INTERNAL_AGGREGATED_INGEST_ITEMS = 500;
@@ -51,10 +53,16 @@ type AggregatedIngestMetaFields = {
 
 export type IngestionStats = {
   inserted: number;
+  insertedJobIds: string[];
   updated: number;
   skipped: number;
   skippedReasons: Record<string, number>;
   errorSamples: Array<{ index: number; message: string }>;
+};
+
+type BulkIngestionOperationMeta = {
+  jobId: string;
+  sourceIndex: number;
 };
 
 const readStringList = (value: unknown, maxItems = 10, maxLength = 40): string[] => {
@@ -92,26 +100,6 @@ const summarizeText = (value: string, maxLength = 240): string => {
   if (!normalized) return '';
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
-};
-
-const normalizeExternalUrl = (value: unknown): string | null => {
-  const raw = readString(String(value || ''), 600);
-  if (!raw) return null;
-  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try {
-    const parsed = new URL(withProtocol);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-};
-
-const normalizeEmailAddress = (value: unknown): string | null => {
-  const raw = readString(String(value || ''), 200).toLowerCase();
-  if (!raw) return null;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return null;
-  return raw;
 };
 
 const normalizeWorkModel = (rawValue: unknown, locationText: string): string => {
@@ -283,6 +271,7 @@ const buildAggregatedIngestMutation = (params: {
       slug: '',
       createdByUserId: params.meta.createdByUserId,
       createdAt: params.meta.createdAt,
+      discoveredAt: params.nowIso,
       updatedAt: params.nowIso,
       announcementPostId: null,
       viewCount: 0,
@@ -327,14 +316,12 @@ const normalizeAggregatedIngestPayload = (
 
 const createIngestionStats = (): IngestionStats => ({
   inserted: 0,
+  insertedJobIds: [],
   updated: 0,
   skipped: 0,
   skippedReasons: {},
   errorSamples: [],
 });
-
-const yieldToEventLoop = async (): Promise<void> =>
-  new Promise((resolve) => setImmediate(resolve));
 
 const incrementSkipReason = (stats: IngestionStats, reason: string, count = 1) => {
   if (count <= 0) return;
@@ -348,10 +335,10 @@ const buildBulkIngestionOperations = async (
   stats: IngestionStats,
 ): Promise<{
   operations: AnyBulkWriteOperation<any>[];
-  operationSourceIndexes: number[];
+  operationMetaByBulkIndex: BulkIngestionOperationMeta[];
 }> => {
   const operations: AnyBulkWriteOperation<any>[] = [];
-  const operationSourceIndexes: number[] = [];
+  const operationMetaByBulkIndex: BulkIngestionOperationMeta[] = [];
 
   for (let index = 0; index < jobs.length; index += 1) {
     const normalized = normalizeAggregatedIngestPayload(jobs[index], nowIso);
@@ -370,19 +357,23 @@ const buildBulkIngestionOperations = async (
         upsert: true,
       },
     });
-    operationSourceIndexes.push(index);
+    operationMetaByBulkIndex.push({
+      jobId: readString(normalized.payload.setOnInsertFields.id, 120),
+      sourceIndex: index,
+    });
 
     if ((index + 1) % NORMALIZATION_YIELD_INTERVAL === 0) {
       await yieldToEventLoop();
     }
   }
 
-  return { operations, operationSourceIndexes };
+  return { operations, operationMetaByBulkIndex };
 };
 
 const applyBulkWriteResultToStats = (
   stats: IngestionStats,
-  result: { upsertedCount?: number; modifiedCount?: number; matchedCount?: number },
+  result: { upsertedCount?: number; modifiedCount?: number; matchedCount?: number; upsertedIds?: Record<string, unknown> },
+  operationMetaByBulkIndex: BulkIngestionOperationMeta[],
 ) => {
   const upsertedCount = Number(result.upsertedCount || 0);
   const modifiedCount = Number(result.modifiedCount || 0);
@@ -394,12 +385,26 @@ const applyBulkWriteResultToStats = (
   if (unchangedCount > 0) {
     incrementSkipReason(stats, 'no_changes', unchangedCount);
   }
+
+  const seen = new Set(stats.insertedJobIds);
+  Object.keys(result.upsertedIds || {}).forEach((rawIndex) => {
+    const operationIndex = Number(rawIndex);
+    if (
+      !Number.isFinite(operationIndex)
+      || operationIndex < 0
+      || operationIndex >= operationMetaByBulkIndex.length
+    ) return;
+    const jobId = readString(operationMetaByBulkIndex[operationIndex]?.jobId, 120);
+    if (!jobId || seen.has(jobId)) return;
+    seen.add(jobId);
+    stats.insertedJobIds.push(jobId);
+  });
 };
 
 const addWriteErrorsToStats = (
   stats: IngestionStats,
   writeErrors: any[],
-  operationSourceIndexes: number[],
+  operationMetaByBulkIndex: BulkIngestionOperationMeta[],
 ) => {
   if (writeErrors.length > 0) {
     incrementSkipReason(stats, 'database_error', writeErrors.length);
@@ -408,10 +413,9 @@ const addWriteErrorsToStats = (
   for (const writeError of writeErrors) {
     if (stats.errorSamples.length >= 5) break;
     const opIndex = Number.isFinite(writeError?.index) ? Number(writeError.index) : -1;
-    const sourceIndex =
-      opIndex >= 0 && opIndex < operationSourceIndexes.length
-        ? operationSourceIndexes[opIndex]
-        : opIndex;
+    const sourceIndex = opIndex >= 0 && opIndex < operationMetaByBulkIndex.length
+      ? operationMetaByBulkIndex[opIndex].sourceIndex
+      : opIndex;
     stats.errorSamples.push({
       index: sourceIndex,
       message:
@@ -439,7 +443,7 @@ export const ingestAggregatedJobsBatch = async (
   nowIso: string,
 ): Promise<IngestionStats> => {
   const stats = createIngestionStats();
-  const { operations, operationSourceIndexes } = await buildBulkIngestionOperations(jobs, nowIso, stats);
+  const { operations, operationMetaByBulkIndex } = await buildBulkIngestionOperations(jobs, nowIso, stats);
 
   if (operations.length === 0) {
     return stats;
@@ -447,7 +451,7 @@ export const ingestAggregatedJobsBatch = async (
 
   try {
     const result = await db.collection(JOBS_COLLECTION).bulkWrite(operations, { ordered: false });
-    applyBulkWriteResultToStats(stats, result);
+    applyBulkWriteResultToStats(stats, result, operationMetaByBulkIndex);
     return stats;
   } catch (bulkError: any) {
     const partialResult = bulkError?.result;
@@ -465,9 +469,9 @@ export const ingestAggregatedJobsBatch = async (
       throw bulkError;
     }
 
-    applyBulkWriteResultToStats(stats, partialResult);
+    applyBulkWriteResultToStats(stats, partialResult, operationMetaByBulkIndex);
     const writeErrors = Array.isArray(bulkError?.writeErrors) ? bulkError.writeErrors : [];
-    addWriteErrorsToStats(stats, writeErrors, operationSourceIndexes);
+    addWriteErrorsToStats(stats, writeErrors, operationMetaByBulkIndex);
     const writeConcernErrors = Array.isArray(bulkError?.writeConcernErrors)
       ? bulkError.writeConcernErrors
       : [];

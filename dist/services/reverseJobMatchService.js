@@ -9,11 +9,15 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.listTopJobMatchesForUser = exports.processReverseJobMatchesForIngestedPayload = exports.ensureReverseMatchIndexes = void 0;
+exports.listTopJobMatchesForUser = exports.processReverseJobMatchesForIngestedPayload = exports.warmReverseMatchIndexes = exports.ensureReverseMatchIndexes = void 0;
 const crypto_1 = require("crypto");
-const notificationsController_1 = require("../controllers/notificationsController");
 const jobRecommendationService_1 = require("./jobRecommendationService");
+const jobPulseService_1 = require("./jobPulseService");
+const reverseJobMatchNotificationService_1 = require("./reverseJobMatchNotificationService");
+const reverseJobMatchWorkerService_1 = require("./reverseJobMatchWorkerService");
+const reverseJobMatchScoringUtils_1 = require("./reverseJobMatchScoringUtils");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
+const concurrencyUtils_1 = require("../utils/concurrencyUtils");
 const USERS_COLLECTION = 'users';
 const JOBS_COLLECTION = 'jobs';
 const REVERSE_MATCH_ALERTS_COLLECTION = 'job_reverse_match_alerts';
@@ -22,31 +26,31 @@ const REVERSE_MATCH_MIN_SCORE = Number.isFinite(Number(process.env.REVERSE_MATCH
     : 70;
 const REVERSE_MATCH_MAX_USER_SCAN = Number.isFinite(Number(process.env.REVERSE_MATCH_MAX_USER_SCAN))
     ? Math.max(100, Math.round(Number(process.env.REVERSE_MATCH_MAX_USER_SCAN)))
-    : 3000;
+    : 300;
 const REVERSE_MATCH_MAX_JOBS_PER_RUN = Number.isFinite(Number(process.env.REVERSE_MATCH_MAX_JOBS_PER_RUN))
     ? Math.max(20, Math.round(Number(process.env.REVERSE_MATCH_MAX_JOBS_PER_RUN)))
-    : 400;
+    : 60;
 const REVERSE_MATCH_MAX_OPS_PER_RUN = Number.isFinite(Number(process.env.REVERSE_MATCH_MAX_OPS_PER_RUN))
     ? Math.max(200, Math.round(Number(process.env.REVERSE_MATCH_MAX_OPS_PER_RUN)))
     : 25000;
 const REVERSE_MATCH_MAX_CANDIDATES_PER_JOB = Number.isFinite(Number(process.env.REVERSE_MATCH_MAX_CANDIDATES_PER_JOB))
-    ? Math.max(60, Math.round(Number(process.env.REVERSE_MATCH_MAX_CANDIDATES_PER_JOB)))
-    : 180;
-const REVERSE_MATCH_FALLBACK_CANDIDATES_PER_JOB = Number.isFinite(Number(process.env.REVERSE_MATCH_FALLBACK_CANDIDATES_PER_JOB))
-    ? Math.max(20, Math.round(Number(process.env.REVERSE_MATCH_FALLBACK_CANDIDATES_PER_JOB)))
+    ? Math.max(40, Math.round(Number(process.env.REVERSE_MATCH_MAX_CANDIDATES_PER_JOB)))
     : 80;
+const REVERSE_MATCH_FALLBACK_CANDIDATES_PER_JOB = Number.isFinite(Number(process.env.REVERSE_MATCH_FALLBACK_CANDIDATES_PER_JOB))
+    ? Math.max(10, Math.round(Number(process.env.REVERSE_MATCH_FALLBACK_CANDIDATES_PER_JOB)))
+    : 30;
 const REVERSE_MATCH_MAX_SCORE_EVALUATIONS_PER_RUN = Number.isFinite(Number(process.env.REVERSE_MATCH_MAX_SCORE_EVALUATIONS_PER_RUN))
-    ? Math.max(2000, Math.round(Number(process.env.REVERSE_MATCH_MAX_SCORE_EVALUATIONS_PER_RUN)))
-    : 18000;
+    ? Math.max(500, Math.round(Number(process.env.REVERSE_MATCH_MAX_SCORE_EVALUATIONS_PER_RUN)))
+    : 500;
 const REVERSE_MATCH_NOTIFICATION_TOP_JOBS = Number.isFinite(Number(process.env.REVERSE_MATCH_NOTIFICATION_TOP_JOBS))
     ? Math.max(1, Math.round(Number(process.env.REVERSE_MATCH_NOTIFICATION_TOP_JOBS)))
     : 5;
 const REVERSE_MATCH_NOTIFICATION_BATCH_SIZE = Number.isFinite(Number(process.env.REVERSE_MATCH_NOTIFICATION_BATCH_SIZE))
     ? Math.max(1, Math.round(Number(process.env.REVERSE_MATCH_NOTIFICATION_BATCH_SIZE)))
     : 25;
-const REVERSE_MATCH_SCORE_YIELD_EVERY = Number.isFinite(Number(process.env.REVERSE_MATCH_SCORE_YIELD_EVERY))
-    ? Math.max(20, Math.round(Number(process.env.REVERSE_MATCH_SCORE_YIELD_EVERY)))
-    : 120;
+const REVERSE_MATCH_YIELD_BATCH_SIZE = Number.isFinite(Number(process.env.REVERSE_MATCH_SCORE_YIELD_EVERY))
+    ? Math.max(10, Math.round(Number(process.env.REVERSE_MATCH_SCORE_YIELD_EVERY)))
+    : 5;
 const REVERSE_MATCH_INDEX_RETRY_BACKOFF_MS = Number.isFinite(Number(process.env.REVERSE_MATCH_INDEX_RETRY_BACKOFF_MS))
     ? Math.max(1000, Math.round(Number(process.env.REVERSE_MATCH_INDEX_RETRY_BACKOFF_MS)))
     : 5 * 60 * 1000;
@@ -95,15 +99,6 @@ const normalizeWorkModelToken = (value) => {
         return 'onsite';
     return '';
 };
-const hasIntersection = (left, rightTokens) => {
-    if (left.size === 0 || rightTokens.length === 0)
-        return false;
-    for (const token of rightTokens) {
-        if (left.has(token))
-            return true;
-    }
-    return false;
-};
 const appendIndexedContextEntries = (index, tokens, ctxIndex) => {
     for (const token of tokens) {
         const normalized = normalizeSkillToken(token);
@@ -128,64 +123,16 @@ const collectIndexedCandidates = (index, tokens, target) => {
         indexes.forEach((ctxIndex) => target.add(ctxIndex));
     }
 };
-const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
-const runTasksInBatches = (tasks, batchSize) => __awaiter(void 0, void 0, void 0, function* () {
-    for (let index = 0; index < tasks.length; index += batchSize) {
-        const batch = tasks.slice(index, index + batchSize);
-        yield Promise.allSettled(batch.map((task) => task()));
-        yield yieldToEventLoop();
-    }
-});
-const normalizeExternalUrl = (value) => {
-    const raw = (0, inputSanitizers_1.readString)(String(value || ''), 700);
-    if (!raw)
-        return '';
-    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-    try {
-        const parsed = new URL(withProtocol);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
-            return '';
-        return parsed.toString();
-    }
-    catch (_a) {
-        return '';
-    }
-};
-const buildIngestFilterKey = (source, originalId, originalUrl) => {
-    if (source && originalId)
-        return `s:${source}|i:${originalId}`;
-    if (source && originalUrl)
-        return `s:${source}|u:${originalUrl}`;
-    return '';
-};
-const resolveIngestedOpenJobsFromPayload = (db, rawJobs) => __awaiter(void 0, void 0, void 0, function* () {
-    const filters = [];
-    const dedupe = new Set();
-    for (const raw of rawJobs) {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw))
-            continue;
-        const payload = raw;
-        const source = (0, inputSanitizers_1.readString)(payload.source, 80).toLowerCase();
-        const originalId = (0, inputSanitizers_1.readString)(payload.originalId, 240);
-        const originalUrl = normalizeExternalUrl(payload.originalUrl);
-        const key = buildIngestFilterKey(source, originalId, originalUrl);
-        if (!key || dedupe.has(key))
-            continue;
-        dedupe.add(key);
-        if (source && originalId) {
-            filters.push({ source, originalId });
-            continue;
-        }
-        if (source && originalUrl) {
-            filters.push({ source, originalUrl });
-        }
-    }
-    if (filters.length === 0)
+const resolveOpenJobsForReverseMatch = (db, jobIds) => __awaiter(void 0, void 0, void 0, function* () {
+    const normalizedJobIds = Array.from(new Set(jobIds
+        .map((jobId) => (0, inputSanitizers_1.readString)(jobId, 120))
+        .filter((jobId) => jobId.length > 0))).slice(0, REVERSE_MATCH_MAX_JOBS_PER_RUN);
+    if (normalizedJobIds.length === 0)
         return [];
     return db.collection(JOBS_COLLECTION)
         .find({
         status: 'open',
-        $or: filters,
+        id: { $in: normalizedJobIds },
     }, {
         projection: {
             id: 1,
@@ -219,28 +166,32 @@ const resolveIngestedOpenJobsFromPayload = (db, rawJobs) => __awaiter(void 0, vo
 const ensureReverseMatchIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
     if (reverseMatchIndexesEnsured)
         return;
-    if (reverseMatchIndexesPromise)
-        return reverseMatchIndexesPromise;
     if (reverseMatchIndexesLastFailureAtMs > 0
         && (Date.now() - reverseMatchIndexesLastFailureAtMs) < REVERSE_MATCH_INDEX_RETRY_BACKOFF_MS) {
         return;
     }
-    reverseMatchIndexesPromise = (() => __awaiter(void 0, void 0, void 0, function* () {
-        try {
-            yield Promise.all([
-                db.collection(REVERSE_MATCH_ALERTS_COLLECTION).createIndex({ id: 1 }, { name: 'reverse_match_alert_id_unique', unique: true }),
-                db.collection(REVERSE_MATCH_ALERTS_COLLECTION).createIndex({ userId: 1, createdAt: -1 }, { name: 'reverse_match_alert_user_created_idx' }),
-                db.collection(REVERSE_MATCH_ALERTS_COLLECTION).createIndex({ emailDigestSentAt: 1, createdAt: -1 }, { name: 'reverse_match_alert_digest_idx' }),
-            ]);
-            reverseMatchIndexesEnsured = true;
-            reverseMatchIndexesLastFailureAtMs = 0;
-        }
-        catch (error) {
-            reverseMatchIndexesLastFailureAtMs = Date.now();
-            reverseMatchIndexesPromise = null;
-            throw error;
-        }
-    }))();
+    if (!reverseMatchIndexesPromise) {
+        reverseMatchIndexesPromise = (() => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                yield Promise.all([
+                    db.collection(REVERSE_MATCH_ALERTS_COLLECTION).createIndex({ id: 1 }, { name: 'reverse_match_alert_id_unique', unique: true }),
+                    db.collection(REVERSE_MATCH_ALERTS_COLLECTION).createIndex({ userId: 1, createdAt: -1 }, { name: 'reverse_match_alert_user_created_idx' }),
+                    db.collection(REVERSE_MATCH_ALERTS_COLLECTION).createIndex({ emailDigestSentAt: 1, createdAt: -1 }, { name: 'reverse_match_alert_digest_idx' }),
+                ]);
+                reverseMatchIndexesEnsured = true;
+                reverseMatchIndexesLastFailureAtMs = 0;
+            }
+            catch (error) {
+                reverseMatchIndexesLastFailureAtMs = Date.now();
+                throw error;
+            }
+            finally {
+                if (!reverseMatchIndexesEnsured) {
+                    reverseMatchIndexesPromise = null;
+                }
+            }
+        }))();
+    }
     return reverseMatchIndexesPromise;
 });
 exports.ensureReverseMatchIndexes = ensureReverseMatchIndexes;
@@ -282,6 +233,13 @@ const ensureReverseMatchUserScanIndexes = (db) => __awaiter(void 0, void 0, void
     }))();
     return reverseMatchUserScanIndexesPromise;
 });
+const warmReverseMatchIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    yield Promise.allSettled([
+        (0, exports.ensureReverseMatchIndexes)(db),
+        ensureReverseMatchUserScanIndexes(db),
+    ]);
+});
+exports.warmReverseMatchIndexes = warmReverseMatchIndexes;
 const resolveCandidateUsersForReverseMatch = (db) => __awaiter(void 0, void 0, void 0, function* () {
     if (candidateUserContextCache && candidateUserContextCache.expiresAt > Date.now()) {
         return candidateUserContextCache.contexts;
@@ -386,9 +344,18 @@ const extractJobSemanticTokens = (job) => {
     tokenSources.push(...titleTokens, ...summaryTokens);
     return uniqueStrings(tokenSources, 120);
 };
+const extractJobIndustryTokens = (job) => {
+    const tokenSources = [];
+    if (Array.isArray(job === null || job === void 0 ? void 0 : job.tags)) {
+        tokenSources.push(...job.tags);
+    }
+    tokenSources.push((0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.industry, 120));
+    return uniqueStrings(tokenSources, 30);
+};
 const buildJobSignalBundle = (job) => {
     const skillTokens = extractJobSkillTokens(job);
     const locationTokens = extractJobLocationTokens(job);
+    const industryTokens = extractJobIndustryTokens(job);
     const semanticTokens = extractJobSemanticTokens(job);
     const explicitWorkModel = normalizeWorkModelToken(job === null || job === void 0 ? void 0 : job.workModel);
     const remoteHintText = [
@@ -403,12 +370,18 @@ const buildJobSignalBundle = (job) => {
     const workModel = explicitWorkModel || (isRemoteRole ? 'remote' : '');
     return {
         skillTokens,
+        skillTokenSet: new Set(skillTokens),
         locationTokens,
+        locationTokenSet: new Set(locationTokens),
+        industryTokens,
+        industryTokenSet: new Set(industryTokens),
         semanticTokens,
+        semanticTokenSet: new Set(semanticTokens),
         workModel,
         isRemoteRole,
         hasSignals: skillTokens.length > 0
             || locationTokens.length > 0
+            || industryTokens.length > 0
             || semanticTokens.length > 0
             || Boolean(workModel)
             || isRemoteRole,
@@ -464,7 +437,7 @@ const resolveCandidateContextIndexesForJob = (indexBundle, jobSignals) => {
     const secondary = new Set();
     collectIndexedCandidates(indexBundle.bySkillToken, jobSignals.skillTokens, prioritized);
     collectIndexedCandidates(indexBundle.byLocationToken, jobSignals.locationTokens, secondary);
-    collectIndexedCandidates(indexBundle.byIndustryToken, jobSignals.semanticTokens, secondary);
+    collectIndexedCandidates(indexBundle.byIndustryToken, jobSignals.industryTokens, secondary);
     const workModelTokens = [];
     if (jobSignals.workModel)
         workModelTokens.push(jobSignals.workModel);
@@ -496,30 +469,7 @@ const resolveCandidateContextIndexesForJob = (indexBundle, jobSignals) => {
     return candidateOrder;
 };
 const buildReverseMatchAlertId = (userId, jobId) => (0, crypto_1.createHash)('sha256').update(`${userId}:${jobId}`).digest('hex');
-const passesReverseMatchCoarseFilter = (context, jobSignals) => {
-    const userHasWorkPreference = context.preferredWorkModels.size > 0;
-    const hasWorkModelMatch = !userHasWorkPreference
-        || (jobSignals.workModel ? context.preferredWorkModels.has(jobSignals.workModel) : false)
-        || (jobSignals.isRemoteRole && context.preferredWorkModels.has('remote'));
-    if (!hasWorkModelMatch)
-        return false;
-    const hasSkillMatch = hasIntersection(context.skillTokens, jobSignals.skillTokens);
-    const hasLocationMatch = hasIntersection(context.locationTokens, jobSignals.locationTokens);
-    const hasIndustryMatch = hasIntersection(context.industryTokens, jobSignals.semanticTokens);
-    if (hasSkillMatch || hasLocationMatch || hasIndustryMatch)
-        return true;
-    if (!jobSignals.hasSignals)
-        return true;
-    const userHasSignal = context.skillTokens.size > 0
-        || context.locationTokens.size > 0
-        || context.industryTokens.size > 0
-        || context.preferredWorkModels.size > 0;
-    if (!userHasSignal)
-        return true;
-    if (userHasWorkPreference && hasWorkModelMatch)
-        return true;
-    return false;
-};
+const buildFeedMatchPulseEventId = (userId, jobId, bucketIso) => (0, crypto_1.createHash)('sha256').update(`feed-match:${userId}:${jobId}:${bucketIso}`).digest('hex');
 const buildReverseMatchRecord = (context, job, roundedScore, reasons, matchedSkills) => {
     const jobId = (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.id, 120);
     return {
@@ -573,80 +523,137 @@ const toNotificationEntry = (record) => ({
     reasons: record.reasons,
     matchedSkills: record.matchedSkills,
 });
-const resolvePerJobEvaluationCap = (remainingEvalBudget, jobsRemaining) => Math.max(40, Math.min(REVERSE_MATCH_MAX_CANDIDATES_PER_JOB, Math.floor(remainingEvalBudget / Math.max(1, jobsRemaining))));
-const collectScoredRecordsForJob = (params) => __awaiter(void 0, void 0, void 0, function* () {
-    const records = [];
-    let evaluatedForJob = 0;
+const resolvePerJobEvaluationCap = (totalEvalBudget, totalJobs) => Math.max(1, Math.min(REVERSE_MATCH_MAX_CANDIDATES_PER_JOB, Math.floor(totalEvalBudget / Math.max(1, totalJobs))));
+const collectWorkerCandidatesForJob = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    if (params.remainingGlobalBudget <= 0) {
+        return { candidates: [], evaluationsUsed: 0 };
+    }
+    const candidates = [];
     let evaluationsUsed = 0;
-    for (const ctxIndex of params.candidateContextIndexes) {
-        if (evaluatedForJob >= params.perJobEvaluationCap || evaluationsUsed >= params.remainingGlobalBudget) {
-            break;
-        }
+    const cappedCandidateIndexes = params.candidateContextIndexes.slice(0, params.perJobEvaluationCap);
+    for (const ctxIndex of cappedCandidateIndexes) {
         const context = params.contexts[ctxIndex];
         if (!context)
             continue;
-        if (!passesReverseMatchCoarseFilter(context, params.jobSignals))
-            continue;
-        evaluatedForJob += 1;
         evaluationsUsed += 1;
-        const scoreResult = (0, jobRecommendationService_1.buildJobRecommendationScore)(params.job, context.profile);
-        if (evaluationsUsed % REVERSE_MATCH_SCORE_YIELD_EVERY === 0) {
-            yield yieldToEventLoop();
+        candidates.push({
+            userId: context.userId,
+            profile: context.profile,
+        });
+        if (evaluationsUsed % REVERSE_MATCH_YIELD_BATCH_SIZE === 0) {
+            yield (0, concurrencyUtils_1.yieldToEventLoop)();
         }
-        const roundedScore = Math.max(0, Math.round(scoreResult.score));
-        if (roundedScore < REVERSE_MATCH_MIN_SCORE)
-            continue;
-        records.push(buildReverseMatchRecord(context, params.job, roundedScore, scoreResult.reasons, scoreResult.matchedSkills));
     }
-    return { records, evaluationsUsed };
+    return { candidates, evaluationsUsed };
 });
-const collectJobMatchRecords = (params) => __awaiter(void 0, void 0, void 0, function* () {
+const collectJobMatchCandidates = (params) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     const jobId = (0, inputSanitizers_1.readString)((_a = params.job) === null || _a === void 0 ? void 0 : _a.id, 120);
     if (!jobId || params.remainingEvalBudget <= 0) {
-        return { records: [], evaluationsUsed: 0 };
+        return { payload: null, evaluationsUsed: 0 };
     }
     const jobSignals = buildJobSignalBundle(params.job);
     const candidateContextIndexes = resolveCandidateContextIndexesForJob(params.indexBundle, jobSignals);
     if (candidateContextIndexes.length === 0) {
-        return { records: [], evaluationsUsed: 0 };
+        return { payload: null, evaluationsUsed: 0 };
     }
-    const perJobEvaluationCap = resolvePerJobEvaluationCap(params.remainingEvalBudget, params.totalJobs - params.jobIndex);
-    return collectScoredRecordsForJob({
-        job: params.job,
-        jobSignals,
-        candidateContextIndexes,
+    const { candidates, evaluationsUsed } = yield collectWorkerCandidatesForJob({
         contexts: params.contexts,
-        perJobEvaluationCap,
+        candidateContextIndexes,
+        perJobEvaluationCap: params.perJobEvaluationCap,
         remainingGlobalBudget: params.remainingEvalBudget,
     });
+    if (candidates.length === 0) {
+        return { payload: null, evaluationsUsed };
+    }
+    return {
+        payload: {
+            jobId,
+            job: params.job,
+            candidates,
+        },
+        evaluationsUsed,
+    };
+});
+const scoreCandidatesInProcess = (payloads) => __awaiter(void 0, void 0, void 0, function* () {
+    const scoredByJobId = new Map();
+    for (const payload of payloads) {
+        const entries = [];
+        for (let index = 0; index < payload.candidates.length; index += 1) {
+            const candidate = payload.candidates[index];
+            const entry = (0, reverseJobMatchScoringUtils_1.buildReverseMatchScoreEntry)({
+                job: payload.job,
+                userId: candidate.userId,
+                profile: candidate.profile,
+                minScore: REVERSE_MATCH_MIN_SCORE,
+            });
+            if (entry) {
+                entries.push(entry);
+            }
+            if ((index + 1) % REVERSE_MATCH_YIELD_BATCH_SIZE === 0) {
+                yield (0, concurrencyUtils_1.yieldToEventLoop)();
+            }
+        }
+        scoredByJobId.set(payload.jobId, entries);
+    }
+    return scoredByJobId;
 });
 const collectReverseMatchOperations = (jobs, contexts, nowIso) => __awaiter(void 0, void 0, void 0, function* () {
     const operations = [];
     const records = [];
     const indexBundle = resolveMatchIndexBundle(contexts);
+    const contextByUserId = new Map(contexts.map((context) => [context.userId, context]));
+    const jobsById = new Map();
+    const workerPayloads = [];
+    const perJobEvaluationCap = resolvePerJobEvaluationCap(REVERSE_MATCH_MAX_SCORE_EVALUATIONS_PER_RUN, jobs.length);
     let scoreEvaluations = 0;
     for (let jobIndex = 0; jobIndex < jobs.length; jobIndex += 1) {
         const job = jobs[jobIndex];
-        if (operations.length >= REVERSE_MATCH_MAX_OPS_PER_RUN)
+        if (workerPayloads.length >= REVERSE_MATCH_MAX_JOBS_PER_RUN)
             break;
         const remainingEvalBudget = REVERSE_MATCH_MAX_SCORE_EVALUATIONS_PER_RUN - scoreEvaluations;
         if (remainingEvalBudget <= 0)
             break;
-        const { records: scoredRecords, evaluationsUsed } = yield collectJobMatchRecords({
+        const { payload, evaluationsUsed } = yield collectJobMatchCandidates({
             job,
-            jobIndex,
-            totalJobs: jobs.length,
             contexts,
             indexBundle,
+            perJobEvaluationCap,
             remainingEvalBudget,
         });
         scoreEvaluations += evaluationsUsed;
-        if (scoredRecords.length === 0)
+        if (!payload)
             continue;
-        for (const record of scoredRecords) {
-            if (operations.length >= REVERSE_MATCH_MAX_OPS_PER_RUN)
-                break;
+        workerPayloads.push(payload);
+        jobsById.set(payload.jobId, job);
+    }
+    if (workerPayloads.length === 0) {
+        return { operations, records };
+    }
+    let scoredByJobId;
+    try {
+        scoredByJobId = yield (0, reverseJobMatchWorkerService_1.scoreReverseMatchCandidatesInWorker)({
+            jobs: workerPayloads,
+            minScore: REVERSE_MATCH_MIN_SCORE,
+        });
+    }
+    catch (workerError) {
+        console.warn('Reverse match scoring worker unavailable; falling back to in-process scoring.', workerError);
+        scoredByJobId = yield scoreCandidatesInProcess(workerPayloads);
+    }
+    for (const payload of workerPayloads) {
+        const job = jobsById.get(payload.jobId);
+        if (!job)
+            continue;
+        const scoredEntries = scoredByJobId.get(payload.jobId) || [];
+        for (const entry of scoredEntries) {
+            if (operations.length >= REVERSE_MATCH_MAX_OPS_PER_RUN) {
+                return { operations, records };
+            }
+            const context = contextByUserId.get(entry.userId);
+            if (!context)
+                continue;
+            const record = buildReverseMatchRecord(context, job, entry.score, entry.reasons, entry.matchedSkills);
             operations.push(toReverseMatchUpsertOperation(record, nowIso));
             records.push(record);
         }
@@ -666,42 +673,6 @@ const resolveExistingAlertIds = (params) => __awaiter(void 0, void 0, void 0, fu
         .map((entry) => (0, inputSanitizers_1.readString)(entry === null || entry === void 0 ? void 0 : entry.id, 160))
         .filter((id) => id.length > 0));
 });
-const dispatchReverseMatchNotifications = (groupedByUser) => __awaiter(void 0, void 0, void 0, function* () {
-    const tasks = [];
-    for (const [userId, entries] of groupedByUser.entries()) {
-        if (entries.length === 0)
-            continue;
-        tasks.push(() => __awaiter(void 0, void 0, void 0, function* () {
-            const sortedEntries = [...entries].sort((left, right) => right.score - left.score);
-            const topEntries = sortedEntries.slice(0, REVERSE_MATCH_NOTIFICATION_TOP_JOBS);
-            const matchCount = entries.length;
-            const message = `🔥 ${matchCount} new job${matchCount === 1 ? '' : 's'} match your profile`;
-            const meta = {
-                category: 'reverse_job_match',
-                matchCount,
-                jobs: topEntries.map((entry) => ({
-                    jobId: entry.jobId,
-                    slug: entry.jobSlug,
-                    title: entry.title,
-                    companyName: entry.companyName,
-                    score: entry.score,
-                    matchTier: (0, jobRecommendationService_1.resolveRecommendationMatchTier)(entry.score),
-                    reasons: entry.reasons,
-                    matchedSkills: entry.matchedSkills,
-                })),
-            };
-            try {
-                yield (0, notificationsController_1.createNotificationInDB)(userId, 'job_match_alert', 'system', message, undefined, undefined, meta, undefined, 'user');
-            }
-            catch (error) {
-                console.error('Reverse match notification dispatch error:', error);
-            }
-        }));
-    }
-    if (tasks.length === 0)
-        return;
-    yield runTasksInBatches(tasks, REVERSE_MATCH_NOTIFICATION_BATCH_SIZE);
-});
 const persistReverseMatchOperations = (params) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         yield params.db.collection(REVERSE_MATCH_ALERTS_COLLECTION).bulkWrite(params.operations, { ordered: false });
@@ -712,19 +683,8 @@ const persistReverseMatchOperations = (params) => __awaiter(void 0, void 0, void
         return false;
     }
 });
-const groupNotificationEntriesByUser = (entries) => {
-    const groupedByUser = new Map();
-    entries.forEach((entry) => {
-        if (!entry.userId)
-            return;
-        const bucket = groupedByUser.get(entry.userId) || [];
-        bucket.push(entry);
-        groupedByUser.set(entry.userId, bucket);
-    });
-    return groupedByUser;
-};
 const processReverseJobMatchesForIngestedPayload = (params) => __awaiter(void 0, void 0, void 0, function* () {
-    if (!params.db || !Array.isArray(params.rawJobs) || params.rawJobs.length === 0)
+    if (!params.db || !Array.isArray(params.jobIds) || params.jobIds.length === 0)
         return;
     try {
         yield (0, exports.ensureReverseMatchIndexes)(params.db);
@@ -734,7 +694,7 @@ const processReverseJobMatchesForIngestedPayload = (params) => __awaiter(void 0,
         return;
     }
     const [jobs, userContexts] = yield Promise.all([
-        resolveIngestedOpenJobsFromPayload(params.db, params.rawJobs),
+        resolveOpenJobsForReverseMatch(params.db, params.jobIds),
         resolveCandidateUsersForReverseMatch(params.db),
     ]);
     if (jobs.length === 0 || userContexts.length === 0)
@@ -757,13 +717,27 @@ const processReverseJobMatchesForIngestedPayload = (params) => __awaiter(void 0,
         .map((record) => toNotificationEntry(record));
     if (insertedEntries.length === 0)
         return;
-    const groupedByUser = groupNotificationEntriesByUser(insertedEntries);
-    void dispatchReverseMatchNotifications(groupedByUser).catch((error) => {
+    yield (0, jobPulseService_1.recordJobPulseEvents)(params.db, insertedEntries.map((entry) => ({
+        jobId: entry.jobId,
+        type: 'job_matched',
+        userId: entry.userId,
+        createdAt: params.nowIso,
+        metadata: {
+            score: entry.score,
+        },
+    })));
+    const groupedByUser = (0, reverseJobMatchNotificationService_1.groupReverseMatchNotificationEntriesByUser)(insertedEntries);
+    void (0, reverseJobMatchNotificationService_1.dispatchGroupedReverseMatchNotifications)({
+        groupedByUser,
+        notificationTopJobs: REVERSE_MATCH_NOTIFICATION_TOP_JOBS,
+        notificationBatchSize: REVERSE_MATCH_NOTIFICATION_BATCH_SIZE,
+    }).catch((error) => {
         console.error('Reverse match notification dispatch pipeline error:', error);
     });
 });
 exports.processReverseJobMatchesForIngestedPayload = processReverseJobMatchesForIngestedPayload;
 const listTopJobMatchesForUser = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a;
     const profile = (0, jobRecommendationService_1.buildRecommendationProfile)(params.user);
     const candidateFilter = (0, jobRecommendationService_1.buildRecommendationCandidateFilter)(profile);
     const candidateLimit = Number.isFinite(Number(params.candidateLimit))
@@ -810,9 +784,27 @@ const listTopJobMatchesForUser = (params) => __awaiter(void 0, void 0, void 0, f
     })
         .sort((left, right) => (right.score - left.score) || (right.publishedTs - left.publishedTs))
         .slice(0, limit);
-    return scored.map((entry) => {
+    const results = scored.map((entry) => {
         const roundedScore = Math.max(0, Math.round(entry.score));
         return Object.assign(Object.assign({}, entry.job), { recommendationScore: roundedScore, recommendationReasons: entry.reasons.slice(0, 3), matchedSkills: entry.matchedSkills.slice(0, 5), matchTier: (0, jobRecommendationService_1.resolveRecommendationMatchTier)(roundedScore) });
     });
+    const userId = (0, inputSanitizers_1.readString)((_a = params.user) === null || _a === void 0 ? void 0 : _a.id, 120);
+    if (userId && results.length > 0) {
+        const now = new Date();
+        const bucketStartMs = Math.floor(now.getTime() / (10 * 60 * 1000)) * 10 * 60 * 1000;
+        const bucketIso = new Date(bucketStartMs).toISOString();
+        (0, jobPulseService_1.recordJobPulseEventsAsync)(params.db, results.map((entry) => ({
+            id: buildFeedMatchPulseEventId(userId, (0, inputSanitizers_1.readString)(entry === null || entry === void 0 ? void 0 : entry.id, 120), bucketIso),
+            jobId: (0, inputSanitizers_1.readString)(entry === null || entry === void 0 ? void 0 : entry.id, 120),
+            type: 'job_matched',
+            userId,
+            createdAt: bucketIso,
+            metadata: {
+                source: 'live_match_feed',
+                score: Number((entry === null || entry === void 0 ? void 0 : entry.recommendationScore) || 0),
+            },
+        })));
+    }
+    return results;
 });
 exports.listTopJobMatchesForUser = listTopJobMatchesForUser;

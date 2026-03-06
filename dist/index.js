@@ -57,6 +57,7 @@ const morgan_1 = __importDefault(require("morgan"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const multer_1 = __importDefault(require("multer"));
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
+const crypto_1 = require("crypto");
 const geminiRoutes_1 = __importDefault(require("./routes/geminiRoutes"));
 const uploadRoutes_1 = __importDefault(require("./routes/uploadRoutes"));
 const postsRoutes_1 = __importDefault(require("./routes/postsRoutes"));
@@ -77,6 +78,8 @@ const ownerControlRoutes_1 = __importDefault(require("./routes/ownerControlRoute
 const jobsRoutes_1 = __importDefault(require("./routes/jobsRoutes"));
 const notificationsController_1 = require("./controllers/notificationsController");
 const jobsController_1 = require("./controllers/jobsController");
+const jobPulseService_1 = require("./services/jobPulseService");
+const reverseJobMatchService_1 = require("./services/reverseJobMatchService");
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const csrfMiddleware_1 = require("./middleware/csrfMiddleware");
 const path_1 = __importDefault(require("path"));
@@ -87,6 +90,7 @@ const sessionInvalidation_1 = require("./utils/sessionInvalidation");
 const sessionPolicy_1 = require("./config/sessionPolicy");
 const crossOriginPolicy_1 = require("./config/crossOriginPolicy");
 const passportConfig_1 = require("./config/passportConfig");
+const reverseJobMatchQueueService_1 = require("./services/reverseJobMatchQueueService");
 const bootstrapRuntime_1 = require("./runtime/bootstrapRuntime");
 const demoBootstrap_1 = require("./runtime/demoBootstrap");
 const paymentPages_1 = require("./runtime/paymentPages");
@@ -107,7 +111,7 @@ exports.app = app;
 const PORT = process.env.PORT || 5000;
 let runtimeServer = null;
 let fatalShutdownInitiated = false;
-(0, jobsController_1.registerJobViewCountShutdownHooks)();
+(0, jobsController_1.registerJobViewCountShutdownHooks)(() => (0, db_1.getDB)());
 const triggerFatalShutdown = (source, error) => {
     if (fatalShutdownInitiated) {
         return;
@@ -135,6 +139,43 @@ const ensureUploadsDirectoryExists = () => __awaiter(void 0, void 0, void 0, fun
 });
 // Enable trust proxy for secure cookies behind load balancers (like Render/Heroku)
 app.set("trust proxy", 1);
+const isLocalHostname = (hostname) => hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '::1'
+    || hostname.endsWith('.local');
+const isLocalDevelopmentUrl = (value) => {
+    if (!value)
+        return true;
+    try {
+        const parsed = new URL(value);
+        return isLocalHostname(parsed.hostname);
+    }
+    catch (_a) {
+        return true;
+    }
+};
+const configuredSessionSecret = (process.env.SESSION_SECRET || '').trim();
+const jwtSecretFallback = (process.env.JWT_SECRET || '').trim();
+const isProductionRuntime = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER;
+const sessionSecret = configuredSessionSecret || jwtSecretFallback;
+const frontendRuntimeUrl = (process.env.FRONTEND_URL || process.env.CLIENT_URL || '').trim();
+const backendRuntimeUrl = (process.env.BACKEND_URL || process.env.PUBLIC_BACKEND_URL || '').trim();
+const allowEphemeralDevelopmentSessionSecret = (process.env.NODE_ENV === 'development'
+    && !isProductionRuntime
+    && isLocalDevelopmentUrl(frontendRuntimeUrl)
+    && isLocalDevelopmentUrl(backendRuntimeUrl));
+const resolvedSessionSecret = sessionSecret || (allowEphemeralDevelopmentSessionSecret ? (0, crypto_1.randomBytes)(32).toString('hex') : '');
+const configuredSessionCookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
+const configuredSessionCookieSameSite = (process.env.SESSION_COOKIE_SAMESITE || '').trim().toLowerCase();
+const sessionCookiePolicy = (0, sessionPolicy_1.resolveSessionCookiePolicy)({
+    isProductionRuntime,
+    configuredSameSite: configuredSessionCookieSameSite,
+    configuredDomain: configuredSessionCookieDomain,
+    frontendUrl: frontendRuntimeUrl,
+    backendUrl: backendRuntimeUrl,
+});
+const sessionCookieSameSite = sessionCookiePolicy.sameSite;
+const sessionCookieSecure = sessionCookiePolicy.secure;
 // CORS Configuration
 const normalizeOrigin = (origin) => origin.trim().replace(/\/$/, '').toLowerCase();
 const parseEnvOriginList = (value) => {
@@ -224,8 +265,12 @@ app.use((req, res, next) => {
 app.use((0, helmet_1.default)({
     xFrameOptions: { action: 'sameorigin' },
     noSniff: true,
-    hsts: (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER)
-        ? { maxAge: 31536000 }
+    hsts: sessionCookiePolicy.shouldEnableHsts
+        ? {
+            maxAge: 31536000,
+            includeSubDomains: true,
+            preload: isProductionRuntime,
+        }
         : false,
     contentSecurityPolicy: {
         directives: {
@@ -255,27 +300,14 @@ const limiter = (0, express_rate_limit_1.default)({
 app.use('/api', limiter);
 app.use('/api', (0, csrfMiddleware_1.createCsrfProtection)({ allowedOrigins }));
 // Session middleware
-const configuredSessionSecret = (process.env.SESSION_SECRET || '').trim();
-const jwtSecretFallback = (process.env.JWT_SECRET || '').trim();
-const isProductionRuntime = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER;
-const sessionSecret = configuredSessionSecret || jwtSecretFallback;
-const resolvedSessionSecret = sessionSecret || (!isProductionRuntime ? 'development_session_secret_change_me' : '');
-const configuredSessionCookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
-const configuredSessionCookieSameSite = (process.env.SESSION_COOKIE_SAMESITE || '').trim().toLowerCase();
-const sessionCookiePolicy = (0, sessionPolicy_1.resolveSessionCookiePolicy)({
-    isProductionRuntime,
-    configuredSameSite: configuredSessionCookieSameSite,
-    configuredDomain: configuredSessionCookieDomain,
-    frontendUrl: (process.env.FRONTEND_URL || process.env.CLIENT_URL || '').trim(),
-    backendUrl: (process.env.BACKEND_URL || process.env.PUBLIC_BACKEND_URL || '').trim(),
-});
-const sessionCookieSameSite = sessionCookiePolicy.sameSite;
-const sessionCookieSecure = sessionCookiePolicy.secure;
 if (configuredSessionCookieSameSite.length > 0 &&
     configuredSessionCookieSameSite !== 'none' &&
     configuredSessionCookieSameSite !== 'strict' &&
     configuredSessionCookieSameSite !== 'lax') {
     console.warn(`⚠️ Unsupported SESSION_COOKIE_SAMESITE="${configuredSessionCookieSameSite}", defaulting automatically.`);
+}
+if (configuredSessionCookieSameSite === 'none' && sessionCookiePolicy.downgradedFromNone) {
+    console.warn('⚠️ SESSION_COOKIE_SAMESITE=none requires HTTPS frontend and backend URLs outside production. Downgrading to SameSite=Lax.');
 }
 if (sessionCookieSameSite === 'none' && !sessionCookieSecure && isProductionRuntime) {
     throw new Error('SameSite=None requires secure cookies in production');
@@ -283,14 +315,14 @@ if (sessionCookieSameSite === 'none' && !sessionCookieSecure && isProductionRunt
 if (sessionCookieSameSite === 'none' && !sessionCookieSecure && !isProductionRuntime) {
     console.warn('⚠️ SameSite=None requires secure cookies. Session cookies may be rejected.');
 }
-if (!resolvedSessionSecret && isProductionRuntime) {
-    throw new Error('SESSION_SECRET is required in production');
+if (!resolvedSessionSecret) {
+    throw new Error('SESSION_SECRET is required outside explicit local development');
 }
 if (!configuredSessionSecret && jwtSecretFallback && isProductionRuntime) {
     console.warn('⚠️ SESSION_SECRET is not set. Falling back to JWT_SECRET for session signing.');
 }
-if (!sessionSecret && !isProductionRuntime) {
-    console.warn('⚠️ Using development-only session secret. Set SESSION_SECRET for stable sessions.');
+if (!sessionSecret && allowEphemeralDevelopmentSessionSecret) {
+    console.warn('⚠️ Using ephemeral development-only session secret. Set SESSION_SECRET for stable sessions.');
 }
 app.use((0, express_session_1.default)({
     secret: resolvedSessionSecret,
@@ -634,6 +666,22 @@ function bootstrapServerRuntime() {
                         .catch((indexError) => {
                         console.error('⚠️ Jobs text search index warmup failed:', indexError);
                     });
+                    void (0, jobPulseService_1.ensureJobPulseIndexes)((0, db_1.getDB)())
+                        .then(() => {
+                        console.log('📈 Job pulse indexes ready');
+                    })
+                        .catch((indexError) => {
+                        console.error('⚠️ Job pulse index warmup failed:', indexError);
+                    });
+                    void (0, reverseJobMatchService_1.warmReverseMatchIndexes)((0, db_1.getDB)())
+                        .then(() => {
+                        console.log('🎯 Reverse match indexes ready');
+                    })
+                        .catch((indexError) => {
+                        console.error('⚠️ Reverse match index warmup failed:', indexError);
+                    });
+                    (0, reverseJobMatchQueueService_1.startReverseMatchQueueWorker)(() => (0, db_1.getDB)());
+                    console.log('🧠 Reverse match queue worker started');
                     (0, reportsRoutes_1.startReportScheduleWorker)();
                     console.log('📬 Scheduled report worker started');
                     (0, notificationsController_1.startNotificationCleanupWorker)();

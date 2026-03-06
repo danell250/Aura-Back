@@ -3,6 +3,8 @@ import rateLimit from 'express-rate-limit';
 import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
 import { partnerAuth } from '../middleware/partnerAuth';
 import { internalApiAuth } from '../middleware/internalApiAuth';
+import { jobPulseController } from '../controllers/jobPulseController';
+import { jobApplicationAccessController } from '../controllers/jobApplicationAccessController';
 import { jobsController } from '../controllers/jobsController';
 import { jobSyndicationController } from '../controllers/jobSyndicationController';
 import { internalJobsController } from '../controllers/internalJobsController';
@@ -112,13 +114,39 @@ const openJobsFeedRateLimiter = rateLimit({
   },
 });
 
+const jobsPulseRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 180,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logSecurityEvent({
+      req,
+      type: 'rate_limit_triggered',
+      route: '/jobs/pulse',
+      metadata: {
+        key: 'jobs_pulse_read',
+        max: 180,
+        windowMs: 60 * 1000,
+      },
+    });
+
+    return res.status(429).json({
+      success: false,
+      error: 'Too many requests',
+      message: 'Too many jobs pulse requests. Please retry shortly.',
+    });
+  },
+});
+
 // Public company jobs feed (v1 discovery surface)
 router.post('/internal/jobs/aggregated', internalJobsIngestRateLimiter, internalApiAuth, internalJobsController.ingestAggregatedJobs);
 router.get('/companies/:companyId/jobs', optionalAuth, jobsController.listCompanyJobs);
 router.get('/partner/jobs', partnerAuth, jobSyndicationController.getJobsForSyndication);
 router.get('/companies/:companyId/job-analytics', requireAuth, jobsController.getJobAnalytics);
-router.get('/companies/:companyId/job-applications/attention-count', requireAuth, jobsController.getCompanyApplicationAttentionCount);
+router.get('/companies/:companyId/job-applications/attention-count', requireAuth, jobApplicationAccessController.getCompanyApplicationAttentionCount);
 router.get('/jobs', optionalAuth, jobsController.listPublicJobs);
+router.get('/jobs/pulse', jobsPulseRateLimiter, optionalAuth, jobPulseController.getJobsPulse);
 router.options('/jobs/open-feed', (_req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -144,15 +172,15 @@ router.delete('/jobs/:jobId', jobsWriteRateLimiter, requireAuth, jobsController.
 // Applications
 router.post('/jobs/:jobId/applications', jobsApplyRateLimiter, requireAuth, jobsController.createJobApplication);
 router.get('/jobs/:jobId/applications', requireAuth, jobsController.listJobApplications);
-router.get('/applications/:applicationId', requireAuth, jobsController.getJobApplicationById);
+router.get('/applications/:applicationId', requireAuth, jobApplicationAccessController.getJobApplicationById);
 router.get('/applications/:applicationId/notes', requireAuth, applicationNotesController.listApplicationNotes);
 router.post('/applications/:applicationId/notes', requireAuth, applicationNotesController.createApplicationNote);
 router.patch('/applications/:applicationId/status', requireAuth, jobsController.updateJobApplicationStatus);
-router.get('/applications/:applicationId/resume/view-url', requireAuth, jobsController.getApplicationResumeViewUrl);
-router.post('/applications/:applicationId/withdraw', requireAuth, jobsController.withdrawMyApplication);
-router.post('/applications/review-portal/resolve', requireAuth, jobsController.resolveApplicationReviewPortalToken);
+router.get('/applications/:applicationId/resume/view-url', requireAuth, jobApplicationAccessController.getApplicationResumeViewUrl);
+router.post('/applications/:applicationId/withdraw', requireAuth, jobApplicationAccessController.withdrawMyApplication);
+router.post('/applications/review-portal/resolve', requireAuth, jobApplicationAccessController.resolveApplicationReviewPortalToken);
 
 // Personal dashboard scope
-router.get('/me/job-applications', requireAuth, jobsController.getMyJobApplications);
+router.get('/me/job-applications', requireAuth, jobApplicationAccessController.getMyJobApplications);
 
 export default router;

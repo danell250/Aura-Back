@@ -9,6 +9,7 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import cookieParser from 'cookie-parser';
+import { randomBytes } from 'crypto';
 import geminiRoutes from './routes/geminiRoutes';
 import uploadRoutes from './routes/uploadRoutes';
 import postsRoutes from './routes/postsRoutes';
@@ -29,6 +30,8 @@ import ownerControlRoutes from './routes/ownerControlRoutes';
 import jobsRoutes from './routes/jobsRoutes';
 import { startNotificationCleanupWorker } from './controllers/notificationsController';
 import { ensureJobsTextIndex, registerJobViewCountShutdownHooks } from './controllers/jobsController';
+import { ensureJobPulseIndexes } from './services/jobPulseService';
+import { warmReverseMatchIndexes } from './services/reverseJobMatchService';
 import { attachUser, requireAuth } from './middleware/authMiddleware';
 import { createCsrfProtection } from './middleware/csrfMiddleware';
 import path from 'path';
@@ -39,6 +42,7 @@ import { clearLogoutCookies, invalidateUserAuthSessions, resolveLogoutUserId } f
 import { resolveSessionCookiePolicy } from './config/sessionPolicy';
 import { requiresRelaxedCrossOriginPolicy } from './config/crossOriginPolicy';
 import { configurePassportStrategies } from './config/passportConfig';
+import { startReverseMatchQueueWorker } from './services/reverseJobMatchQueueService';
 import {
   initSocketRuntime,
   initializeDatabaseRuntime,
@@ -66,7 +70,7 @@ const PORT = process.env.PORT || 5000;
 let runtimeServer: ReturnType<express.Application['listen']> | null = null;
 let fatalShutdownInitiated = false;
 
-registerJobViewCountShutdownHooks();
+registerJobViewCountShutdownHooks(() => getDB());
 
 const triggerFatalShutdown = (source: 'uncaughtException' | 'unhandledRejection', error: unknown) => {
   if (fatalShutdownInitiated) {
@@ -100,6 +104,47 @@ const ensureUploadsDirectoryExists = async () => {
 
 // Enable trust proxy for secure cookies behind load balancers (like Render/Heroku)
 app.set("trust proxy", 1);
+
+const isLocalHostname = (hostname: string): boolean =>
+  hostname === 'localhost'
+  || hostname === '127.0.0.1'
+  || hostname === '::1'
+  || hostname.endsWith('.local');
+
+const isLocalDevelopmentUrl = (value: string): boolean => {
+  if (!value) return true;
+  try {
+    const parsed = new URL(value);
+    return isLocalHostname(parsed.hostname);
+  } catch {
+    return true;
+  }
+};
+
+const configuredSessionSecret = (process.env.SESSION_SECRET || '').trim();
+const jwtSecretFallback = (process.env.JWT_SECRET || '').trim();
+const isProductionRuntime = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER;
+const sessionSecret = configuredSessionSecret || jwtSecretFallback;
+const frontendRuntimeUrl = (process.env.FRONTEND_URL || process.env.CLIENT_URL || '').trim();
+const backendRuntimeUrl = (process.env.BACKEND_URL || process.env.PUBLIC_BACKEND_URL || '').trim();
+const allowEphemeralDevelopmentSessionSecret = (
+  process.env.NODE_ENV === 'development'
+  && !isProductionRuntime
+  && isLocalDevelopmentUrl(frontendRuntimeUrl)
+  && isLocalDevelopmentUrl(backendRuntimeUrl)
+);
+const resolvedSessionSecret = sessionSecret || (allowEphemeralDevelopmentSessionSecret ? randomBytes(32).toString('hex') : '');
+const configuredSessionCookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
+const configuredSessionCookieSameSite = (process.env.SESSION_COOKIE_SAMESITE || '').trim().toLowerCase();
+const sessionCookiePolicy = resolveSessionCookiePolicy({
+  isProductionRuntime,
+  configuredSameSite: configuredSessionCookieSameSite,
+  configuredDomain: configuredSessionCookieDomain,
+  frontendUrl: frontendRuntimeUrl,
+  backendUrl: backendRuntimeUrl,
+});
+const sessionCookieSameSite = sessionCookiePolicy.sameSite;
+const sessionCookieSecure = sessionCookiePolicy.secure;
 
 // CORS Configuration
 const normalizeOrigin = (origin: string): string => origin.trim().replace(/\/$/, '').toLowerCase();
@@ -201,8 +246,12 @@ app.use((req, res, next) => {
 app.use(helmet({
   xFrameOptions: { action: 'sameorigin' },
   noSniff: true,
-  hsts: (process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER)
-    ? { maxAge: 31536000 }
+  hsts: sessionCookiePolicy.shouldEnableHsts
+    ? {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: isProductionRuntime,
+      }
     : false,
   contentSecurityPolicy: {
     directives: {
@@ -234,23 +283,6 @@ app.use('/api', limiter);
 app.use('/api', createCsrfProtection({ allowedOrigins }));
 
 // Session middleware
-const configuredSessionSecret = (process.env.SESSION_SECRET || '').trim();
-const jwtSecretFallback = (process.env.JWT_SECRET || '').trim();
-const isProductionRuntime = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER;
-const sessionSecret = configuredSessionSecret || jwtSecretFallback;
-const resolvedSessionSecret = sessionSecret || (!isProductionRuntime ? 'development_session_secret_change_me' : '');
-const configuredSessionCookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
-const configuredSessionCookieSameSite = (process.env.SESSION_COOKIE_SAMESITE || '').trim().toLowerCase();
-const sessionCookiePolicy = resolveSessionCookiePolicy({
-  isProductionRuntime,
-  configuredSameSite: configuredSessionCookieSameSite,
-  configuredDomain: configuredSessionCookieDomain,
-  frontendUrl: (process.env.FRONTEND_URL || process.env.CLIENT_URL || '').trim(),
-  backendUrl: (process.env.BACKEND_URL || process.env.PUBLIC_BACKEND_URL || '').trim(),
-});
-const sessionCookieSameSite = sessionCookiePolicy.sameSite;
-const sessionCookieSecure = sessionCookiePolicy.secure;
-
 if (
   configuredSessionCookieSameSite.length > 0 &&
   configuredSessionCookieSameSite !== 'none' &&
@@ -258,6 +290,10 @@ if (
   configuredSessionCookieSameSite !== 'lax'
 ) {
   console.warn(`⚠️ Unsupported SESSION_COOKIE_SAMESITE="${configuredSessionCookieSameSite}", defaulting automatically.`);
+}
+
+if (configuredSessionCookieSameSite === 'none' && sessionCookiePolicy.downgradedFromNone) {
+  console.warn('⚠️ SESSION_COOKIE_SAMESITE=none requires HTTPS frontend and backend URLs outside production. Downgrading to SameSite=Lax.');
 }
 
 if (sessionCookieSameSite === 'none' && !sessionCookieSecure && isProductionRuntime) {
@@ -268,16 +304,16 @@ if (sessionCookieSameSite === 'none' && !sessionCookieSecure && !isProductionRun
   console.warn('⚠️ SameSite=None requires secure cookies. Session cookies may be rejected.');
 }
 
-if (!resolvedSessionSecret && isProductionRuntime) {
-  throw new Error('SESSION_SECRET is required in production');
+if (!resolvedSessionSecret) {
+  throw new Error('SESSION_SECRET is required outside explicit local development');
 }
 
 if (!configuredSessionSecret && jwtSecretFallback && isProductionRuntime) {
   console.warn('⚠️ SESSION_SECRET is not set. Falling back to JWT_SECRET for session signing.');
 }
 
-if (!sessionSecret && !isProductionRuntime) {
-  console.warn('⚠️ Using development-only session secret. Set SESSION_SECRET for stable sessions.');
+if (!sessionSecret && allowEphemeralDevelopmentSessionSecret) {
+  console.warn('⚠️ Using ephemeral development-only session secret. Set SESSION_SECRET for stable sessions.');
 }
 
 app.use(session({
@@ -666,6 +702,22 @@ async function bootstrapServerRuntime() {
           .catch((indexError) => {
             console.error('⚠️ Jobs text search index warmup failed:', indexError);
           });
+        void ensureJobPulseIndexes(getDB())
+          .then(() => {
+            console.log('📈 Job pulse indexes ready');
+          })
+          .catch((indexError) => {
+            console.error('⚠️ Job pulse index warmup failed:', indexError);
+          });
+        void warmReverseMatchIndexes(getDB())
+          .then(() => {
+            console.log('🎯 Reverse match indexes ready');
+          })
+          .catch((indexError) => {
+            console.error('⚠️ Reverse match index warmup failed:', indexError);
+          });
+        startReverseMatchQueueWorker(() => getDB());
+        console.log('🧠 Reverse match queue worker started');
         startReportScheduleWorker();
         console.log('📬 Scheduled report worker started');
         startNotificationCleanupWorker();

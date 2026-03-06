@@ -12,28 +12,26 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.jobsController = exports.registerJobViewCountShutdownHooks = exports.toJobResponse = exports.buildPublicJobsQuerySpec = exports.ensureJobsTextIndex = void 0;
+exports.jobsController = exports.registerJobViewCountShutdownHooks = exports.toApplicationResponse = exports.toJobResponse = exports.buildPublicJobsQuerySpec = exports.ensureJobsTextIndex = exports.sanitizeSearchRegex = exports.hashSecureToken = exports.getPagination = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const db_1 = require("../db");
 const identityUtils_1 = require("../utils/identityUtils");
 const postsController_1 = require("./postsController");
 const hashtagUtils_1 = require("../utils/hashtagUtils");
-const roomNames_1 = require("../realtime/roomNames");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const jobSkillGapService_1 = require("../services/jobSkillGapService");
 const jobRecommendationService_1 = require("../services/jobRecommendationService");
 const companyJobAnalyticsService_1 = require("../services/companyJobAnalyticsService");
-const jobApplicationReviewService_1 = require("../services/jobApplicationReviewService");
-const resumeParsingService_1 = require("../services/resumeParsingService");
-const resumeEnrichmentQueueService_1 = require("../services/resumeEnrichmentQueueService");
-const jobResumeStorageService_1 = require("../services/jobResumeStorageService");
+const jobApplicationLifecycleService_1 = require("../services/jobApplicationLifecycleService");
+const jobPulseService_1 = require("../services/jobPulseService");
 const reverseJobMatchService_1 = require("../services/reverseJobMatchService");
+const jobRecommendationProfileCacheService_1 = require("../services/jobRecommendationProfileCacheService");
 const userBadgeService_1 = require("../services/userBadgeService");
+const contactNormalization_1 = require("../utils/contactNormalization");
 const JOBS_COLLECTION = 'jobs';
 const JOB_APPLICATIONS_COLLECTION = 'job_applications';
 const JOB_APPLICATION_REVIEW_LINKS_COLLECTION = 'job_application_review_links';
 const JOB_APPLICATION_NOTES_COLLECTION = 'application_notes';
-const COMPANIES_COLLECTION = 'companies';
 const COMPANY_MEMBERS_COLLECTION = 'company_members';
 const USERS_COLLECTION = 'users';
 const ALLOWED_JOB_STATUSES = new Set(['open', 'closed', 'archived']);
@@ -50,7 +48,7 @@ const JOB_SKILL_GAP_TIMEOUT_MS = 180;
 const CAREER_PAGE_SOURCE_SITES = new Set(['greenhouse', 'lever', 'workday', 'smartrecruiters', 'careers']);
 const JOB_VIEW_FLUSH_INTERVAL_MS = 5000;
 const JOB_VIEW_BUFFER_MAX_KEYS = 400;
-const JOB_RECOMMENDATION_PROFILE_CACHE_TTL_MS = 60000;
+const JOB_VIEW_FLUSH_BATCH_SIZE = 100;
 const JOB_DISCOVERED_WINDOW_MINUTES = 30;
 const JOB_DISCOVERED_COUNT_CACHE_TTL_MS = 60000;
 const JOB_DISCOVERED_COUNT_CACHE_MAX_KEYS = 200;
@@ -83,6 +81,7 @@ const getPagination = (query) => {
         skip: (page - 1) * limit,
     };
 };
+exports.getPagination = getPagination;
 const resolveJobSkillGap = (params) => __awaiter(void 0, void 0, void 0, function* () {
     const currentUserId = (0, inputSanitizers_1.readString)(params.currentUserId, 120);
     if (!currentUserId)
@@ -122,6 +121,7 @@ const parseIsoOrNull = (value) => {
 const hashSecureToken = (token) => {
     return crypto_1.default.createHash('sha256').update(token).digest('hex');
 };
+exports.hashSecureToken = hashSecureToken;
 const escapeRegexPattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const sanitizeSearchRegex = (raw) => {
     const trimmed = (0, inputSanitizers_1.readString)(raw, 100);
@@ -130,6 +130,7 @@ const sanitizeSearchRegex = (raw) => {
     const escaped = escapeRegexPattern(trimmed);
     return new RegExp(escaped, 'i');
 };
+exports.sanitizeSearchRegex = sanitizeSearchRegex;
 const normalizeSlugValue = (value, maxLength = 220) => {
     const raw = (0, inputSanitizers_1.readString)(String(value || ''), maxLength)
         .normalize('NFKD')
@@ -200,8 +201,8 @@ const buildPublicJobsQuerySpec = (params) => {
     const employmentTypes = params.employmentTypeRaw
         ? parseDelimitedAllowedValues(params.employmentTypeRaw, ALLOWED_EMPLOYMENT_TYPES)
         : [];
-    const locationRegex = sanitizeSearchRegex(params.locationRaw);
-    const companyRegex = sanitizeSearchRegex(params.companyRaw);
+    const locationRegex = (0, exports.sanitizeSearchRegex)(params.locationRaw);
+    const companyRegex = (0, exports.sanitizeSearchRegex)(params.companyRaw);
     const searchText = (0, inputSanitizers_1.readString)(params.searchRaw, 120);
     const andClauses = [];
     if (params.status === 'all') {
@@ -297,29 +298,6 @@ const buildPersistentJobSlug = (job) => {
     const rawSlug = idSlug ? `${baseSlug}--${idSlug}` : baseSlug;
     return normalizeSlugValue(rawSlug, 220) || 'job';
 };
-const normalizeExternalUrl = (value) => {
-    const raw = (0, inputSanitizers_1.readString)(String(value || ''), 600);
-    if (!raw)
-        return null;
-    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-    try {
-        const parsed = new URL(withProtocol);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
-            return null;
-        return parsed.toString();
-    }
-    catch (_a) {
-        return null;
-    }
-};
-const normalizeEmailAddress = (value) => {
-    const raw = (0, inputSanitizers_1.readString)(String(value || ''), 200).toLowerCase();
-    if (!raw)
-        return null;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw))
-        return null;
-    return raw;
-};
 const toAnnouncementTag = (tag) => tag.replace(/[^a-z0-9]/gi, '').toLowerCase();
 const buildJobAnnouncementContent = (job) => {
     const normalizedTags = Array.from(new Set((job.tags || [])
@@ -339,109 +317,6 @@ const buildJobAnnouncementContent = (job) => {
         'Apply directly from our Jobs tab on Aura.',
         hashtagList,
     ].join('\n');
-};
-const resolveOwnerAdminCompanyAccess = (companyId, authenticatedUserId) => __awaiter(void 0, void 0, void 0, function* () {
-    const db = (0, db_1.getDB)();
-    const company = yield db.collection(COMPANIES_COLLECTION).findOne({
-        id: companyId,
-        legacyArchived: { $ne: true },
-    });
-    if (!company) {
-        return { allowed: false, status: 404, error: 'Company not found' };
-    }
-    if (company.ownerId === authenticatedUserId) {
-        return { allowed: true, status: 200, company };
-    }
-    const membership = yield db.collection(COMPANY_MEMBERS_COLLECTION).findOne({
-        companyId,
-        userId: authenticatedUserId,
-        role: { $in: ['owner', 'admin'] },
-    });
-    if (!membership) {
-        return { allowed: false, status: 403, error: 'Only company owner/admin can perform this action' };
-    }
-    return { allowed: true, status: 200, company };
-});
-const canReadApplication = (application, authenticatedUserId) => __awaiter(void 0, void 0, void 0, function* () {
-    if (!application)
-        return false;
-    if (application.applicantUserId === authenticatedUserId)
-        return true;
-    const access = yield resolveOwnerAdminCompanyAccess(String(application.companyId || ''), authenticatedUserId);
-    return access.allowed;
-});
-const incrementApplicantApplicationCount = (db, userId, nowIso) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
-    try {
-        const updateResult = yield db.collection(USERS_COLLECTION).findOneAndUpdate({ id: userId }, {
-            $inc: { jobApplicationsCount: 1 },
-            $set: { updatedAt: nowIso },
-        }, {
-            returnDocument: 'after',
-            projection: { jobApplicationsCount: 1 },
-        });
-        const updatedUser = (_a = updateResult === null || updateResult === void 0 ? void 0 : updateResult.value) !== null && _a !== void 0 ? _a : updateResult;
-        const parsedCount = Number(updatedUser === null || updatedUser === void 0 ? void 0 : updatedUser.jobApplicationsCount);
-        return Number.isFinite(parsedCount) && parsedCount >= 0 ? parsedCount : null;
-    }
-    catch (counterError) {
-        console.error('Increment user jobApplicationsCount error:', counterError);
-        return null;
-    }
-});
-const emitNewApplicationEvent = (req, params) => {
-    const io = req.app.get('io');
-    const targetCompanyId = (0, inputSanitizers_1.readString)(params.companyId, 120);
-    if (!io || !targetCompanyId)
-        return;
-    io.to((0, roomNames_1.getCompanyApplicationRoom)(targetCompanyId)).emit('new_application', {
-        applicationId: params.applicationId,
-        jobTitle: params.jobTitle,
-        applicantName: params.applicantName,
-        companyId: targetCompanyId,
-        createdAt: params.createdAt,
-    });
-};
-const scheduleApplicationPostCreateEffects = (params) => {
-    var _a;
-    void (0, userBadgeService_1.awardApplicationMilestoneBadges)({
-        db: params.db,
-        userId: params.currentUserId,
-        applicationId: params.application.id,
-        applicationCount: (_a = params.applicantApplicationCount) !== null && _a !== void 0 ? _a : undefined,
-    }).catch((badgeError) => {
-        console.error('Award application milestone badges error:', badgeError);
-    });
-    emitNewApplicationEvent(params.req, {
-        companyId: String(params.job.companyId || ''),
-        applicationId: String(params.application.id || ''),
-        jobTitle: String(params.job.title || ''),
-        applicantName: String(params.application.applicantName || ''),
-        createdAt: params.nowIso,
-    });
-    // Fire-and-forget: notify company owner/admin reviewers by email with a secure portal link.
-    (0, jobApplicationReviewService_1.queueJobApplicationReviewEmails)({
-        db: params.db,
-        companyId: String(params.job.companyId || ''),
-        jobId: params.jobId,
-        application: params.application,
-        job: params.job,
-    }).catch((emailError) => {
-        console.error('Job application review email dispatch error:', emailError);
-    });
-    setImmediate(() => {
-        (0, resumeEnrichmentQueueService_1.enqueueResumeEnrichmentJob)(() => __awaiter(void 0, void 0, void 0, function* () {
-            var _a, _b, _c;
-            yield (0, resumeParsingService_1.enrichUserProfileFromResume)({
-                db: params.db,
-                userId: params.currentUserId,
-                resumeKey: (0, inputSanitizers_1.readString)((_a = params.application) === null || _a === void 0 ? void 0 : _a.resumeKey, 600),
-                resumeMimeType: (0, inputSanitizers_1.readString)((_b = params.application) === null || _b === void 0 ? void 0 : _b.resumeMimeType, 120).toLowerCase(),
-                resumeFileName: (0, inputSanitizers_1.readString)((_c = params.application) === null || _c === void 0 ? void 0 : _c.resumeFileName, 200),
-                source: 'job_application_submission',
-            });
-        }));
-    });
 };
 const toJobResponse = (job) => ({
     id: String((job === null || job === void 0 ? void 0 : job.id) || ''),
@@ -469,6 +344,7 @@ const toJobResponse = (job) => ({
     tags: Array.isArray(job === null || job === void 0 ? void 0 : job.tags) ? job.tags : [],
     createdByUserId: String((job === null || job === void 0 ? void 0 : job.createdByUserId) || ''),
     createdAt: (job === null || job === void 0 ? void 0 : job.createdAt) || null,
+    discoveredAt: (job === null || job === void 0 ? void 0 : job.discoveredAt) || null,
     updatedAt: (job === null || job === void 0 ? void 0 : job.updatedAt) || null,
     publishedAt: (job === null || job === void 0 ? void 0 : job.publishedAt) || null,
     announcementPostId: (job === null || job === void 0 ? void 0 : job.announcementPostId) || null,
@@ -499,16 +375,30 @@ const toApplicationResponse = (application) => ({
     reviewedAt: (application === null || application === void 0 ? void 0 : application.reviewedAt) || null,
     statusNote: (application === null || application === void 0 ? void 0 : application.statusNote) || null,
 });
+exports.toApplicationResponse = toApplicationResponse;
 const pendingJobViewCount = new Map();
 let isJobViewFlushScheduled = false;
 let isJobViewShutdownHookRegistered = false;
-const recommendationProfileCache = new Map();
 const discoveredCountCache = new Map();
+const takePendingJobViewCountBatch = () => {
+    const snapshot = [];
+    const iterator = pendingJobViewCount.entries();
+    while (snapshot.length < JOB_VIEW_FLUSH_BATCH_SIZE) {
+        const next = iterator.next();
+        if (next.done)
+            break;
+        const [jobId, count] = next.value;
+        pendingJobViewCount.delete(jobId);
+        snapshot.push([jobId, count]);
+    }
+    return snapshot;
+};
 const flushJobViewCountBuffer = (db) => __awaiter(void 0, void 0, void 0, function* () {
     if (pendingJobViewCount.size === 0)
         return;
-    const snapshot = Array.from(pendingJobViewCount.entries());
-    pendingJobViewCount.clear();
+    const snapshot = takePendingJobViewCountBatch();
+    if (snapshot.length === 0)
+        return;
     const operations = snapshot.map(([jobId, count]) => ({
         updateOne: {
             filter: { id: jobId, status: { $ne: 'archived' } },
@@ -524,6 +414,11 @@ const flushJobViewCountBuffer = (db) => __awaiter(void 0, void 0, void 0, functi
         }
         console.warn('Flush job view count buffer error:', error);
     }
+    finally {
+        if (pendingJobViewCount.size > 0) {
+            scheduleJobViewCountFlush(db);
+        }
+    }
 });
 const scheduleJobViewCountFlush = (db) => {
     if (isJobViewFlushScheduled)
@@ -534,70 +429,36 @@ const scheduleJobViewCountFlush = (db) => {
         void flushJobViewCountBuffer(db);
     }, JOB_VIEW_FLUSH_INTERVAL_MS);
 };
-const registerJobViewCountShutdownHooks = () => {
+const registerJobViewCountShutdownHooks = (dbProvider = db_1.getDB) => {
     if (isJobViewShutdownHookRegistered)
         return;
     isJobViewShutdownHookRegistered = true;
     const flushOnShutdown = () => {
         if (!(0, db_1.isDBConnected)())
             return;
-        void flushJobViewCountBuffer((0, db_1.getDB)());
+        void flushJobViewCountBuffer(dbProvider());
     };
     process.once('SIGINT', flushOnShutdown);
     process.once('SIGTERM', flushOnShutdown);
     process.once('beforeExit', flushOnShutdown);
 };
 exports.registerJobViewCountShutdownHooks = registerJobViewCountShutdownHooks;
-const incrementJobViewCountAsync = (db, jobId) => {
+const incrementJobViewCountAsync = (db, jobId, userId) => {
     if (!jobId)
         return;
     pendingJobViewCount.set(jobId, (pendingJobViewCount.get(jobId) || 0) + 1);
+    const viewEvent = {
+        jobId,
+        type: 'job_viewed',
+        userId,
+    };
+    (0, jobPulseService_1.recordJobPulseEventAsync)(db, viewEvent);
     if (pendingJobViewCount.size >= JOB_VIEW_BUFFER_MAX_KEYS) {
         void flushJobViewCountBuffer(db);
         return;
     }
     scheduleJobViewCountFlush(db);
 };
-const resolveCachedRecommendationProfile = (db, currentUserId) => __awaiter(void 0, void 0, void 0, function* () {
-    if (!currentUserId)
-        return null;
-    const now = Date.now();
-    const cached = recommendationProfileCache.get(currentUserId);
-    if (cached && cached.expiresAt > now)
-        return cached.profile;
-    const recommendationUser = yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId }, {
-        projection: {
-            id: 1,
-            skills: 1,
-            profileSkills: 1,
-            location: 1,
-            country: 1,
-            industry: 1,
-            remotePreference: 1,
-            workPreference: 1,
-            preferredWorkModel: 1,
-            preferredWorkModels: 1,
-            workPreferences: 1,
-            experienceLevel: 1,
-            seniority: 1,
-            roleLevel: 1,
-            jobSeniorityPreference: 1,
-            yearsOfExperience: 1,
-            experienceYears: 1,
-            totalExperienceYears: 1,
-        },
-    });
-    if (!recommendationUser) {
-        recommendationProfileCache.delete(currentUserId);
-        return null;
-    }
-    const recommendationProfile = (0, jobRecommendationService_1.buildRecommendationProfile)(recommendationUser);
-    recommendationProfileCache.set(currentUserId, {
-        profile: recommendationProfile,
-        expiresAt: now + JOB_RECOMMENDATION_PROFILE_CACHE_TTL_MS,
-    });
-    return recommendationProfile;
-});
 const withOptimisticViewCount = (job) => (Object.assign(Object.assign({}, job), { viewCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.viewCount)
         ? Number(job.viewCount) + 1
         : 1 }));
@@ -614,28 +475,40 @@ const buildDiscoveredCountCacheKey = (parts) => {
         .join('&');
     return crypto_1.default.createHash('sha256').update(normalizedParts).digest('hex');
 };
-const resolveCachedDiscoveredCount = (db, filter, cacheKey) => __awaiter(void 0, void 0, void 0, function* () {
-    const now = Date.now();
+const refreshDiscoveredCountCacheEntry = (cacheKey, entry) => {
+    discoveredCountCache.delete(cacheKey);
+    discoveredCountCache.set(cacheKey, entry);
+};
+const storeDiscoveredCountCacheEntry = (cacheKey, entry, now) => {
+    refreshDiscoveredCountCacheEntry(cacheKey, entry);
+    pruneDiscoveredCountCache(now);
+};
+const pruneDiscoveredCountCache = (now) => {
     for (const [key, cacheValue] of discoveredCountCache.entries()) {
         if (cacheValue.expiresAt <= now) {
             discoveredCountCache.delete(key);
         }
     }
+    while (discoveredCountCache.size > JOB_DISCOVERED_COUNT_CACHE_MAX_KEYS) {
+        const oldestEntry = discoveredCountCache.keys().next();
+        if (oldestEntry.done)
+            break;
+        discoveredCountCache.delete(oldestEntry.value);
+    }
+};
+const resolveCachedDiscoveredCount = (db, filter, cacheKey) => __awaiter(void 0, void 0, void 0, function* () {
+    const now = Date.now();
+    pruneDiscoveredCountCache(now);
     const cached = discoveredCountCache.get(cacheKey);
     if (cached && cached.expiresAt > now) {
+        refreshDiscoveredCountCacheEntry(cacheKey, cached);
         return cached.count;
     }
     const count = yield db.collection(JOBS_COLLECTION).countDocuments(filter);
-    while (discoveredCountCache.size >= JOB_DISCOVERED_COUNT_CACHE_MAX_KEYS) {
-        const oldestKey = discoveredCountCache.keys().next().value;
-        if (!oldestKey)
-            break;
-        discoveredCountCache.delete(oldestKey);
-    }
-    discoveredCountCache.set(cacheKey, {
+    storeDiscoveredCountCacheEntry(cacheKey, {
         count,
         expiresAt: now + JOB_DISCOVERED_COUNT_CACHE_TTL_MS,
-    });
+    }, now);
     return count;
 });
 exports.jobsController = {
@@ -656,7 +529,7 @@ exports.jobsController = {
             if (status !== 'all' && !ALLOWED_JOB_STATUSES.has(status)) {
                 return res.status(400).json({ success: false, error: 'Invalid status filter' });
             }
-            const pagination = getPagination(req.query);
+            const pagination = (0, exports.getPagination)(req.query);
             const filter = { companyId };
             if (status === 'all') {
                 filter.status = { $ne: 'archived' };
@@ -715,7 +588,7 @@ exports.jobsController = {
             const maxSalary = Number(req.query.salaryMax);
             const postedWithinHours = Number(req.query.postedWithinHours);
             const sortBy = (0, inputSanitizers_1.readString)(req.query.sort, 40).toLowerCase() || 'latest';
-            const pagination = getPagination(req.query);
+            const pagination = (0, exports.getPagination)(req.query);
             if (Number.isFinite(minSalary) && Number.isFinite(maxSalary) && minSalary > 0 && maxSalary > 0 && maxSalary < minSalary) {
                 return res.status(400).json({ success: false, error: 'salaryMax cannot be less than salaryMin' });
             }
@@ -740,7 +613,7 @@ exports.jobsController = {
                 allowTextSearch,
             });
             const currentUserId = (0, inputSanitizers_1.readString)((_a = req.user) === null || _a === void 0 ? void 0 : _a.id, 120);
-            const recommendationProfilePromise = resolveCachedRecommendationProfile(db, currentUserId);
+            const recommendationProfilePromise = (0, jobRecommendationProfileCacheService_1.resolveCachedRecommendationProfile)(db, currentUserId);
             const discoveredThresholdIso = new Date(Date.now() - (JOB_DISCOVERED_WINDOW_MINUTES * 60 * 1000)).toISOString();
             const discoveredFilter = buildDiscoveredWindowFilter(querySpec.filter, discoveredThresholdIso);
             const discoveredCountCacheKey = buildDiscoveredCountCacheKey({
@@ -811,7 +684,22 @@ exports.jobsController = {
             }
             const db = (0, db_1.getDB)();
             const handleRegex = new RegExp(`^@?${escapeRegexPattern(rawHandle)}$`, 'i');
-            const user = yield db.collection(USERS_COLLECTION).findOne({ handle: handleRegex }, {
+            const publicUser = yield db.collection(USERS_COLLECTION).findOne({ handle: handleRegex }, {
+                projection: {
+                    id: 1,
+                    handle: 1,
+                    firstName: 1,
+                    name: 1,
+                    jobMatchShareEnabled: 1,
+                },
+            });
+            if (!publicUser) {
+                return res.status(404).json({ success: false, error: 'User not found' });
+            }
+            if ((publicUser === null || publicUser === void 0 ? void 0 : publicUser.jobMatchShareEnabled) !== true) {
+                return res.status(403).json({ success: false, error: 'This match feed is private' });
+            }
+            const user = yield db.collection(USERS_COLLECTION).findOne({ id: String((publicUser === null || publicUser === void 0 ? void 0 : publicUser.id) || '') }, {
                 projection: {
                     id: 1,
                     handle: 1,
@@ -835,14 +723,10 @@ exports.jobsController = {
                     yearsOfExperience: 1,
                     experienceYears: 1,
                     totalExperienceYears: 1,
-                    jobMatchShareEnabled: 1,
                 },
             });
             if (!user) {
                 return res.status(404).json({ success: false, error: 'User not found' });
-            }
-            if ((user === null || user === void 0 ? void 0 : user.jobMatchShareEnabled) === false) {
-                return res.status(403).json({ success: false, error: 'This match feed is private' });
             }
             const limit = (0, inputSanitizers_1.parsePositiveInt)((_a = req.query) === null || _a === void 0 ? void 0 : _a.limit, 20, 1, 40);
             const matchedJobs = yield (0, reverseJobMatchService_1.listTopJobMatchesForUser)({
@@ -850,7 +734,7 @@ exports.jobsController = {
                 user,
                 limit,
             });
-            const normalizedHandle = (0, inputSanitizers_1.readString)(user === null || user === void 0 ? void 0 : user.handle, 120) || `@${rawHandle.toLowerCase()}`;
+            const normalizedHandle = (0, inputSanitizers_1.readString)(publicUser === null || publicUser === void 0 ? void 0 : publicUser.handle, 120) || `@${rawHandle.toLowerCase()}`;
             return res.json({
                 success: true,
                 data: matchedJobs.map((job) => (Object.assign(Object.assign({}, (0, exports.toJobResponse)(job)), { recommendationScore: Number.isFinite(job === null || job === void 0 ? void 0 : job.recommendationScore) && Number(job === null || job === void 0 ? void 0 : job.recommendationScore) > 0
@@ -864,10 +748,10 @@ exports.jobsController = {
                         : 'other' }))),
                 meta: {
                     user: {
-                        id: String((user === null || user === void 0 ? void 0 : user.id) || ''),
+                        id: String((publicUser === null || publicUser === void 0 ? void 0 : publicUser.id) || ''),
                         handle: normalizedHandle,
-                        name: (0, inputSanitizers_1.readString)(user === null || user === void 0 ? void 0 : user.name, 160)
-                            || (0, inputSanitizers_1.readString)(user === null || user === void 0 ? void 0 : user.firstName, 120)
+                        name: (0, inputSanitizers_1.readString)(publicUser === null || publicUser === void 0 ? void 0 : publicUser.name, 160)
+                            || (0, inputSanitizers_1.readString)(publicUser === null || publicUser === void 0 ? void 0 : publicUser.firstName, 120)
                             || normalizedHandle,
                     },
                     shareUrl: `${AURA_PUBLIC_WEB_BASE_URL}/jobs/${encodeURIComponent(normalizedHandle)}`,
@@ -989,7 +873,7 @@ exports.jobsController = {
             if (slugJobId) {
                 const byId = yield db.collection(JOBS_COLLECTION).findOne({ id: slugJobId, status: { $ne: 'archived' } });
                 if (byId) {
-                    incrementJobViewCountAsync(db, slugJobId);
+                    incrementJobViewCountAsync(db, slugJobId, currentUserId);
                     const byIdWithView = withOptimisticViewCount(byId);
                     const skillGap = currentUserId
                         ? yield resolveJobSkillGap({
@@ -1012,7 +896,7 @@ exports.jobsController = {
             if (!bySlug) {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
-            incrementJobViewCountAsync(db, (0, inputSanitizers_1.readString)(bySlug === null || bySlug === void 0 ? void 0 : bySlug.id, 120));
+            incrementJobViewCountAsync(db, (0, inputSanitizers_1.readString)(bySlug === null || bySlug === void 0 ? void 0 : bySlug.id, 120), currentUserId);
             const bySlugWithView = withOptimisticViewCount(bySlug);
             const skillGap = currentUserId
                 ? yield resolveJobSkillGap({
@@ -1046,7 +930,7 @@ exports.jobsController = {
             if (!job) {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
-            incrementJobViewCountAsync(db, jobId);
+            incrementJobViewCountAsync(db, jobId, currentUserId);
             const jobWithView = withOptimisticViewCount(job);
             const skillGap = currentUserId
                 ? yield resolveJobSkillGap({
@@ -1134,7 +1018,7 @@ exports.jobsController = {
             if (!actor || actor.type !== 'company') {
                 return res.status(403).json({ success: false, error: 'Company identity context is required' });
             }
-            const access = yield resolveOwnerAdminCompanyAccess(actor.id, currentUserId);
+            const access = yield (0, jobApplicationLifecycleService_1.resolveOwnerAdminCompanyAccess)(actor.id, currentUserId);
             if (!access.allowed) {
                 return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
             }
@@ -1165,8 +1049,8 @@ exports.jobsController = {
             const applicationDeadline = parseIsoOrNull((_o = req.body) === null || _o === void 0 ? void 0 : _o.applicationDeadline);
             const hasApplicationUrlPayload = ((_p = req.body) === null || _p === void 0 ? void 0 : _p.applicationUrl) !== undefined;
             const hasApplicationEmailPayload = ((_q = req.body) === null || _q === void 0 ? void 0 : _q.applicationEmail) !== undefined;
-            const applicationUrl = normalizeExternalUrl((_r = req.body) === null || _r === void 0 ? void 0 : _r.applicationUrl);
-            const applicationEmail = normalizeEmailAddress((_s = req.body) === null || _s === void 0 ? void 0 : _s.applicationEmail);
+            const applicationUrl = (0, contactNormalization_1.normalizeExternalUrl)((_r = req.body) === null || _r === void 0 ? void 0 : _r.applicationUrl);
+            const applicationEmail = (0, contactNormalization_1.normalizeEmailAddress)((_s = req.body) === null || _s === void 0 ? void 0 : _s.applicationEmail);
             const announceInFeed = Boolean((_t = req.body) === null || _t === void 0 ? void 0 : _t.announceInFeed);
             if (salaryMin != null && salaryMin < 0) {
                 return res.status(400).json({ success: false, error: 'salaryMin cannot be negative' });
@@ -1192,8 +1076,8 @@ exports.jobsController = {
                 companyName: (0, inputSanitizers_1.readString)((_u = access.company) === null || _u === void 0 ? void 0 : _u.name, 120) || 'Company',
                 companyHandle: (0, inputSanitizers_1.readString)((_v = access.company) === null || _v === void 0 ? void 0 : _v.handle, 80),
                 companyIsVerified: Boolean((_w = access.company) === null || _w === void 0 ? void 0 : _w.isVerified),
-                companyWebsite: normalizeExternalUrl((_x = access.company) === null || _x === void 0 ? void 0 : _x.website),
-                companyEmail: normalizeEmailAddress((_y = access.company) === null || _y === void 0 ? void 0 : _y.email),
+                companyWebsite: (0, contactNormalization_1.normalizeExternalUrl)((_x = access.company) === null || _x === void 0 ? void 0 : _x.website),
+                companyEmail: (0, contactNormalization_1.normalizeEmailAddress)((_y = access.company) === null || _y === void 0 ? void 0 : _y.email),
                 title,
                 summary,
                 description,
@@ -1209,6 +1093,7 @@ exports.jobsController = {
                 tags,
                 createdByUserId: currentUserId,
                 createdAt: nowIso,
+                discoveredAt: nowIso,
                 updatedAt: nowIso,
                 publishedAt: nowIso,
                 announcementPostId: null,
@@ -1303,6 +1188,12 @@ exports.jobsController = {
             };
             Object.assign(job, (0, jobRecommendationService_1.buildJobRecommendationPrecomputedFields)(recommendationSource));
             yield db.collection(JOBS_COLLECTION).insertOne(job);
+            (0, jobPulseService_1.recordJobPulseEventAsync)(db, {
+                jobId: job.id,
+                type: 'job_discovered',
+                userId: currentUserId,
+                createdAt: nowIso,
+            });
             return res.status(201).json({
                 success: true,
                 data: (0, exports.toJobResponse)(job),
@@ -1330,7 +1221,7 @@ exports.jobsController = {
             if (!existingJob) {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
-            const access = yield resolveOwnerAdminCompanyAccess(String(existingJob.companyId || ''), currentUserId);
+            const access = yield (0, jobApplicationLifecycleService_1.resolveOwnerAdminCompanyAccess)(String(existingJob.companyId || ''), currentUserId);
             if (!access.allowed) {
                 return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
             }
@@ -1403,7 +1294,7 @@ exports.jobsController = {
                 updates.applicationDeadline = parsed;
             }
             if (req.body.applicationUrl !== undefined) {
-                const parsedUrl = normalizeExternalUrl(req.body.applicationUrl);
+                const parsedUrl = (0, contactNormalization_1.normalizeExternalUrl)(req.body.applicationUrl);
                 const raw = (0, inputSanitizers_1.readString)(String(req.body.applicationUrl || ''), 600);
                 if (raw && !parsedUrl) {
                     return res.status(400).json({ success: false, error: 'applicationUrl must be a valid http(s) URL' });
@@ -1411,7 +1302,7 @@ exports.jobsController = {
                 updates.applicationUrl = parsedUrl;
             }
             if (req.body.applicationEmail !== undefined) {
-                const parsedEmail = normalizeEmailAddress(req.body.applicationEmail);
+                const parsedEmail = (0, contactNormalization_1.normalizeEmailAddress)(req.body.applicationEmail);
                 const raw = (0, inputSanitizers_1.readString)(String(req.body.applicationEmail || ''), 200);
                 if (raw && !parsedEmail) {
                     return res.status(400).json({ success: false, error: 'applicationEmail must be a valid email address' });
@@ -1475,7 +1366,7 @@ exports.jobsController = {
             if (!existingJob) {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
-            const access = yield resolveOwnerAdminCompanyAccess(String(existingJob.companyId || ''), currentUserId);
+            const access = yield (0, jobApplicationLifecycleService_1.resolveOwnerAdminCompanyAccess)(String(existingJob.companyId || ''), currentUserId);
             if (!access.allowed) {
                 return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
             }
@@ -1529,7 +1420,7 @@ exports.jobsController = {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
             const companyId = (0, inputSanitizers_1.readString)(existingJob.companyId, 120);
-            const access = yield resolveOwnerAdminCompanyAccess(companyId, currentUserId);
+            const access = yield (0, jobApplicationLifecycleService_1.resolveOwnerAdminCompanyAccess)(companyId, currentUserId);
             if (!access.allowed) {
                 return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
             }
@@ -1685,9 +1576,15 @@ exports.jobsController = {
             };
             yield db.collection(JOB_APPLICATIONS_COLLECTION).insertOne(application);
             yield db.collection(JOBS_COLLECTION).updateOne({ id: jobId }, { $inc: { applicationCount: 1 }, $set: { updatedAt: nowIso } });
+            (0, jobPulseService_1.recordJobPulseEventAsync)(db, {
+                jobId,
+                type: 'job_applied',
+                userId: currentUserId,
+                createdAt: nowIso,
+            });
             (0, companyJobAnalyticsService_1.invalidateCompanyJobAnalyticsCache)(String(job.companyId || ''));
-            const applicantApplicationCount = yield incrementApplicantApplicationCount(db, currentUserId, nowIso);
-            scheduleApplicationPostCreateEffects({
+            const applicantApplicationCount = yield (0, jobApplicationLifecycleService_1.incrementApplicantApplicationCount)(db, currentUserId, nowIso);
+            (0, jobApplicationLifecycleService_1.scheduleJobApplicationPostCreateEffects)({
                 req,
                 db,
                 currentUserId,
@@ -1699,7 +1596,7 @@ exports.jobsController = {
             });
             return res.status(201).json({
                 success: true,
-                data: toApplicationResponse(application),
+                data: (0, exports.toApplicationResponse)(application),
             });
         }
         catch (error) {
@@ -1727,7 +1624,7 @@ exports.jobsController = {
             if (!job) {
                 return res.status(404).json({ success: false, error: 'Job not found' });
             }
-            const access = yield resolveOwnerAdminCompanyAccess(String(job.companyId || ''), currentUserId);
+            const access = yield (0, jobApplicationLifecycleService_1.resolveOwnerAdminCompanyAccess)(String(job.companyId || ''), currentUserId);
             if (!access.allowed) {
                 return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
             }
@@ -1735,8 +1632,8 @@ exports.jobsController = {
             if (status && !ALLOWED_APPLICATION_STATUSES.has(status)) {
                 return res.status(400).json({ success: false, error: 'Invalid application status filter' });
             }
-            const pagination = getPagination(req.query);
-            const searchRegex = sanitizeSearchRegex((0, inputSanitizers_1.readString)(req.query.q, 100));
+            const pagination = (0, exports.getPagination)(req.query);
+            const searchRegex = (0, exports.sanitizeSearchRegex)((0, inputSanitizers_1.readString)(req.query.q, 100));
             const filter = { jobId };
             if (status)
                 filter.status = status;
@@ -1757,7 +1654,7 @@ exports.jobsController = {
             ]);
             return res.json({
                 success: true,
-                data: items.map(toApplicationResponse),
+                data: items.map(exports.toApplicationResponse),
                 pagination: {
                     page: pagination.page,
                     limit: pagination.limit,
@@ -1769,34 +1666,6 @@ exports.jobsController = {
         catch (error) {
             console.error('List job applications error:', error);
             return res.status(500).json({ success: false, error: 'Failed to fetch applications' });
-        }
-    }),
-    // GET /api/applications/:applicationId
-    getJobApplicationById: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
-        try {
-            if (!(0, db_1.isDBConnected)()) {
-                return res.status(503).json({ success: false, error: 'Database service unavailable' });
-            }
-            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!currentUserId) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            const { applicationId } = req.params;
-            const db = (0, db_1.getDB)();
-            const application = yield db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-            if (!application) {
-                return res.status(404).json({ success: false, error: 'Application not found' });
-            }
-            const allowed = yield canReadApplication(application, currentUserId);
-            if (!allowed) {
-                return res.status(403).json({ success: false, error: 'Unauthorized to view this application' });
-            }
-            return res.json({ success: true, data: toApplicationResponse(application) });
-        }
-        catch (error) {
-            console.error('Get job application error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to fetch application' });
         }
     }),
     // PATCH /api/applications/:applicationId/status
@@ -1821,7 +1690,7 @@ exports.jobsController = {
             if (!application) {
                 return res.status(404).json({ success: false, error: 'Application not found' });
             }
-            const access = yield resolveOwnerAdminCompanyAccess(String(application.companyId || ''), currentUserId);
+            const access = yield (0, jobApplicationLifecycleService_1.resolveOwnerAdminCompanyAccess)(String(application.companyId || ''), currentUserId);
             if (!access.allowed) {
                 return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
             }
@@ -1847,125 +1716,11 @@ exports.jobsController = {
                 console.error('Award status-driven badge error:', badgeError);
             });
             const updated = yield db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-            return res.json({ success: true, data: toApplicationResponse(updated) });
+            return res.json({ success: true, data: (0, exports.toApplicationResponse)(updated) });
         }
         catch (error) {
             console.error('Update application status error:', error);
             return res.status(500).json({ success: false, error: 'Failed to update application status' });
-        }
-    }),
-    // GET /api/applications/:applicationId/resume/view-url
-    getApplicationResumeViewUrl: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
-        try {
-            if (!(0, db_1.isDBConnected)()) {
-                return res.status(503).json({ success: false, error: 'Database service unavailable' });
-            }
-            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!currentUserId) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            const { applicationId } = req.params;
-            const db = (0, db_1.getDB)();
-            const application = yield db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-            if (!application) {
-                return res.status(404).json({ success: false, error: 'Application not found' });
-            }
-            const allowed = yield canReadApplication(application, currentUserId);
-            if (!allowed) {
-                return res.status(403).json({ success: false, error: 'Unauthorized to access this resume' });
-            }
-            const resumeKey = (0, inputSanitizers_1.readString)(application.resumeKey, 500);
-            if (!resumeKey) {
-                return res.status(404).json({ success: false, error: 'Resume key not available for this application' });
-            }
-            const expiresInSeconds = 600;
-            const url = yield (0, jobResumeStorageService_1.getApplicationResumeSignedUrl)(resumeKey, expiresInSeconds);
-            if (!url) {
-                return res.status(503).json({
-                    success: false,
-                    error: 'Resume preview service is not configured',
-                });
-            }
-            return res.json({
-                success: true,
-                data: {
-                    url,
-                    expiresIn: expiresInSeconds,
-                },
-            });
-        }
-        catch (error) {
-            console.error('Get resume view URL error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to generate resume view URL' });
-        }
-    }),
-    // POST /api/applications/review-portal/resolve
-    resolveApplicationReviewPortalToken: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
-        try {
-            if (!(0, db_1.isDBConnected)()) {
-                return res.status(503).json({ success: false, error: 'Database service unavailable' });
-            }
-            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!currentUserId) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            const token = (0, inputSanitizers_1.readString)((_b = req.body) === null || _b === void 0 ? void 0 : _b.token, 400);
-            if (!token) {
-                return res.status(400).json({ success: false, error: 'Review token is required' });
-            }
-            const db = (0, db_1.getDB)();
-            const link = yield db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).findOne({
-                tokenHash: hashSecureToken(token),
-            });
-            if (!link) {
-                return res.status(404).json({ success: false, error: 'Invalid review link' });
-            }
-            const expiresAtTs = new Date(link.expiresAt || '').getTime();
-            if (!Number.isFinite(expiresAtTs) || expiresAtTs < Date.now()) {
-                return res.status(410).json({ success: false, error: 'This review link has expired' });
-            }
-            const applicationId = (0, inputSanitizers_1.readString)(link.applicationId, 120);
-            const application = yield db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-            if (!application) {
-                return res.status(404).json({ success: false, error: 'Application for this review link was not found' });
-            }
-            const companyId = (0, inputSanitizers_1.readString)(application.companyId || link.companyId, 120);
-            const access = yield resolveOwnerAdminCompanyAccess(companyId, currentUserId);
-            if (!access.allowed) {
-                return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
-            }
-            const jobId = (0, inputSanitizers_1.readString)(application.jobId || link.jobId, 120);
-            const job = yield db.collection(JOBS_COLLECTION).findOne({ id: jobId });
-            const nowIso = new Date().toISOString();
-            yield db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).updateOne({ id: String(link.id || '') }, {
-                $set: {
-                    lastResolvedAt: nowIso,
-                    lastResolvedByUserId: currentUserId,
-                },
-            });
-            return res.json({
-                success: true,
-                data: {
-                    companyId,
-                    jobId,
-                    applicationId,
-                    jobTitle: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.title, 160),
-                    applicantName: (0, inputSanitizers_1.readString)(application === null || application === void 0 ? void 0 : application.applicantName, 160),
-                    status: (0, inputSanitizers_1.readString)(application === null || application === void 0 ? void 0 : application.status, 40),
-                    expiresAt: (0, inputSanitizers_1.readString)(link === null || link === void 0 ? void 0 : link.expiresAt, 80) || null,
-                    portal: {
-                        view: 'profile',
-                        targetId: companyId,
-                        tab: 'jobs',
-                    },
-                },
-            });
-        }
-        catch (error) {
-            console.error('Resolve application review portal token error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to resolve review link' });
         }
     }),
     // GET /api/companies/:companyId/job-analytics
@@ -1983,7 +1738,7 @@ exports.jobsController = {
             if (!companyId) {
                 return res.status(400).json({ success: false, error: 'companyId is required' });
             }
-            const access = yield resolveOwnerAdminCompanyAccess(companyId, currentUserId);
+            const access = yield (0, jobApplicationLifecycleService_1.resolveOwnerAdminCompanyAccess)(companyId, currentUserId);
             if (!access.allowed) {
                 return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
             }
@@ -1997,184 +1752,6 @@ exports.jobsController = {
         catch (error) {
             console.error('Get company job analytics error:', error);
             return res.status(500).json({ success: false, error: 'Failed to fetch company job analytics' });
-        }
-    }),
-    // GET /api/companies/:companyId/job-applications/attention-count
-    getCompanyApplicationAttentionCount: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
-        try {
-            if (!(0, db_1.isDBConnected)()) {
-                return res.json({
-                    success: true,
-                    data: {
-                        pendingReviewCount: 0,
-                        activePipelineCount: 0,
-                        totalOpenJobs: 0,
-                    },
-                });
-            }
-            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!currentUserId) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            const companyId = (0, inputSanitizers_1.readString)(req.params.companyId, 120);
-            if (!companyId) {
-                return res.status(400).json({ success: false, error: 'companyId is required' });
-            }
-            const access = yield resolveOwnerAdminCompanyAccess(companyId, currentUserId);
-            if (!access.allowed) {
-                return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
-            }
-            const db = (0, db_1.getDB)();
-            const [pendingReviewCount, activePipelineCount, totalOpenJobs] = yield Promise.all([
-                db.collection(JOB_APPLICATIONS_COLLECTION).countDocuments({
-                    companyId,
-                    status: 'submitted',
-                }),
-                db.collection(JOB_APPLICATIONS_COLLECTION).countDocuments({
-                    companyId,
-                    status: { $in: ['in_review', 'shortlisted'] },
-                }),
-                db.collection(JOBS_COLLECTION).countDocuments({
-                    companyId,
-                    status: 'open',
-                }),
-            ]);
-            return res.json({
-                success: true,
-                data: {
-                    pendingReviewCount,
-                    activePipelineCount,
-                    totalOpenJobs,
-                },
-            });
-        }
-        catch (error) {
-            console.error('Get company application attention count error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to fetch application attention count' });
-        }
-    }),
-    // GET /api/me/job-applications
-    getMyJobApplications: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
-        try {
-            if (!(0, db_1.isDBConnected)()) {
-                return res.json({
-                    success: true,
-                    data: [],
-                    pagination: { page: 1, limit: 20, total: 0, pages: 0 },
-                });
-            }
-            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!currentUserId) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            const actor = yield (0, identityUtils_1.resolveIdentityActor)(currentUserId, {
-                ownerType: (0, inputSanitizers_1.readString)(req.headers['x-identity-type'] || 'user', 20),
-                ownerId: (0, inputSanitizers_1.readString)(req.headers['x-identity-id'] || currentUserId, 120),
-            }, req.headers);
-            if (!actor || actor.type !== 'user' || actor.id !== currentUserId) {
-                return res.status(403).json({ success: false, error: 'This endpoint is only available for personal identity' });
-            }
-            const pagination = getPagination(req.query);
-            const status = (0, inputSanitizers_1.readString)(req.query.status, 40).toLowerCase();
-            if (status && !ALLOWED_APPLICATION_STATUSES.has(status)) {
-                return res.status(400).json({ success: false, error: 'Invalid application status filter' });
-            }
-            const db = (0, db_1.getDB)();
-            const filter = {
-                applicantUserId: currentUserId,
-            };
-            if (status)
-                filter.status = status;
-            const [items, total] = yield Promise.all([
-                db.collection(JOB_APPLICATIONS_COLLECTION)
-                    .find(filter)
-                    .sort({ createdAt: -1 })
-                    .skip(pagination.skip)
-                    .limit(pagination.limit)
-                    .toArray(),
-                db.collection(JOB_APPLICATIONS_COLLECTION).countDocuments(filter),
-            ]);
-            const jobIds = Array.from(new Set(items
-                .map((item) => String((item === null || item === void 0 ? void 0 : item.jobId) || '').trim())
-                .filter((id) => id.length > 0)));
-            const jobs = yield db.collection(JOBS_COLLECTION).find({ id: { $in: jobIds } }).toArray();
-            const jobsById = new Map(jobs.map((job) => [String(job.id), job]));
-            const companyIds = Array.from(new Set(jobs
-                .map((job) => String((job === null || job === void 0 ? void 0 : job.companyId) || '').trim())
-                .filter((id) => id.length > 0)));
-            const companies = yield db.collection(COMPANIES_COLLECTION)
-                .find({ id: { $in: companyIds }, legacyArchived: { $ne: true } })
-                .project({ id: 1, name: 1, handle: 1, avatar: 1, avatarType: 1 })
-                .toArray();
-            const companiesById = new Map(companies.map((company) => [String(company.id), company]));
-            const data = items.map((application) => {
-                const job = jobsById.get(String(application.jobId || ''));
-                const company = companiesById.get(String((job === null || job === void 0 ? void 0 : job.companyId) || ''));
-                return Object.assign(Object.assign({}, toApplicationResponse(application)), { job: job ? (0, exports.toJobResponse)(job) : null, company: company
-                        ? {
-                            id: String(company.id || ''),
-                            name: String(company.name || ''),
-                            handle: String(company.handle || ''),
-                            avatar: String(company.avatar || ''),
-                            avatarType: String(company.avatarType || 'image'),
-                        }
-                        : null });
-            });
-            return res.json({
-                success: true,
-                data,
-                pagination: {
-                    page: pagination.page,
-                    limit: pagination.limit,
-                    total,
-                    pages: Math.ceil(total / pagination.limit),
-                },
-            });
-        }
-        catch (error) {
-            console.error('Get my job applications error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to fetch your applications' });
-        }
-    }),
-    // POST /api/applications/:applicationId/withdraw
-    withdrawMyApplication: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
-        try {
-            if (!(0, db_1.isDBConnected)()) {
-                return res.status(503).json({ success: false, error: 'Database service unavailable' });
-            }
-            const currentUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            if (!currentUserId) {
-                return res.status(401).json({ success: false, error: 'Authentication required' });
-            }
-            const { applicationId } = req.params;
-            const db = (0, db_1.getDB)();
-            const application = yield db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-            if (!application) {
-                return res.status(404).json({ success: false, error: 'Application not found' });
-            }
-            if (String(application.applicantUserId || '') !== currentUserId) {
-                return res.status(403).json({ success: false, error: 'Only the applicant can withdraw this application' });
-            }
-            const nowIso = new Date().toISOString();
-            const nowDate = new Date(nowIso);
-            yield db.collection(JOB_APPLICATIONS_COLLECTION).updateOne({ id: applicationId }, {
-                $set: {
-                    status: 'withdrawn',
-                    updatedAt: nowIso,
-                    updatedAtDate: nowDate,
-                    statusNote: (0, inputSanitizers_1.readStringOrNull)((_b = req.body) === null || _b === void 0 ? void 0 : _b.statusNote, 1000),
-                },
-            });
-            (0, companyJobAnalyticsService_1.invalidateCompanyJobAnalyticsCache)(String(application.companyId || ''));
-            const updated = yield db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-            return res.json({ success: true, data: toApplicationResponse(updated) });
-        }
-        catch (error) {
-            console.error('Withdraw application error:', error);
-            return res.status(500).json({ success: false, error: 'Failed to withdraw application' });
         }
     }),
 };

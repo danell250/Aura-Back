@@ -4,38 +4,27 @@ import { getDB, isDBConnected } from '../db';
 import { resolveIdentityActor } from '../utils/identityUtils';
 import { emitAuthorInsightsUpdate } from './postsController';
 import { getHashtagsFromText } from '../utils/hashtagUtils';
-import { getCompanyApplicationRoom } from '../realtime/roomNames';
 import { parsePositiveInt, readString, readStringOrNull } from '../utils/inputSanitizers';
 import { buildJobSkillGap } from '../services/jobSkillGapService';
+import { buildJobRecommendationPrecomputedFields, buildJobRecommendationScore, resolveRecommendationMatchTier } from '../services/jobRecommendationService';
+import { buildCompanyJobAnalytics, EMPTY_COMPANY_JOB_ANALYTICS, invalidateCompanyJobAnalyticsCache } from '../services/companyJobAnalyticsService';
 import {
-  buildJobRecommendationPrecomputedFields,
-  buildJobRecommendationScore,
-  buildRecommendationProfile,
-  resolveRecommendationMatchTier,
-} from '../services/jobRecommendationService';
-import {
-  buildCompanyJobAnalytics,
-  EMPTY_COMPANY_JOB_ANALYTICS,
-  invalidateCompanyJobAnalyticsCache,
-} from '../services/companyJobAnalyticsService';
-import { queueJobApplicationReviewEmails } from '../services/jobApplicationReviewService';
-import { enrichUserProfileFromResume } from '../services/resumeParsingService';
-import { enqueueResumeEnrichmentJob } from '../services/resumeEnrichmentQueueService';
-import { getApplicationResumeSignedUrl } from '../services/jobResumeStorageService';
+  incrementApplicantApplicationCount,
+  resolveOwnerAdminCompanyAccess,
+  scheduleJobApplicationPostCreateEffects,
+} from '../services/jobApplicationLifecycleService';
+import { recordJobPulseEventAsync } from '../services/jobPulseService';
 import { listTopJobMatchesForUser } from '../services/reverseJobMatchService';
-import {
-  awardApplicationMilestoneBadges,
-  awardStatusDrivenBadge,
-} from '../services/userBadgeService';
+import { resolveCachedRecommendationProfile } from '../services/jobRecommendationProfileCacheService';
+import { awardStatusDrivenBadge } from '../services/userBadgeService';
+import { normalizeEmailAddress, normalizeExternalUrl } from '../utils/contactNormalization';
 
 const JOBS_COLLECTION = 'jobs';
 const JOB_APPLICATIONS_COLLECTION = 'job_applications';
 const JOB_APPLICATION_REVIEW_LINKS_COLLECTION = 'job_application_review_links';
 const JOB_APPLICATION_NOTES_COLLECTION = 'application_notes';
-const COMPANIES_COLLECTION = 'companies';
 const COMPANY_MEMBERS_COLLECTION = 'company_members';
 const USERS_COLLECTION = 'users';
-
 const ALLOWED_JOB_STATUSES = new Set(['open', 'closed', 'archived']);
 const ALLOWED_EMPLOYMENT_TYPES = new Set(['full_time', 'part_time', 'contract', 'internship', 'temporary']);
 const ALLOWED_WORK_MODELS = new Set(['onsite', 'hybrid', 'remote']);
@@ -50,7 +39,7 @@ const JOB_SKILL_GAP_TIMEOUT_MS = 180;
 const CAREER_PAGE_SOURCE_SITES = new Set(['greenhouse', 'lever', 'workday', 'smartrecruiters', 'careers']);
 const JOB_VIEW_FLUSH_INTERVAL_MS = 5000;
 const JOB_VIEW_BUFFER_MAX_KEYS = 400;
-const JOB_RECOMMENDATION_PROFILE_CACHE_TTL_MS = 60_000;
+const JOB_VIEW_FLUSH_BATCH_SIZE = 100;
 const JOB_DISCOVERED_WINDOW_MINUTES = 30;
 const JOB_DISCOVERED_COUNT_CACHE_TTL_MS = 60_000;
 const JOB_DISCOVERED_COUNT_CACHE_MAX_KEYS = 200;
@@ -60,13 +49,6 @@ const AURA_PUBLIC_WEB_BASE_URL = (
   || readString(process.env.VITE_FRONTEND_URL, 320)
   || 'https://aura.social'
 ).replace(/\/+$/, '');
-
-type CompanyAdminAccessResult = {
-  allowed: boolean;
-  status: number;
-  error?: string;
-  company?: any;
-};
 
 type Pagination = {
   page: number;
@@ -88,7 +70,7 @@ const readStringList = (value: unknown, maxItems = 10, maxLength = 40): string[]
   return next;
 };
 
-const getPagination = (query: Record<string, unknown>): Pagination => {
+export const getPagination = (query: Record<string, unknown>): Pagination => {
   const page = parsePositiveInt(query.page, 1, 1, 100000);
   const limit = parsePositiveInt(query.limit, 20, 1, 100);
   return {
@@ -138,14 +120,14 @@ const parseIsoOrNull = (value: unknown): string | null => {
   return parsed.toISOString();
 };
 
-const hashSecureToken = (token: string): string => {
+export const hashSecureToken = (token: string): string => {
   return crypto.createHash('sha256').update(token).digest('hex');
 };
 
 const escapeRegexPattern = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const sanitizeSearchRegex = (raw: string): RegExp | null => {
+export const sanitizeSearchRegex = (raw: string): RegExp | null => {
   const trimmed = readString(raw, 100);
   if (!trimmed) return null;
   const escaped = escapeRegexPattern(trimmed);
@@ -356,26 +338,6 @@ const buildPersistentJobSlug = (job: any): string => {
   return normalizeSlugValue(rawSlug, 220) || 'job';
 };
 
-const normalizeExternalUrl = (value: unknown): string | null => {
-  const raw = readString(String(value || ''), 600);
-  if (!raw) return null;
-  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try {
-    const parsed = new URL(withProtocol);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-};
-
-const normalizeEmailAddress = (value: unknown): string | null => {
-  const raw = readString(String(value || ''), 200).toLowerCase();
-  if (!raw) return null;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) return null;
-  return raw;
-};
-
 const toAnnouncementTag = (tag: string) => tag.replace(/[^a-z0-9]/gi, '').toLowerCase();
 
 const buildJobAnnouncementContent = (job: {
@@ -414,148 +376,6 @@ const buildJobAnnouncementContent = (job: {
   ].join('\n');
 };
 
-const resolveOwnerAdminCompanyAccess = async (
-  companyId: string,
-  authenticatedUserId: string,
-): Promise<CompanyAdminAccessResult> => {
-  const db = getDB();
-  const company = await db.collection(COMPANIES_COLLECTION).findOne({
-    id: companyId,
-    legacyArchived: { $ne: true },
-  });
-
-  if (!company) {
-    return { allowed: false, status: 404, error: 'Company not found' };
-  }
-
-  if (company.ownerId === authenticatedUserId) {
-    return { allowed: true, status: 200, company };
-  }
-
-  const membership = await db.collection(COMPANY_MEMBERS_COLLECTION).findOne({
-    companyId,
-    userId: authenticatedUserId,
-    role: { $in: ['owner', 'admin'] },
-  });
-
-  if (!membership) {
-    return { allowed: false, status: 403, error: 'Only company owner/admin can perform this action' };
-  }
-
-  return { allowed: true, status: 200, company };
-};
-
-const canReadApplication = async (
-  application: any,
-  authenticatedUserId: string,
-): Promise<boolean> => {
-  if (!application) return false;
-  if (application.applicantUserId === authenticatedUserId) return true;
-  const access = await resolveOwnerAdminCompanyAccess(String(application.companyId || ''), authenticatedUserId);
-  return access.allowed;
-};
-
-const incrementApplicantApplicationCount = async (
-  db: any,
-  userId: string,
-  nowIso: string,
-): Promise<number | null> => {
-  try {
-    const updateResult = await db.collection(USERS_COLLECTION).findOneAndUpdate(
-      { id: userId },
-      {
-        $inc: { jobApplicationsCount: 1 },
-        $set: { updatedAt: nowIso },
-      },
-      {
-        returnDocument: 'after',
-        projection: { jobApplicationsCount: 1 },
-      },
-    );
-    const updatedUser = (updateResult as any)?.value ?? updateResult;
-    const parsedCount = Number((updatedUser as any)?.jobApplicationsCount);
-    return Number.isFinite(parsedCount) && parsedCount >= 0 ? parsedCount : null;
-  } catch (counterError) {
-    console.error('Increment user jobApplicationsCount error:', counterError);
-    return null;
-  }
-};
-
-const emitNewApplicationEvent = (
-  req: Request,
-  params: {
-    companyId: string;
-    applicationId: string;
-    jobTitle: string;
-    applicantName: string;
-    createdAt: string;
-  },
-): void => {
-  const io = req.app.get('io');
-  const targetCompanyId = readString(params.companyId, 120);
-  if (!io || !targetCompanyId) return;
-
-  io.to(getCompanyApplicationRoom(targetCompanyId)).emit('new_application', {
-    applicationId: params.applicationId,
-    jobTitle: params.jobTitle,
-    applicantName: params.applicantName,
-    companyId: targetCompanyId,
-    createdAt: params.createdAt,
-  });
-};
-
-const scheduleApplicationPostCreateEffects = (params: {
-  req: Request;
-  db: any;
-  currentUserId: string;
-  applicantApplicationCount: number | null;
-  jobId: string;
-  job: any;
-  application: any;
-  nowIso: string;
-}): void => {
-  void awardApplicationMilestoneBadges({
-    db: params.db,
-    userId: params.currentUserId,
-    applicationId: params.application.id,
-    applicationCount: params.applicantApplicationCount ?? undefined,
-  }).catch((badgeError) => {
-    console.error('Award application milestone badges error:', badgeError);
-  });
-
-  emitNewApplicationEvent(params.req, {
-    companyId: String(params.job.companyId || ''),
-    applicationId: String(params.application.id || ''),
-    jobTitle: String(params.job.title || ''),
-    applicantName: String(params.application.applicantName || ''),
-    createdAt: params.nowIso,
-  });
-
-  // Fire-and-forget: notify company owner/admin reviewers by email with a secure portal link.
-  queueJobApplicationReviewEmails({
-    db: params.db,
-    companyId: String(params.job.companyId || ''),
-    jobId: params.jobId,
-    application: params.application,
-    job: params.job,
-  }).catch((emailError) => {
-    console.error('Job application review email dispatch error:', emailError);
-  });
-
-  setImmediate(() => {
-    enqueueResumeEnrichmentJob(async () => {
-      await enrichUserProfileFromResume({
-        db: params.db,
-        userId: params.currentUserId,
-        resumeKey: readString(params.application?.resumeKey, 600),
-        resumeMimeType: readString(params.application?.resumeMimeType, 120).toLowerCase(),
-        resumeFileName: readString(params.application?.resumeFileName, 200),
-        source: 'job_application_submission',
-      });
-    });
-  });
-};
-
 export const toJobResponse = (job: any) => ({
   id: String(job?.id || ''),
   slug: buildPersistentJobSlug(job),
@@ -582,6 +402,7 @@ export const toJobResponse = (job: any) => ({
   tags: Array.isArray(job?.tags) ? job.tags : [],
   createdByUserId: String(job?.createdByUserId || ''),
   createdAt: job?.createdAt || null,
+  discoveredAt: job?.discoveredAt || null,
   updatedAt: job?.updatedAt || null,
   publishedAt: job?.publishedAt || null,
   announcementPostId: job?.announcementPostId || null,
@@ -591,7 +412,7 @@ export const toJobResponse = (job: any) => ({
   viewCount: Number.isFinite(job?.viewCount) ? Number(job.viewCount) : 0,
 });
 
-const toApplicationResponse = (application: any) => ({
+export const toApplicationResponse = (application: any) => ({
   id: String(application?.id || ''),
   jobId: String(application?.jobId || ''),
   companyId: String(application?.companyId || ''),
@@ -616,13 +437,25 @@ const toApplicationResponse = (application: any) => ({
 const pendingJobViewCount = new Map<string, number>();
 let isJobViewFlushScheduled = false;
 let isJobViewShutdownHookRegistered = false;
-const recommendationProfileCache = new Map<string, { profile: ReturnType<typeof buildRecommendationProfile>; expiresAt: number }>();
 const discoveredCountCache = new Map<string, { count: number; expiresAt: number }>();
+
+const takePendingJobViewCountBatch = (): Array<[string, number]> => {
+  const snapshot: Array<[string, number]> = [];
+  const iterator = pendingJobViewCount.entries();
+  while (snapshot.length < JOB_VIEW_FLUSH_BATCH_SIZE) {
+    const next = iterator.next();
+    if (next.done) break;
+    const [jobId, count] = next.value;
+    pendingJobViewCount.delete(jobId);
+    snapshot.push([jobId, count]);
+  }
+  return snapshot;
+};
 
 const flushJobViewCountBuffer = async (db: any): Promise<void> => {
   if (pendingJobViewCount.size === 0) return;
-  const snapshot = Array.from(pendingJobViewCount.entries());
-  pendingJobViewCount.clear();
+  const snapshot = takePendingJobViewCountBatch();
+  if (snapshot.length === 0) return;
 
   const operations = snapshot.map(([jobId, count]) => ({
     updateOne: {
@@ -638,6 +471,10 @@ const flushJobViewCountBuffer = async (db: any): Promise<void> => {
       pendingJobViewCount.set(jobId, (pendingJobViewCount.get(jobId) || 0) + count);
     }
     console.warn('Flush job view count buffer error:', error);
+  } finally {
+    if (pendingJobViewCount.size > 0) {
+      scheduleJobViewCountFlush(db);
+    }
   }
 };
 
@@ -650,13 +487,13 @@ const scheduleJobViewCountFlush = (db: any): void => {
   }, JOB_VIEW_FLUSH_INTERVAL_MS);
 };
 
-export const registerJobViewCountShutdownHooks = (): void => {
+export const registerJobViewCountShutdownHooks = (dbProvider: () => any = getDB): void => {
   if (isJobViewShutdownHookRegistered) return;
   isJobViewShutdownHookRegistered = true;
 
   const flushOnShutdown = () => {
     if (!isDBConnected()) return;
-    void flushJobViewCountBuffer(getDB());
+    void flushJobViewCountBuffer(dbProvider());
   };
 
   process.once('SIGINT', flushOnShutdown);
@@ -664,61 +501,20 @@ export const registerJobViewCountShutdownHooks = (): void => {
   process.once('beforeExit', flushOnShutdown);
 };
 
-const incrementJobViewCountAsync = (db: any, jobId: string): void => {
+const incrementJobViewCountAsync = (db: any, jobId: string, userId?: string): void => {
   if (!jobId) return;
   pendingJobViewCount.set(jobId, (pendingJobViewCount.get(jobId) || 0) + 1);
+  const viewEvent = {
+    jobId,
+    type: 'job_viewed' as const,
+    userId,
+  };
+  recordJobPulseEventAsync(db, viewEvent);
   if (pendingJobViewCount.size >= JOB_VIEW_BUFFER_MAX_KEYS) {
     void flushJobViewCountBuffer(db);
     return;
   }
   scheduleJobViewCountFlush(db);
-};
-
-const resolveCachedRecommendationProfile = async (
-  db: any,
-  currentUserId: string,
-): Promise<ReturnType<typeof buildRecommendationProfile> | null> => {
-  if (!currentUserId) return null;
-  const now = Date.now();
-  const cached = recommendationProfileCache.get(currentUserId);
-  if (cached && cached.expiresAt > now) return cached.profile;
-
-  const recommendationUser = await db.collection(USERS_COLLECTION).findOne(
-    { id: currentUserId },
-    {
-      projection: {
-        id: 1,
-        skills: 1,
-        profileSkills: 1,
-        location: 1,
-        country: 1,
-        industry: 1,
-        remotePreference: 1,
-        workPreference: 1,
-        preferredWorkModel: 1,
-        preferredWorkModels: 1,
-        workPreferences: 1,
-        experienceLevel: 1,
-        seniority: 1,
-        roleLevel: 1,
-        jobSeniorityPreference: 1,
-        yearsOfExperience: 1,
-        experienceYears: 1,
-        totalExperienceYears: 1,
-      },
-    },
-  );
-  if (!recommendationUser) {
-    recommendationProfileCache.delete(currentUserId);
-    return null;
-  }
-
-  const recommendationProfile = buildRecommendationProfile(recommendationUser);
-  recommendationProfileCache.set(currentUserId, {
-    profile: recommendationProfile,
-    expiresAt: now + JOB_RECOMMENDATION_PROFILE_CACHE_TTL_MS,
-  });
-  return recommendationProfile;
 };
 
 const withOptimisticViewCount = (job: any): any => ({
@@ -746,33 +542,55 @@ const buildDiscoveredCountCacheKey = (parts: Record<string, unknown>): string =>
   return crypto.createHash('sha256').update(normalizedParts).digest('hex');
 };
 
+const refreshDiscoveredCountCacheEntry = (
+  cacheKey: string,
+  entry: { count: number; expiresAt: number },
+) => {
+  discoveredCountCache.delete(cacheKey);
+  discoveredCountCache.set(cacheKey, entry);
+};
+
+const storeDiscoveredCountCacheEntry = (
+  cacheKey: string,
+  entry: { count: number; expiresAt: number },
+  now: number,
+) => {
+  refreshDiscoveredCountCacheEntry(cacheKey, entry);
+  pruneDiscoveredCountCache(now);
+};
+
+const pruneDiscoveredCountCache = (now: number) => {
+  for (const [key, cacheValue] of discoveredCountCache.entries()) {
+    if (cacheValue.expiresAt <= now) {
+      discoveredCountCache.delete(key);
+    }
+  }
+  while (discoveredCountCache.size > JOB_DISCOVERED_COUNT_CACHE_MAX_KEYS) {
+    const oldestEntry = discoveredCountCache.keys().next();
+    if (oldestEntry.done) break;
+    discoveredCountCache.delete(oldestEntry.value);
+  }
+};
+
 const resolveCachedDiscoveredCount = async (
   db: any,
   filter: Record<string, unknown>,
   cacheKey: string,
 ): Promise<number> => {
   const now = Date.now();
-  for (const [key, cacheValue] of discoveredCountCache.entries()) {
-    if (cacheValue.expiresAt <= now) {
-      discoveredCountCache.delete(key);
-    }
-  }
+  pruneDiscoveredCountCache(now);
 
   const cached = discoveredCountCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
+    refreshDiscoveredCountCacheEntry(cacheKey, cached);
     return cached.count;
   }
 
   const count = await db.collection(JOBS_COLLECTION).countDocuments(filter);
-  while (discoveredCountCache.size >= JOB_DISCOVERED_COUNT_CACHE_MAX_KEYS) {
-    const oldestKey = discoveredCountCache.keys().next().value as string | undefined;
-    if (!oldestKey) break;
-    discoveredCountCache.delete(oldestKey);
-  }
-  discoveredCountCache.set(cacheKey, {
+  storeDiscoveredCountCacheEntry(cacheKey, {
     count,
     expiresAt: now + JOB_DISCOVERED_COUNT_CACHE_TTL_MS,
-  });
+  }, now);
   return count;
 };
 
@@ -972,8 +790,29 @@ export const jobsController = {
 
       const db = getDB();
       const handleRegex = new RegExp(`^@?${escapeRegexPattern(rawHandle)}$`, 'i');
-      const user = await db.collection(USERS_COLLECTION).findOne(
+      const publicUser = await db.collection(USERS_COLLECTION).findOne(
         { handle: handleRegex },
+        {
+          projection: {
+            id: 1,
+            handle: 1,
+            firstName: 1,
+            name: 1,
+            jobMatchShareEnabled: 1,
+          },
+        },
+      );
+
+      if (!publicUser) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      if ((publicUser as any)?.jobMatchShareEnabled !== true) {
+        return res.status(403).json({ success: false, error: 'This match feed is private' });
+      }
+
+      const user = await db.collection(USERS_COLLECTION).findOne(
+        { id: String((publicUser as any)?.id || '') },
         {
           projection: {
             id: 1,
@@ -998,17 +837,11 @@ export const jobsController = {
             yearsOfExperience: 1,
             experienceYears: 1,
             totalExperienceYears: 1,
-            jobMatchShareEnabled: 1,
           },
         },
       );
-
       if (!user) {
         return res.status(404).json({ success: false, error: 'User not found' });
-      }
-
-      if ((user as any)?.jobMatchShareEnabled === false) {
-        return res.status(403).json({ success: false, error: 'This match feed is private' });
       }
 
       const limit = parsePositiveInt((req.query as any)?.limit, 20, 1, 40);
@@ -1018,7 +851,7 @@ export const jobsController = {
         limit,
       });
 
-      const normalizedHandle = readString((user as any)?.handle, 120) || `@${rawHandle.toLowerCase()}`;
+      const normalizedHandle = readString((publicUser as any)?.handle, 120) || `@${rawHandle.toLowerCase()}`;
       return res.json({
         success: true,
         data: matchedJobs.map((job) => ({
@@ -1040,11 +873,11 @@ export const jobsController = {
         })),
         meta: {
           user: {
-            id: String((user as any)?.id || ''),
+            id: String((publicUser as any)?.id || ''),
             handle: normalizedHandle,
             name:
-              readString((user as any)?.name, 160)
-              || readString((user as any)?.firstName, 120)
+              readString((publicUser as any)?.name, 160)
+              || readString((publicUser as any)?.firstName, 120)
               || normalizedHandle,
           },
           shareUrl: `${AURA_PUBLIC_WEB_BASE_URL}/jobs/${encodeURIComponent(normalizedHandle)}`,
@@ -1172,7 +1005,7 @@ export const jobsController = {
       if (slugJobId) {
         const byId = await db.collection(JOBS_COLLECTION).findOne({ id: slugJobId, status: { $ne: 'archived' } });
         if (byId) {
-          incrementJobViewCountAsync(db, slugJobId);
+          incrementJobViewCountAsync(db, slugJobId, currentUserId);
           const byIdWithView = withOptimisticViewCount(byId);
           const skillGap = currentUserId
             ? await resolveJobSkillGap({
@@ -1199,7 +1032,7 @@ export const jobsController = {
       if (!bySlug) {
         return res.status(404).json({ success: false, error: 'Job not found' });
       }
-      incrementJobViewCountAsync(db, readString(bySlug?.id, 120));
+      incrementJobViewCountAsync(db, readString(bySlug?.id, 120), currentUserId);
       const bySlugWithView = withOptimisticViewCount(bySlug);
 
       const skillGap = currentUserId
@@ -1238,7 +1071,7 @@ export const jobsController = {
       if (!job) {
         return res.status(404).json({ success: false, error: 'Job not found' });
       }
-      incrementJobViewCountAsync(db, jobId);
+      incrementJobViewCountAsync(db, jobId, currentUserId);
       const jobWithView = withOptimisticViewCount(job);
 
       const skillGap = currentUserId
@@ -1439,6 +1272,7 @@ export const jobsController = {
         tags,
         createdByUserId: currentUserId,
         createdAt: nowIso,
+        discoveredAt: nowIso,
         updatedAt: nowIso,
         publishedAt: nowIso,
         announcementPostId: null as string | null,
@@ -1539,6 +1373,12 @@ export const jobsController = {
       Object.assign(job, buildJobRecommendationPrecomputedFields(recommendationSource));
 
       await db.collection(JOBS_COLLECTION).insertOne(job);
+      recordJobPulseEventAsync(db, {
+        jobId: job.id,
+        type: 'job_discovered',
+        userId: currentUserId,
+        createdAt: nowIso,
+      });
 
       return res.status(201).json({
         success: true,
@@ -1982,10 +1822,16 @@ export const jobsController = {
         { id: jobId },
         { $inc: { applicationCount: 1 }, $set: { updatedAt: nowIso } },
       );
+      recordJobPulseEventAsync(db, {
+        jobId,
+        type: 'job_applied',
+        userId: currentUserId,
+        createdAt: nowIso,
+      });
       invalidateCompanyJobAnalyticsCache(String(job.companyId || ''));
       const applicantApplicationCount = await incrementApplicantApplicationCount(db, currentUserId, nowIso);
 
-      scheduleApplicationPostCreateEffects({
+      scheduleJobApplicationPostCreateEffects({
         req,
         db,
         currentUserId,
@@ -2076,37 +1922,6 @@ export const jobsController = {
     }
   },
 
-  // GET /api/applications/:applicationId
-  getJobApplicationById: async (req: Request, res: Response) => {
-    try {
-      if (!isDBConnected()) {
-        return res.status(503).json({ success: false, error: 'Database service unavailable' });
-      }
-
-      const currentUserId = (req.user as any)?.id;
-      if (!currentUserId) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
-      }
-
-      const { applicationId } = req.params;
-      const db = getDB();
-      const application = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-      if (!application) {
-        return res.status(404).json({ success: false, error: 'Application not found' });
-      }
-
-      const allowed = await canReadApplication(application, currentUserId);
-      if (!allowed) {
-        return res.status(403).json({ success: false, error: 'Unauthorized to view this application' });
-      }
-
-      return res.json({ success: true, data: toApplicationResponse(application) });
-    } catch (error) {
-      console.error('Get job application error:', error);
-      return res.status(500).json({ success: false, error: 'Failed to fetch application' });
-    }
-  },
-
   // PATCH /api/applications/:applicationId/status
   updateJobApplicationStatus: async (req: Request, res: Response) => {
     try {
@@ -2173,137 +1988,6 @@ export const jobsController = {
     }
   },
 
-  // GET /api/applications/:applicationId/resume/view-url
-  getApplicationResumeViewUrl: async (req: Request, res: Response) => {
-    try {
-      if (!isDBConnected()) {
-        return res.status(503).json({ success: false, error: 'Database service unavailable' });
-      }
-
-      const currentUserId = (req.user as any)?.id;
-      if (!currentUserId) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
-      }
-
-      const { applicationId } = req.params;
-      const db = getDB();
-      const application = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-      if (!application) {
-        return res.status(404).json({ success: false, error: 'Application not found' });
-      }
-
-      const allowed = await canReadApplication(application, currentUserId);
-      if (!allowed) {
-        return res.status(403).json({ success: false, error: 'Unauthorized to access this resume' });
-      }
-
-      const resumeKey = readString(application.resumeKey, 500);
-      if (!resumeKey) {
-        return res.status(404).json({ success: false, error: 'Resume key not available for this application' });
-      }
-
-      const expiresInSeconds = 600;
-      const url = await getApplicationResumeSignedUrl(resumeKey, expiresInSeconds);
-      if (!url) {
-        return res.status(503).json({
-          success: false,
-          error: 'Resume preview service is not configured',
-        });
-      }
-
-      return res.json({
-        success: true,
-        data: {
-          url,
-          expiresIn: expiresInSeconds,
-        },
-      });
-    } catch (error) {
-      console.error('Get resume view URL error:', error);
-      return res.status(500).json({ success: false, error: 'Failed to generate resume view URL' });
-    }
-  },
-
-  // POST /api/applications/review-portal/resolve
-  resolveApplicationReviewPortalToken: async (req: Request, res: Response) => {
-    try {
-      if (!isDBConnected()) {
-        return res.status(503).json({ success: false, error: 'Database service unavailable' });
-      }
-
-      const currentUserId = (req.user as any)?.id;
-      if (!currentUserId) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
-      }
-
-      const token = readString((req.body as any)?.token, 400);
-      if (!token) {
-        return res.status(400).json({ success: false, error: 'Review token is required' });
-      }
-
-      const db = getDB();
-      const link = await db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).findOne({
-        tokenHash: hashSecureToken(token),
-      });
-
-      if (!link) {
-        return res.status(404).json({ success: false, error: 'Invalid review link' });
-      }
-
-      const expiresAtTs = new Date(link.expiresAt || '').getTime();
-      if (!Number.isFinite(expiresAtTs) || expiresAtTs < Date.now()) {
-        return res.status(410).json({ success: false, error: 'This review link has expired' });
-      }
-
-      const applicationId = readString(link.applicationId, 120);
-      const application = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-      if (!application) {
-        return res.status(404).json({ success: false, error: 'Application for this review link was not found' });
-      }
-
-      const companyId = readString(application.companyId || link.companyId, 120);
-      const access = await resolveOwnerAdminCompanyAccess(companyId, currentUserId);
-      if (!access.allowed) {
-        return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
-      }
-
-      const jobId = readString(application.jobId || link.jobId, 120);
-      const job = await db.collection(JOBS_COLLECTION).findOne({ id: jobId });
-
-      const nowIso = new Date().toISOString();
-      await db.collection(JOB_APPLICATION_REVIEW_LINKS_COLLECTION).updateOne(
-        { id: String(link.id || '') },
-        {
-          $set: {
-            lastResolvedAt: nowIso,
-            lastResolvedByUserId: currentUserId,
-          },
-        },
-      );
-
-      return res.json({
-        success: true,
-        data: {
-          companyId,
-          jobId,
-          applicationId,
-          jobTitle: readString(job?.title, 160),
-          applicantName: readString(application?.applicantName, 160),
-          status: readString(application?.status, 40),
-          expiresAt: readString(link?.expiresAt, 80) || null,
-          portal: {
-            view: 'profile',
-            targetId: companyId,
-            tab: 'jobs',
-          },
-        },
-      });
-    } catch (error) {
-      console.error('Resolve application review portal token error:', error);
-      return res.status(500).json({ success: false, error: 'Failed to resolve review link' });
-    }
-  },
-
   // GET /api/companies/:companyId/job-analytics
   getJobAnalytics: async (req: Request, res: Response) => {
     try {
@@ -2338,216 +2022,4 @@ export const jobsController = {
     }
   },
 
-  // GET /api/companies/:companyId/job-applications/attention-count
-  getCompanyApplicationAttentionCount: async (req: Request, res: Response) => {
-    try {
-      if (!isDBConnected()) {
-        return res.json({
-          success: true,
-          data: {
-            pendingReviewCount: 0,
-            activePipelineCount: 0,
-            totalOpenJobs: 0,
-          },
-        });
-      }
-
-      const currentUserId = (req.user as any)?.id;
-      if (!currentUserId) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
-      }
-
-      const companyId = readString(req.params.companyId, 120);
-      if (!companyId) {
-        return res.status(400).json({ success: false, error: 'companyId is required' });
-      }
-
-      const access = await resolveOwnerAdminCompanyAccess(companyId, currentUserId);
-      if (!access.allowed) {
-        return res.status(access.status).json({ success: false, error: access.error || 'Unauthorized' });
-      }
-
-      const db = getDB();
-      const [pendingReviewCount, activePipelineCount, totalOpenJobs] = await Promise.all([
-        db.collection(JOB_APPLICATIONS_COLLECTION).countDocuments({
-          companyId,
-          status: 'submitted',
-        }),
-        db.collection(JOB_APPLICATIONS_COLLECTION).countDocuments({
-          companyId,
-          status: { $in: ['in_review', 'shortlisted'] },
-        }),
-        db.collection(JOBS_COLLECTION).countDocuments({
-          companyId,
-          status: 'open',
-        }),
-      ]);
-
-      return res.json({
-        success: true,
-        data: {
-          pendingReviewCount,
-          activePipelineCount,
-          totalOpenJobs,
-        },
-      });
-    } catch (error) {
-      console.error('Get company application attention count error:', error);
-      return res.status(500).json({ success: false, error: 'Failed to fetch application attention count' });
-    }
-  },
-
-  // GET /api/me/job-applications
-  getMyJobApplications: async (req: Request, res: Response) => {
-    try {
-      if (!isDBConnected()) {
-        return res.json({
-          success: true,
-          data: [],
-          pagination: { page: 1, limit: 20, total: 0, pages: 0 },
-        });
-      }
-
-      const currentUserId = (req.user as any)?.id;
-      if (!currentUserId) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
-      }
-
-      const actor = await resolveIdentityActor(
-        currentUserId,
-        {
-          ownerType: readString((req.headers['x-identity-type'] as string | undefined) || 'user', 20),
-          ownerId: readString((req.headers['x-identity-id'] as string | undefined) || currentUserId, 120),
-        },
-        req.headers,
-      );
-
-      if (!actor || actor.type !== 'user' || actor.id !== currentUserId) {
-        return res.status(403).json({ success: false, error: 'This endpoint is only available for personal identity' });
-      }
-
-      const pagination = getPagination(req.query as Record<string, unknown>);
-      const status = readString((req.query as any).status, 40).toLowerCase();
-      if (status && !ALLOWED_APPLICATION_STATUSES.has(status)) {
-        return res.status(400).json({ success: false, error: 'Invalid application status filter' });
-      }
-
-      const db = getDB();
-      const filter: Record<string, unknown> = {
-        applicantUserId: currentUserId,
-      };
-      if (status) filter.status = status;
-
-      const [items, total] = await Promise.all([
-        db.collection(JOB_APPLICATIONS_COLLECTION)
-          .find(filter)
-          .sort({ createdAt: -1 })
-          .skip(pagination.skip)
-          .limit(pagination.limit)
-          .toArray(),
-        db.collection(JOB_APPLICATIONS_COLLECTION).countDocuments(filter),
-      ]);
-
-      const jobIds = Array.from(
-        new Set(
-          items
-            .map((item: any) => String(item?.jobId || '').trim())
-            .filter((id: string) => id.length > 0),
-        ),
-      );
-      const jobs = await db.collection(JOBS_COLLECTION).find({ id: { $in: jobIds } }).toArray();
-      const jobsById = new Map<string, any>(jobs.map((job: any) => [String(job.id), job]));
-
-      const companyIds = Array.from(
-        new Set(
-          jobs
-            .map((job: any) => String(job?.companyId || '').trim())
-            .filter((id: string) => id.length > 0),
-        ),
-      );
-      const companies = await db.collection(COMPANIES_COLLECTION)
-        .find({ id: { $in: companyIds }, legacyArchived: { $ne: true } })
-        .project({ id: 1, name: 1, handle: 1, avatar: 1, avatarType: 1 })
-        .toArray();
-      const companiesById = new Map<string, any>(companies.map((company: any) => [String(company.id), company]));
-
-      const data = items.map((application: any) => {
-        const job = jobsById.get(String(application.jobId || ''));
-        const company = companiesById.get(String(job?.companyId || ''));
-        return {
-          ...toApplicationResponse(application),
-          job: job ? toJobResponse(job) : null,
-          company: company
-            ? {
-                id: String(company.id || ''),
-                name: String(company.name || ''),
-                handle: String(company.handle || ''),
-                avatar: String(company.avatar || ''),
-                avatarType: String(company.avatarType || 'image'),
-              }
-            : null,
-        };
-      });
-
-      return res.json({
-        success: true,
-        data,
-        pagination: {
-          page: pagination.page,
-          limit: pagination.limit,
-          total,
-          pages: Math.ceil(total / pagination.limit),
-        },
-      });
-    } catch (error) {
-      console.error('Get my job applications error:', error);
-      return res.status(500).json({ success: false, error: 'Failed to fetch your applications' });
-    }
-  },
-
-  // POST /api/applications/:applicationId/withdraw
-  withdrawMyApplication: async (req: Request, res: Response) => {
-    try {
-      if (!isDBConnected()) {
-        return res.status(503).json({ success: false, error: 'Database service unavailable' });
-      }
-
-      const currentUserId = (req.user as any)?.id;
-      if (!currentUserId) {
-        return res.status(401).json({ success: false, error: 'Authentication required' });
-      }
-
-      const { applicationId } = req.params;
-      const db = getDB();
-      const application = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-      if (!application) {
-        return res.status(404).json({ success: false, error: 'Application not found' });
-      }
-
-      if (String(application.applicantUserId || '') !== currentUserId) {
-        return res.status(403).json({ success: false, error: 'Only the applicant can withdraw this application' });
-      }
-
-      const nowIso = new Date().toISOString();
-      const nowDate = new Date(nowIso);
-      await db.collection(JOB_APPLICATIONS_COLLECTION).updateOne(
-        { id: applicationId },
-        {
-          $set: {
-            status: 'withdrawn',
-            updatedAt: nowIso,
-            updatedAtDate: nowDate,
-            statusNote: readStringOrNull((req.body as any)?.statusNote, 1000),
-          },
-        },
-      );
-      invalidateCompanyJobAnalyticsCache(String(application.companyId || ''));
-
-      const updated = await db.collection(JOB_APPLICATIONS_COLLECTION).findOne({ id: applicationId });
-      return res.json({ success: true, data: toApplicationResponse(updated) });
-    } catch (error) {
-      console.error('Withdraw application error:', error);
-      return res.status(500).json({ success: false, error: 'Failed to withdraw application' });
-    }
-  },
 };

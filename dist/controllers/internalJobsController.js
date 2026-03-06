@@ -12,35 +12,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.internalJobsController = void 0;
 const db_1 = require("../db");
 const internalJobIngestionService_1 = require("../services/internalJobIngestionService");
-const reverseJobMatchService_1 = require("../services/reverseJobMatchService");
-const REVERSE_MATCH_BACKGROUND_RETRY_LIMIT = Number.isFinite(Number(process.env.REVERSE_MATCH_BACKGROUND_RETRY_LIMIT))
-    ? Math.max(0, Math.round(Number(process.env.REVERSE_MATCH_BACKGROUND_RETRY_LIMIT)))
-    : 1;
-const REVERSE_MATCH_BACKGROUND_RETRY_DELAY_MS = Number.isFinite(Number(process.env.REVERSE_MATCH_BACKGROUND_RETRY_DELAY_MS))
-    ? Math.max(500, Math.round(Number(process.env.REVERSE_MATCH_BACKGROUND_RETRY_DELAY_MS)))
-    : 5000;
-const scheduleReverseMatchProcessing = (params) => {
-    const attempt = Number.isFinite(Number(params.attempt)) ? Math.max(0, Number(params.attempt)) : 0;
-    setImmediate(() => {
-        void (0, reverseJobMatchService_1.processReverseJobMatchesForIngestedPayload)({
-            db: params.db,
-            rawJobs: params.rawJobs,
-            nowIso: params.nowIso,
-        }).catch((error) => {
-            if (attempt < REVERSE_MATCH_BACKGROUND_RETRY_LIMIT) {
-                setTimeout(() => {
-                    scheduleReverseMatchProcessing(Object.assign(Object.assign({}, params), { attempt: attempt + 1 }));
-                }, REVERSE_MATCH_BACKGROUND_RETRY_DELAY_MS);
-            }
-            console.error('Reverse match background processing error:', {
-                attempt,
-                retryLimit: REVERSE_MATCH_BACKGROUND_RETRY_LIMIT,
-                telemetry: params.telemetry,
-                error,
-            });
-        });
-    });
-};
+const jobPulseService_1 = require("../services/jobPulseService");
+const reverseJobMatchQueueService_1 = require("../services/reverseJobMatchQueueService");
 exports.internalJobsController = {
     // POST /api/internal/jobs/aggregated
     ingestAggregatedJobs: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -77,20 +50,20 @@ exports.internalJobsController = {
             const db = (0, db_1.getDB)();
             const nowIso = new Date().toISOString();
             const stats = yield (0, internalJobIngestionService_1.ingestAggregatedJobsBatch)(db, jobs, nowIso);
-            scheduleReverseMatchProcessing({
-                db,
-                rawJobs: jobs,
-                nowIso,
-                telemetry: {
-                    correlationId: typeof req.headers['x-request-id'] === 'string'
-                        ? req.headers['x-request-id']
-                        : undefined,
-                    received: jobs.length,
-                    inserted: stats.inserted,
-                    updated: stats.updated,
-                    skipped: stats.skipped,
-                },
-            });
+            if (stats.insertedJobIds.length > 0) {
+                (0, jobPulseService_1.recordJobPulseEventsAsync)(db, stats.insertedJobIds.map((jobId) => ({
+                    jobId,
+                    type: 'job_discovered',
+                    createdAt: nowIso,
+                })));
+            }
+            if (stats.insertedJobIds.length > 0) {
+                yield (0, reverseJobMatchQueueService_1.enqueueReverseJobMatchJobs)({
+                    db,
+                    jobIds: stats.insertedJobIds,
+                    queuedAtIso: nowIso,
+                });
+            }
             return res.json({
                 success: true,
                 data: {

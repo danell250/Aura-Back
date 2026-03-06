@@ -15,6 +15,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ingestAggregatedJobsBatch = exports.MAX_INTERNAL_AGGREGATED_INGEST_ITEMS = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const inputSanitizers_1 = require("../utils/inputSanitizers");
+const contactNormalization_1 = require("../utils/contactNormalization");
+const concurrencyUtils_1 = require("../utils/concurrencyUtils");
 const JOBS_COLLECTION = 'jobs';
 exports.MAX_INTERNAL_AGGREGATED_INGEST_ITEMS = 500;
 const NORMALIZATION_YIELD_INTERVAL = 10;
@@ -63,29 +65,6 @@ const summarizeText = (value, maxLength = 240) => {
     if (normalized.length <= maxLength)
         return normalized;
     return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
-};
-const normalizeExternalUrl = (value) => {
-    const raw = (0, inputSanitizers_1.readString)(String(value || ''), 600);
-    if (!raw)
-        return null;
-    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-    try {
-        const parsed = new URL(withProtocol);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
-            return null;
-        return parsed.toString();
-    }
-    catch (_a) {
-        return null;
-    }
-};
-const normalizeEmailAddress = (value) => {
-    const raw = (0, inputSanitizers_1.readString)(String(value || ''), 200).toLowerCase();
-    if (!raw)
-        return null;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw))
-        return null;
-    return raw;
 };
 const normalizeWorkModel = (rawValue, locationText) => {
     const candidate = (0, inputSanitizers_1.readString)(rawValue, 40).toLowerCase();
@@ -136,7 +115,7 @@ const normalizeSalaryFields = (rawPayload) => {
 const normalizeAggregatedCoreFields = (rawPayload) => {
     const source = (0, inputSanitizers_1.readString)(rawPayload.source, 60).toLowerCase() || 'aggregated';
     const originalId = (0, inputSanitizers_1.readString)(rawPayload.originalId, 220);
-    const originalUrl = normalizeExternalUrl(rawPayload.originalUrl);
+    const originalUrl = (0, contactNormalization_1.normalizeExternalUrl)(rawPayload.originalUrl);
     const title = (0, inputSanitizers_1.readString)(rawPayload.title, 120);
     const companyName = (0, inputSanitizers_1.readString)(rawPayload.companyName, 120);
     const locationText = (0, inputSanitizers_1.readString)(rawPayload.locationText, 160);
@@ -170,8 +149,8 @@ const normalizeAggregatedMetaFields = (rawPayload, nowIso, originalUrl) => {
     return {
         publishedAt,
         createdAt,
-        applicationUrl: normalizeExternalUrl(rawPayload.applicationUrl) || originalUrl,
-        applicationEmail: normalizeEmailAddress(rawPayload.applicationEmail),
+        applicationUrl: (0, contactNormalization_1.normalizeExternalUrl)(rawPayload.applicationUrl) || originalUrl,
+        applicationEmail: (0, contactNormalization_1.normalizeEmailAddress)(rawPayload.applicationEmail),
         companyId: (0, inputSanitizers_1.readString)(rawPayload.companyId, 120),
         companyHandle: (0, inputSanitizers_1.readString)(rawPayload.companyHandle, 80),
         companyIsVerified: Boolean(rawPayload.companyIsVerified),
@@ -232,6 +211,7 @@ const buildAggregatedIngestMutation = (params) => {
             slug: '',
             createdByUserId: params.meta.createdByUserId,
             createdAt: params.meta.createdAt,
+            discoveredAt: params.nowIso,
             updatedAt: params.nowIso,
             announcementPostId: null,
             viewCount: 0,
@@ -268,12 +248,12 @@ const normalizeAggregatedIngestPayload = (raw, nowIso) => {
 };
 const createIngestionStats = () => ({
     inserted: 0,
+    insertedJobIds: [],
     updated: 0,
     skipped: 0,
     skippedReasons: {},
     errorSamples: [],
 });
-const yieldToEventLoop = () => __awaiter(void 0, void 0, void 0, function* () { return new Promise((resolve) => setImmediate(resolve)); });
 const incrementSkipReason = (stats, reason, count = 1) => {
     if (count <= 0)
         return;
@@ -282,7 +262,7 @@ const incrementSkipReason = (stats, reason, count = 1) => {
 };
 const buildBulkIngestionOperations = (jobs, nowIso, stats) => __awaiter(void 0, void 0, void 0, function* () {
     const operations = [];
-    const operationSourceIndexes = [];
+    const operationMetaByBulkIndex = [];
     for (let index = 0; index < jobs.length; index += 1) {
         const normalized = normalizeAggregatedIngestPayload(jobs[index], nowIso);
         if ('skipReason' in normalized) {
@@ -299,14 +279,17 @@ const buildBulkIngestionOperations = (jobs, nowIso, stats) => __awaiter(void 0, 
                 upsert: true,
             },
         });
-        operationSourceIndexes.push(index);
+        operationMetaByBulkIndex.push({
+            jobId: (0, inputSanitizers_1.readString)(normalized.payload.setOnInsertFields.id, 120),
+            sourceIndex: index,
+        });
         if ((index + 1) % NORMALIZATION_YIELD_INTERVAL === 0) {
-            yield yieldToEventLoop();
+            yield (0, concurrencyUtils_1.yieldToEventLoop)();
         }
     }
-    return { operations, operationSourceIndexes };
+    return { operations, operationMetaByBulkIndex };
 });
-const applyBulkWriteResultToStats = (stats, result) => {
+const applyBulkWriteResultToStats = (stats, result, operationMetaByBulkIndex) => {
     const upsertedCount = Number(result.upsertedCount || 0);
     const modifiedCount = Number(result.modifiedCount || 0);
     const matchedCount = Number(result.matchedCount || 0);
@@ -316,8 +299,22 @@ const applyBulkWriteResultToStats = (stats, result) => {
     if (unchangedCount > 0) {
         incrementSkipReason(stats, 'no_changes', unchangedCount);
     }
+    const seen = new Set(stats.insertedJobIds);
+    Object.keys(result.upsertedIds || {}).forEach((rawIndex) => {
+        var _a;
+        const operationIndex = Number(rawIndex);
+        if (!Number.isFinite(operationIndex)
+            || operationIndex < 0
+            || operationIndex >= operationMetaByBulkIndex.length)
+            return;
+        const jobId = (0, inputSanitizers_1.readString)((_a = operationMetaByBulkIndex[operationIndex]) === null || _a === void 0 ? void 0 : _a.jobId, 120);
+        if (!jobId || seen.has(jobId))
+            return;
+        seen.add(jobId);
+        stats.insertedJobIds.push(jobId);
+    });
 };
-const addWriteErrorsToStats = (stats, writeErrors, operationSourceIndexes) => {
+const addWriteErrorsToStats = (stats, writeErrors, operationMetaByBulkIndex) => {
     if (writeErrors.length > 0) {
         incrementSkipReason(stats, 'database_error', writeErrors.length);
     }
@@ -325,8 +322,8 @@ const addWriteErrorsToStats = (stats, writeErrors, operationSourceIndexes) => {
         if (stats.errorSamples.length >= 5)
             break;
         const opIndex = Number.isFinite(writeError === null || writeError === void 0 ? void 0 : writeError.index) ? Number(writeError.index) : -1;
-        const sourceIndex = opIndex >= 0 && opIndex < operationSourceIndexes.length
-            ? operationSourceIndexes[opIndex]
+        const sourceIndex = opIndex >= 0 && opIndex < operationMetaByBulkIndex.length
+            ? operationMetaByBulkIndex[opIndex].sourceIndex
             : opIndex;
         stats.errorSamples.push({
             index: sourceIndex,
@@ -349,13 +346,13 @@ const addWriteConcernErrorSample = (stats, writeConcernErrors) => {
 };
 const ingestAggregatedJobsBatch = (db, jobs, nowIso) => __awaiter(void 0, void 0, void 0, function* () {
     const stats = createIngestionStats();
-    const { operations, operationSourceIndexes } = yield buildBulkIngestionOperations(jobs, nowIso, stats);
+    const { operations, operationMetaByBulkIndex } = yield buildBulkIngestionOperations(jobs, nowIso, stats);
     if (operations.length === 0) {
         return stats;
     }
     try {
         const result = yield db.collection(JOBS_COLLECTION).bulkWrite(operations, { ordered: false });
-        applyBulkWriteResultToStats(stats, result);
+        applyBulkWriteResultToStats(stats, result, operationMetaByBulkIndex);
         return stats;
     }
     catch (bulkError) {
@@ -372,9 +369,9 @@ const ingestAggregatedJobsBatch = (db, jobs, nowIso) => __awaiter(void 0, void 0
             console.error('Internal aggregated jobs ingest non-bulk error:', bulkError);
             throw bulkError;
         }
-        applyBulkWriteResultToStats(stats, partialResult);
+        applyBulkWriteResultToStats(stats, partialResult, operationMetaByBulkIndex);
         const writeErrors = Array.isArray(bulkError === null || bulkError === void 0 ? void 0 : bulkError.writeErrors) ? bulkError.writeErrors : [];
-        addWriteErrorsToStats(stats, writeErrors, operationSourceIndexes);
+        addWriteErrorsToStats(stats, writeErrors, operationMetaByBulkIndex);
         const writeConcernErrors = Array.isArray(bulkError === null || bulkError === void 0 ? void 0 : bulkError.writeConcernErrors)
             ? bulkError.writeConcernErrors
             : [];
