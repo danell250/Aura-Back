@@ -7,7 +7,10 @@ const express_1 = require("express");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const partnerAuth_1 = require("../middleware/partnerAuth");
+const internalApiAuth_1 = require("../middleware/internalApiAuth");
 const jobsController_1 = require("../controllers/jobsController");
+const internalJobsController_1 = require("../controllers/internalJobsController");
+const jobRecommendationsController_1 = require("../controllers/jobRecommendationsController");
 const applicationNotesController_1 = require("../controllers/applicationNotesController");
 const securityLogger_1 = require("../utils/securityLogger");
 const router = (0, express_1.Router)();
@@ -57,12 +60,37 @@ const jobsApplyRateLimiter = (0, express_rate_limit_1.default)({
         });
     },
 });
+const internalJobsIngestRateLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+        (0, securityLogger_1.logSecurityEvent)({
+            req,
+            type: 'rate_limit_triggered',
+            route: '/internal/jobs/aggregated',
+            metadata: {
+                key: 'internal_jobs_ingest',
+                max: 30,
+                windowMs: 60 * 1000,
+            },
+        });
+        return res.status(429).json({
+            success: false,
+            error: 'Too many requests',
+            message: 'Too many internal jobs ingestion requests. Please slow down.',
+        });
+    },
+});
 // Public company jobs feed (v1 discovery surface)
+router.post('/internal/jobs/aggregated', internalJobsIngestRateLimiter, internalApiAuth_1.internalApiAuth, internalJobsController_1.internalJobsController.ingestAggregatedJobs);
 router.get('/companies/:companyId/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listCompanyJobs);
 router.get('/partner/jobs', partnerAuth_1.partnerAuth, jobsController_1.jobsController.getJobsForSyndication);
 router.get('/companies/:companyId/job-analytics', authMiddleware_1.requireAuth, jobsController_1.jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', authMiddleware_1.requireAuth, jobsController_1.jobsController.getCompanyApplicationAttentionCount);
 router.get('/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listPublicJobs);
+router.get('/jobs/recommended', authMiddleware_1.requireAuth, jobRecommendationsController_1.jobRecommendationsController.listRecommendedJobs);
 router.get('/jobs/salary-insights', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getSalaryInsights);
 router.get('/jobs/slug/:jobSlug', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getJobBySlug);
 router.get('/jobs/:jobId/network-count', authMiddleware_1.requireAuth, jobsController_1.jobsController.getJobNetworkCount);

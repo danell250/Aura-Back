@@ -7,7 +7,9 @@ import { resolveIdentityActor } from '../utils/identityUtils';
 import { emitAuthorInsightsUpdate } from './postsController';
 import { getHashtagsFromText } from '../utils/hashtagUtils';
 import { getCompanyApplicationRoom } from '../realtime/roomNames';
+import { parsePositiveInt, readString, readStringOrNull } from '../utils/inputSanitizers';
 import { buildJobSkillGap } from '../services/jobSkillGapService';
+import { buildJobRecommendationPrecomputedFields } from '../services/jobRecommendationService';
 import {
   buildCompanyJobAnalytics,
   EMPTY_COMPANY_JOB_ANALYTICS,
@@ -56,18 +58,6 @@ type Pagination = {
   skip: number;
 };
 
-const readString = (value: unknown, maxLength = 10000): string => {
-  if (typeof value !== 'string') return '';
-  const normalized = value.trim();
-  if (!normalized) return '';
-  return normalized.slice(0, maxLength);
-};
-
-const readStringOrNull = (value: unknown, maxLength = 10000): string | null => {
-  const normalized = readString(value, maxLength);
-  return normalized.length > 0 ? normalized : null;
-};
-
 const readStringList = (value: unknown, maxItems = 10, maxLength = 40): string[] => {
   if (!Array.isArray(value)) return [];
   const deduped = new Set<string>();
@@ -80,15 +70,6 @@ const readStringList = (value: unknown, maxItems = 10, maxLength = 40): string[]
     if (next.length >= maxItems) break;
   }
   return next;
-};
-
-const parsePositiveInt = (value: unknown, fallback: number, min: number, max: number): number => {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  const rounded = Math.round(parsed);
-  if (rounded < min) return min;
-  if (rounded > max) return max;
-  return rounded;
 };
 
 const getPagination = (query: Record<string, unknown>): Pagination => {
@@ -1027,7 +1008,7 @@ export const jobsController = {
         }
       }
 
-      const maxConcurrentBatchQueries = 4;
+      const maxConcurrentBatchQueries = 2;
       const partialCounts = new Array<number>(batches.length);
       let batchCursor = 0;
 
@@ -1250,6 +1231,21 @@ export const jobsController = {
         job.announcementPostId = announcementPostId;
       }
 
+      const recommendationSource = {
+        id: job.id,
+        title: readString(job.title, 120),
+        summary: readString(job.summary, 240),
+        description: readString(job.description, 15000),
+        locationText: readString(job.locationText, 160),
+        tags: Array.isArray(job.tags) ? job.tags : [],
+        workModel: readString(job.workModel, 40),
+        salaryMin: job.salaryMin,
+        salaryMax: job.salaryMax,
+        createdAt: job.createdAt,
+        publishedAt: job.publishedAt,
+      };
+      Object.assign(job, buildJobRecommendationPrecomputedFields(recommendationSource));
+
       await db.collection(JOBS_COLLECTION).insertOne(job);
 
       return res.status(201).json({
@@ -1393,7 +1389,21 @@ export const jobsController = {
         updates.slug = buildPersistentJobSlug({ ...existingJob, ...updates, id: existingJob.id });
       }
 
+      const recommendationSource = {
+        id: existingJob.id,
+        title: readString((updates.title as string | undefined) ?? existingJob.title, 120),
+        summary: readString((updates.summary as string | undefined) ?? existingJob.summary, 240),
+        description: readString((updates.description as string | undefined) ?? existingJob.description, 15000),
+        locationText: readString((updates.locationText as string | undefined) ?? existingJob.locationText, 160),
+        tags: Array.isArray(updates.tags) ? updates.tags : (Array.isArray(existingJob.tags) ? existingJob.tags : []),
+        workModel: readString((updates.workModel as string | undefined) ?? existingJob.workModel, 40),
+        salaryMin: updates.salaryMin !== undefined ? updates.salaryMin : existingJob.salaryMin,
+        salaryMax: updates.salaryMax !== undefined ? updates.salaryMax : existingJob.salaryMax,
+        createdAt: existingJob.createdAt,
+        publishedAt: updates.publishedAt !== undefined ? updates.publishedAt : existingJob.publishedAt,
+      };
       updates.updatedAt = new Date().toISOString();
+      Object.assign(updates, buildJobRecommendationPrecomputedFields(recommendationSource));
 
       await db.collection(JOBS_COLLECTION).updateOne({ id: jobId }, { $set: updates });
       const updatedJob = await db.collection(JOBS_COLLECTION).findOne({ id: jobId });
@@ -1443,6 +1453,33 @@ export const jobsController = {
       };
       if (nextStatus === 'open' && !existingJob.publishedAt) {
         nextUpdate.publishedAt = new Date().toISOString();
+      }
+      const recommendationSource = {
+        id: existingJob.id,
+        title: readString(existingJob.title, 120),
+        summary: readString(existingJob.summary, 240),
+        description: readString(existingJob.description, 15000),
+        locationText: readString(existingJob.locationText, 160),
+        tags: Array.isArray(existingJob.tags) ? existingJob.tags : [],
+        workModel: readString(existingJob.workModel, 40),
+        salaryMin: existingJob.salaryMin,
+        salaryMax: existingJob.salaryMax,
+        createdAt: existingJob.createdAt,
+        publishedAt:
+          nextStatus === 'open'
+            ? (nextUpdate.publishedAt !== undefined ? nextUpdate.publishedAt : existingJob.publishedAt)
+            : null,
+      };
+      Object.assign(nextUpdate, buildJobRecommendationPrecomputedFields(recommendationSource));
+      if (nextStatus !== 'open') {
+        Object.assign(nextUpdate, {
+          recommendationPublishedTs: 0,
+          recommendationSkillLabelByToken: {},
+          recommendationLocationTokens: [],
+          recommendationSemanticTokens: [],
+          recommendationHasSalarySignal: false,
+          recommendationIsRemoteRole: false,
+        });
       }
 
       await db.collection(JOBS_COLLECTION).updateOne({ id: jobId }, { $set: nextUpdate });

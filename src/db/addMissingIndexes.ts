@@ -257,6 +257,36 @@ const migrateJobApplicationsIndexes = async (db: Db) => {
   );
 };
 
+const migrateJobsIndexes = async (db: Db) => {
+  const collection = db.collection('jobs');
+  await ensureIndex(
+    collection,
+    { source: 1, originalId: 1 },
+    {
+      name: 'idx_jobs_source_original_id',
+      background: true,
+      unique: true,
+      partialFilterExpression: {
+        source: { $type: 'string' },
+        originalId: { $type: 'string' }
+      }
+    }
+  );
+  await ensureIndex(
+    collection,
+    { source: 1, originalUrl: 1 },
+    {
+      name: 'idx_jobs_source_original_url',
+      background: true,
+      unique: true,
+      partialFilterExpression: {
+        source: { $type: 'string' },
+        originalUrl: { $type: 'string' }
+      }
+    }
+  );
+};
+
 const migrateUserBadgesIndexes = async (db: Db) => {
   const badgesCollection = db.collection('badges');
   await ensureIndex(
@@ -327,6 +357,7 @@ export async function runIndexMigration(db: Db): Promise<void> {
   await migrateApplicationNotesIndexes(db);
   await migrateLearningResourcesCacheIndexes(db);
   await migrateJobApplicationsIndexes(db);
+  await migrateJobsIndexes(db);
   await migrateUserBadgesIndexes(db);
   await seedBadgeCatalog(db);
   console.log('[IndexMigration] Done');

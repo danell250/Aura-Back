@@ -2,7 +2,10 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { requireAuth, optionalAuth } from '../middleware/authMiddleware';
 import { partnerAuth } from '../middleware/partnerAuth';
+import { internalApiAuth } from '../middleware/internalApiAuth';
 import { jobsController } from '../controllers/jobsController';
+import { internalJobsController } from '../controllers/internalJobsController';
+import { jobRecommendationsController } from '../controllers/jobRecommendationsController';
 import { applicationNotesController } from '../controllers/applicationNotesController';
 import { logSecurityEvent } from '../utils/securityLogger';
 
@@ -58,12 +61,39 @@ const jobsApplyRateLimiter = rateLimit({
   },
 });
 
+const internalJobsIngestRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logSecurityEvent({
+      req,
+      type: 'rate_limit_triggered',
+      route: '/internal/jobs/aggregated',
+      metadata: {
+        key: 'internal_jobs_ingest',
+        max: 30,
+        windowMs: 60 * 1000,
+      },
+    });
+
+    return res.status(429).json({
+      success: false,
+      error: 'Too many requests',
+      message: 'Too many internal jobs ingestion requests. Please slow down.',
+    });
+  },
+});
+
 // Public company jobs feed (v1 discovery surface)
+router.post('/internal/jobs/aggregated', internalJobsIngestRateLimiter, internalApiAuth, internalJobsController.ingestAggregatedJobs);
 router.get('/companies/:companyId/jobs', optionalAuth, jobsController.listCompanyJobs);
 router.get('/partner/jobs', partnerAuth, jobsController.getJobsForSyndication);
 router.get('/companies/:companyId/job-analytics', requireAuth, jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', requireAuth, jobsController.getCompanyApplicationAttentionCount);
 router.get('/jobs', optionalAuth, jobsController.listPublicJobs);
+router.get('/jobs/recommended', requireAuth, jobRecommendationsController.listRecommendedJobs);
 router.get('/jobs/salary-insights', optionalAuth, jobsController.getSalaryInsights);
 router.get('/jobs/slug/:jobSlug', optionalAuth, jobsController.getJobBySlug);
 router.get('/jobs/:jobId/network-count', requireAuth, jobsController.getJobNetworkCount);

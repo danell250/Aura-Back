@@ -160,6 +160,22 @@ function connectDB() {
                     yield db.collection('jobs').createIndex({ status: 1, publishedAt: -1 });
                     yield db.collection('jobs').createIndex({ applicationDeadline: 1 });
                     yield db.collection('jobs').createIndex({ tags: 1 });
+                    yield db.collection('jobs').createIndex({ source: 1, originalId: 1 }, {
+                        name: 'idx_jobs_source_original_id',
+                        unique: true,
+                        partialFilterExpression: {
+                            source: { $type: 'string' },
+                            originalId: { $type: 'string' },
+                        },
+                    });
+                    yield db.collection('jobs').createIndex({ source: 1, originalUrl: 1 }, {
+                        name: 'idx_jobs_source_original_url',
+                        unique: true,
+                        partialFilterExpression: {
+                            source: { $type: 'string' },
+                            originalUrl: { $type: 'string' },
+                        },
+                    });
                     yield db.collection('job_applications').createIndex({ id: 1 }, { unique: true });
                     yield db.collection('job_applications').createIndex({ jobId: 1, applicantUserId: 1 }, { unique: true, name: 'job_application_unique_per_user' });
                     yield db.collection('job_applications').createIndex({ companyId: 1, status: 1, createdAt: -1 });

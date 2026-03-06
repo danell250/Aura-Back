@@ -162,6 +162,28 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('jobs').createIndex({ status: 1, publishedAt: -1 });
         await db.collection('jobs').createIndex({ applicationDeadline: 1 });
         await db.collection('jobs').createIndex({ tags: 1 });
+        await db.collection('jobs').createIndex(
+          { source: 1, originalId: 1 },
+          {
+            name: 'idx_jobs_source_original_id',
+            unique: true,
+            partialFilterExpression: {
+              source: { $type: 'string' },
+              originalId: { $type: 'string' },
+            },
+          }
+        );
+        await db.collection('jobs').createIndex(
+          { source: 1, originalUrl: 1 },
+          {
+            name: 'idx_jobs_source_original_url',
+            unique: true,
+            partialFilterExpression: {
+              source: { $type: 'string' },
+              originalUrl: { $type: 'string' },
+            },
+          }
+        );
 
         await db.collection('job_applications').createIndex({ id: 1 }, { unique: true });
         await db.collection('job_applications').createIndex(
