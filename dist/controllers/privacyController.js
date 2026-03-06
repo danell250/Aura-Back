@@ -12,8 +12,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.privacyController = void 0;
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
-const postsController_1 = require("./postsController");
-const notificationsController_1 = require("./notificationsController");
 const escapeRegexForSearch = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 exports.privacyController = {
     // GET /api/privacy/settings/:userId - Get user's privacy settings
@@ -292,130 +290,6 @@ exports.privacyController = {
             res.status(500).json({
                 success: false,
                 error: 'Failed to get searchable users',
-                message: 'Internal server error'
-            });
-        }
-    }),
-    // POST /api/privacy/profile-view - Record profile view (if user allows it)
-    recordProfileView: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a;
-        try {
-            const authenticatedUserId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
-            const { profileOwnerId } = req.body;
-            if (!authenticatedUserId) {
-                return res.status(401).json({
-                    success: false,
-                    error: 'Authentication required'
-                });
-            }
-            if (!profileOwnerId) {
-                return res.status(400).json({
-                    success: false,
-                    error: 'Missing required fields',
-                    message: 'profileOwnerId is required'
-                });
-            }
-            const db = (0, db_1.getDB)();
-            const [userOwner, companyOwner] = yield Promise.all([
-                db.collection('users').findOne({ id: profileOwnerId }),
-                db.collection('companies').findOne({ id: profileOwnerId, legacyArchived: { $ne: true } }),
-            ]);
-            const ownerType = userOwner ? 'user' : 'company';
-            const ownerCollection = ownerType === 'user' ? 'users' : 'companies';
-            const profileOwner = userOwner || companyOwner;
-            if (!profileOwner) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'Profile owner not found'
-                });
-            }
-            if (ownerType === 'company') {
-                const isCompanyOwner = String((profileOwner === null || profileOwner === void 0 ? void 0 : profileOwner.ownerId) || '') === authenticatedUserId;
-                const companyMembership = yield db.collection('company_members').findOne({ companyId: profileOwnerId, userId: authenticatedUserId }, { projection: { _id: 1 } });
-                if (isCompanyOwner || companyMembership) {
-                    return res.json({
-                        success: true,
-                        message: 'Skipped profile view tracking for internal company view'
-                    });
-                }
-            }
-            if (ownerType === 'user' && profileOwnerId === authenticatedUserId) {
-                return res.json({
-                    success: true,
-                    message: 'Skipped profile view tracking for self-view'
-                });
-            }
-            // Check if profile owner allows profile view tracking
-            const privacySettings = ownerType === 'user' ? (profileOwner.privacySettings || {}) : {};
-            if (ownerType === 'user' && !privacySettings.showProfileViews && privacySettings.showProfileViews !== undefined) {
-                return res.json({
-                    success: true,
-                    message: 'Profile view not recorded - user has disabled profile view tracking'
-                });
-            }
-            // Get viewer
-            const viewer = yield db.collection('users').findOne({ id: authenticatedUserId });
-            if (!viewer) {
-                return res.status(404).json({
-                    success: false,
-                    error: 'Viewer not found'
-                });
-            }
-            // Record the profile view (ensure viewer is present at least once)
-            const profileViews = Array.isArray(profileOwner.profileViews) ? [...profileOwner.profileViews] : [];
-            const shouldAddProfileView = !profileViews.includes(authenticatedUserId);
-            if (shouldAddProfileView) {
-                profileViews.push(authenticatedUserId);
-                yield db.collection(ownerCollection).updateOne({ id: profileOwnerId }, {
-                    $set: {
-                        profileViews: profileViews,
-                        updatedAt: new Date().toISOString()
-                    }
-                });
-            }
-            const existingRecentViewNotice = yield db.collection('notifications').findOne({
-                ownerType,
-                ownerId: profileOwnerId,
-                type: 'profile_view',
-                'fromUser.id': authenticatedUserId,
-                timestamp: { $gte: Date.now() - 60 * 60 * 1000 },
-            }, { projection: { id: 1 } });
-            if (existingRecentViewNotice) {
-                return res.json({
-                    success: true,
-                    data: {
-                        profileOwnerId,
-                        viewerId: authenticatedUserId,
-                        totalViews: profileViews.length
-                    },
-                    message: 'Profile view already recorded recently'
-                });
-            }
-            yield (0, notificationsController_1.createNotificationInDB)(profileOwnerId, 'profile_view', viewer.id, 'viewed your profile', undefined, undefined, { viewedBy: viewer.id }, undefined, ownerType);
-            if (shouldAddProfileView) {
-                (0, postsController_1.emitAuthorInsightsUpdate)(req.app, profileOwnerId, ownerType);
-            }
-            console.log('Profile view notification created:', {
-                profileOwnerId,
-                viewerId: authenticatedUserId,
-                viewerName: viewer.name,
-                timestamp: new Date().toISOString()
-            });
-            res.json({
-                success: true,
-                data: {
-                    profileOwnerId,
-                    viewerId: authenticatedUserId,
-                    totalViews: profileViews.length
-                },
-                message: 'Profile view recorded successfully'
-            });
-        }
-        catch (error) {
-            console.error('Error recording profile view:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to record profile view',
                 message: 'Internal server error'
             });
         }

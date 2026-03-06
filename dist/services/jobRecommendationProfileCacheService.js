@@ -50,6 +50,7 @@ const resolveCachedRecommendationProfile = (db, currentUserId) => __awaiter(void
     const recommendationUser = yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId }, {
         projection: {
             id: 1,
+            title: 1,
             skills: 1,
             profileSkills: 1,
             location: 1,

@@ -8,12 +8,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var _a, _b;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.listJobPulseSnapshots = void 0;
+exports.buildJobHeatResponseFields = exports.listJobPulseSnapshots = exports.normalizeLegacyPulseMetricViewsWindowField = exports.stopJobPulseSnapshotCleanupTimer = exports.ensureJobPulseSnapshotCleanupTimer = void 0;
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const jobPulseUtils_1 = require("./jobPulseUtils");
 const jobPulseDomain_1 = require("./jobPulseDomain");
+const jobPulseMetricRefreshQueueService_1 = require("./jobPulseMetricRefreshQueueService");
 const JOBS_COLLECTION = 'jobs';
 const JOB_PULSE_BUCKETS_COLLECTION = 'job_pulse_time_buckets';
 const JOB_PULSE_METRIC_SNAPSHOTS_COLLECTION = 'job_pulse_metric_snapshots';
@@ -21,11 +21,18 @@ const JOB_PULSE_CACHE_TTL_MS = 15000;
 const JOB_PULSE_METRIC_FRESHNESS_MS = 30000;
 const JOB_PULSE_INFLIGHT_REFRESH_TTL_MS = 60000;
 const JOB_PULSE_CACHE_CLEANUP_INTERVAL_MS = 60000;
-const MAX_JOB_PULSE_SNAPSHOT_LIMIT = 20;
+const MAX_JOB_PULSE_SNAPSHOT_LIMIT = 40;
 const MAX_PULSE_SNAPSHOT_CACHE_ENTRIES = 100;
 const MAX_INFLIGHT_PULSE_METRIC_REFRESHES = 200;
+const MAX_LOCAL_PULSE_METRIC_FRESHNESS_ENTRIES = 400;
+const MAX_PULSE_METRIC_REFRESH_BATCH_SIZE = 12;
 const pulseSnapshotCache = new Map();
 const inflightPulseMetricRefreshes = new Map();
+const pulseMetricFreshUntilByJobId = new Map();
+let nextPulseSnapshotCacheCleanupAt = 0;
+let nextInflightPulseMetricRefreshCleanupAt = 0;
+let nextPulseMetricFreshnessCleanupAt = 0;
+const readPulseSnapshotCleanupTimerGlobal = () => globalThis;
 const buildRequestedJobIds = (rawIds) => {
     const seen = new Set();
     const jobIds = [];
@@ -40,30 +47,22 @@ const buildRequestedJobIds = (rawIds) => {
     }
     return jobIds;
 };
-const buildPulseCacheKey = (requestedJobIds, limit) => requestedJobIds.length > 0
-    ? `ids:${requestedJobIds.join(',')}:${limit}`
-    : `latest:${limit}`;
+const buildPulseCacheKey = (requestedJobIds, limit, sortBy) => requestedJobIds.length > 0
+    ? `ids:${requestedJobIds.join(',')}:${limit}:${sortBy}`
+    : `${sortBy}:${limit}`;
 const resolveCachedPulseSnapshots = (cacheKey, nowMs) => {
     const cached = pulseSnapshotCache.get(cacheKey);
-    if (!cached || cached.expiresAt <= nowMs)
+    if (!cached)
         return null;
+    if (cached.expiresAt <= nowMs) {
+        pulseSnapshotCache.delete(cacheKey);
+        return null;
+    }
     pulseSnapshotCache.delete(cacheKey);
     pulseSnapshotCache.set(cacheKey, cached);
     return cached.data;
 };
-const cachePulseSnapshots = (cacheKey, nowMs, snapshots) => {
-    prunePulseSnapshotCache(nowMs);
-    pulseSnapshotCache.set(cacheKey, {
-        expiresAt: nowMs + JOB_PULSE_CACHE_TTL_MS,
-        data: snapshots,
-    });
-};
-const prunePulseSnapshotCache = (nowMs) => {
-    for (const [key, entry] of pulseSnapshotCache.entries()) {
-        if (entry.expiresAt <= nowMs) {
-            pulseSnapshotCache.delete(key);
-        }
-    }
+const trimPulseSnapshotCacheToLimit = () => {
     while (pulseSnapshotCache.size > MAX_PULSE_SNAPSHOT_CACHE_ENTRIES) {
         const oldestEntry = pulseSnapshotCache.keys().next();
         if (oldestEntry.done)
@@ -71,12 +70,31 @@ const prunePulseSnapshotCache = (nowMs) => {
         pulseSnapshotCache.delete(oldestEntry.value);
     }
 };
-const pruneInflightPulseMetricRefreshes = (nowMs) => {
-    for (const [jobId, entry] of inflightPulseMetricRefreshes.entries()) {
-        if ((nowMs - entry.createdAt) >= JOB_PULSE_INFLIGHT_REFRESH_TTL_MS) {
-            inflightPulseMetricRefreshes.delete(jobId);
+const pruneExpiredPulseSnapshotCacheEntries = (nowMs) => {
+    for (const [key, entry] of pulseSnapshotCache.entries()) {
+        if (entry.expiresAt <= nowMs) {
+            pulseSnapshotCache.delete(key);
         }
     }
+};
+const maybePrunePulseSnapshotCache = (nowMs) => {
+    if (pulseSnapshotCache.size <= MAX_PULSE_SNAPSHOT_CACHE_ENTRIES
+        && nowMs < nextPulseSnapshotCacheCleanupAt) {
+        return;
+    }
+    nextPulseSnapshotCacheCleanupAt = nowMs + JOB_PULSE_CACHE_CLEANUP_INTERVAL_MS;
+    pruneExpiredPulseSnapshotCacheEntries(nowMs);
+    trimPulseSnapshotCacheToLimit();
+};
+const cachePulseSnapshots = (cacheKey, nowMs, snapshots) => {
+    maybePrunePulseSnapshotCache(nowMs);
+    pulseSnapshotCache.set(cacheKey, {
+        expiresAt: nowMs + JOB_PULSE_CACHE_TTL_MS,
+        data: snapshots,
+    });
+    trimPulseSnapshotCacheToLimit();
+};
+const trimInflightPulseMetricRefreshesToLimit = () => {
     while (inflightPulseMetricRefreshes.size > MAX_INFLIGHT_PULSE_METRIC_REFRESHES) {
         const oldestEntry = inflightPulseMetricRefreshes.keys().next();
         if (oldestEntry.done)
@@ -84,12 +102,87 @@ const pruneInflightPulseMetricRefreshes = (nowMs) => {
         inflightPulseMetricRefreshes.delete(oldestEntry.value);
     }
 };
-(_b = (_a = setInterval(() => {
+const pruneExpiredInflightPulseMetricRefreshes = (nowMs) => {
+    for (const [jobId, entry] of inflightPulseMetricRefreshes.entries()) {
+        if ((nowMs - entry.createdAt) >= JOB_PULSE_INFLIGHT_REFRESH_TTL_MS) {
+            inflightPulseMetricRefreshes.delete(jobId);
+        }
+    }
+};
+const maybePruneInflightPulseMetricRefreshes = (nowMs) => {
+    if (inflightPulseMetricRefreshes.size <= MAX_INFLIGHT_PULSE_METRIC_REFRESHES
+        && nowMs < nextInflightPulseMetricRefreshCleanupAt) {
+        return;
+    }
+    nextInflightPulseMetricRefreshCleanupAt = nowMs + JOB_PULSE_CACHE_CLEANUP_INTERVAL_MS;
+    pruneExpiredInflightPulseMetricRefreshes(nowMs);
+    trimInflightPulseMetricRefreshesToLimit();
+};
+const trimPulseMetricFreshnessCacheToLimit = () => {
+    while (pulseMetricFreshUntilByJobId.size > MAX_LOCAL_PULSE_METRIC_FRESHNESS_ENTRIES) {
+        const oldestEntry = pulseMetricFreshUntilByJobId.keys().next();
+        if (oldestEntry.done)
+            break;
+        pulseMetricFreshUntilByJobId.delete(oldestEntry.value);
+    }
+};
+const upsertPulseMetricFreshness = (jobId, freshUntilMs) => {
+    if (!jobId)
+        return;
+    pulseMetricFreshUntilByJobId.delete(jobId);
+    while (pulseMetricFreshUntilByJobId.size >= MAX_LOCAL_PULSE_METRIC_FRESHNESS_ENTRIES) {
+        const oldestEntry = pulseMetricFreshUntilByJobId.keys().next();
+        if (oldestEntry.done)
+            break;
+        pulseMetricFreshUntilByJobId.delete(oldestEntry.value);
+    }
+    pulseMetricFreshUntilByJobId.set(jobId, freshUntilMs);
+};
+const pruneExpiredPulseMetricFreshness = (nowMs) => {
+    for (const [jobId, freshUntilMs] of pulseMetricFreshUntilByJobId.entries()) {
+        if (freshUntilMs <= nowMs) {
+            pulseMetricFreshUntilByJobId.delete(jobId);
+        }
+    }
+};
+const maybePrunePulseMetricFreshness = (nowMs) => {
+    if (pulseMetricFreshUntilByJobId.size <= MAX_LOCAL_PULSE_METRIC_FRESHNESS_ENTRIES
+        && nowMs < nextPulseMetricFreshnessCleanupAt) {
+        return;
+    }
+    nextPulseMetricFreshnessCleanupAt = nowMs + JOB_PULSE_CACHE_CLEANUP_INTERVAL_MS;
+    pruneExpiredPulseMetricFreshness(nowMs);
+    trimPulseMetricFreshnessCacheToLimit();
+};
+const runPulseSnapshotCacheCleanup = () => {
     const nowMs = Date.now();
-    prunePulseSnapshotCache(nowMs);
-    pruneInflightPulseMetricRefreshes(nowMs);
-}, JOB_PULSE_CACHE_CLEANUP_INTERVAL_MS)).unref) === null || _b === void 0 ? void 0 : _b.call(_a);
+    pruneExpiredPulseSnapshotCacheEntries(nowMs);
+    trimPulseSnapshotCacheToLimit();
+    pruneExpiredInflightPulseMetricRefreshes(nowMs);
+    trimInflightPulseMetricRefreshesToLimit();
+    pruneExpiredPulseMetricFreshness(nowMs);
+    trimPulseMetricFreshnessCacheToLimit();
+};
+const ensureJobPulseSnapshotCleanupTimer = () => {
+    const cleanupTimerGlobal = readPulseSnapshotCleanupTimerGlobal();
+    if (cleanupTimerGlobal.__auraJobPulseSnapshotCleanupTimer__)
+        return;
+    cleanupTimerGlobal.__auraJobPulseSnapshotCleanupTimer__ = setInterval(runPulseSnapshotCacheCleanup, JOB_PULSE_CACHE_CLEANUP_INTERVAL_MS);
+};
+exports.ensureJobPulseSnapshotCleanupTimer = ensureJobPulseSnapshotCleanupTimer;
+const stopJobPulseSnapshotCleanupTimer = () => {
+    const cleanupTimerGlobal = readPulseSnapshotCleanupTimerGlobal();
+    const cleanupTimer = cleanupTimerGlobal.__auraJobPulseSnapshotCleanupTimer__;
+    if (!cleanupTimer)
+        return;
+    clearInterval(cleanupTimer);
+    cleanupTimerGlobal.__auraJobPulseSnapshotCleanupTimer__ = null;
+};
+exports.stopJobPulseSnapshotCleanupTimer = stopJobPulseSnapshotCleanupTimer;
 const fetchPulseJobs = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    const scanLimit = params.sortBy === 'heat'
+        ? Math.min(96, Math.max(params.limit * 3, 48))
+        : params.limit;
     const jobs = params.requestedJobIds.length > 0
         ? yield params.db.collection(JOBS_COLLECTION)
             .find({
@@ -129,7 +222,7 @@ const fetchPulseJobs = (params) => __awaiter(void 0, void 0, void 0, function* (
             },
         })
             .sort({ discoveredAt: -1, createdAt: -1 })
-            .limit(params.limit)
+            .limit(scanLimit)
             .toArray();
     const jobsById = new Map();
     jobs.forEach((job) => {
@@ -143,34 +236,55 @@ const fetchPulseJobs = (params) => __awaiter(void 0, void 0, void 0, function* (
         : Array.from(jobsById.keys()).slice(0, params.limit);
     return { jobsById, orderedJobIds };
 });
+function buildIndexedPulseMetric(row) {
+    return {
+        applicationsLast2h: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.applicationsLast2h))
+            ? Math.max(0, Math.floor(Number(row.applicationsLast2h)))
+            : 0,
+        applicationsLast24h: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.applicationsLast24h))
+            ? Math.max(0, Math.floor(Number(row.applicationsLast24h)))
+            : 0,
+        applicationsToday: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.applicationsToday))
+            ? Math.max(0, Math.floor(Number(row.applicationsToday)))
+            : 0,
+        viewsLast1h: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.viewsLast1h))
+            ? Math.max(0, Math.floor(Number(row.viewsLast1h)))
+            : 0,
+        matchesLast10m: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.matchesLast10m))
+            ? Math.max(0, Math.floor(Number(row.matchesLast10m)))
+            : 0,
+        savesToday: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.savesToday))
+            ? Math.max(0, Math.floor(Number(row.savesToday)))
+            : 0,
+        savesLast24h: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.savesLast24h))
+            ? Math.max(0, Math.floor(Number(row.savesLast24h)))
+            : 0,
+        latestAt: readPulseMetricLatestAtIso(row === null || row === void 0 ? void 0 : row.latestAt),
+    };
+}
 const indexPulseMetricsByJobId = (rows) => {
     const next = new Map();
     rows.forEach((row) => {
         const jobId = (0, inputSanitizers_1.readString)(row === null || row === void 0 ? void 0 : row._id, 120);
         if (!jobId)
             return;
-        next.set(jobId, {
-            applicationsLast24h: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.applicationsLast24h))
-                ? Math.max(0, Math.floor(Number(row.applicationsLast24h)))
-                : 0,
-            viewsLast60m: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.viewsLast60m))
-                ? Math.max(0, Math.floor(Number(row.viewsLast60m)))
-                : 0,
-            matchesLast10m: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.matchesLast10m))
-                ? Math.max(0, Math.floor(Number(row.matchesLast10m)))
-                : 0,
-            savesLast24h: Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.savesLast24h))
-                ? Math.max(0, Math.floor(Number(row.savesLast24h)))
-                : 0,
-            latestAt: (0, inputSanitizers_1.readString)(row === null || row === void 0 ? void 0 : row.latestAt, 80) || null,
-        });
+        next.set(jobId, buildIndexedPulseMetric({
+            applicationsLast2h: row === null || row === void 0 ? void 0 : row.applicationsLast2h,
+            applicationsLast24h: row === null || row === void 0 ? void 0 : row.applicationsLast24h,
+            applicationsToday: row === null || row === void 0 ? void 0 : row.applicationsToday,
+            viewsLast1h: row === null || row === void 0 ? void 0 : row.viewsLast1h,
+            matchesLast10m: row === null || row === void 0 ? void 0 : row.matchesLast10m,
+            savesToday: row === null || row === void 0 ? void 0 : row.savesToday,
+            savesLast24h: row === null || row === void 0 ? void 0 : row.savesLast24h,
+            latestAt: row === null || row === void 0 ? void 0 : row.latestAt,
+        }));
     });
     return next;
 };
 const aggregatePulseMetrics = (params) => __awaiter(void 0, void 0, void 0, function* () {
     if (params.jobIds.length === 0)
         return new Map();
-    const { applicationSince, viewSince, matchSince, saveSince, } = (0, jobPulseDomain_1.buildJobPulseWindowBounds)(params.nowMs);
+    const { applicationSince, applicationRecentSince, todaySince, viewSince, matchSince, } = (0, jobPulseDomain_1.buildJobPulseWindowBounds)(params.nowMs);
     const rows = yield params.db.collection(JOB_PULSE_BUCKETS_COLLECTION)
         .aggregate([
         {
@@ -182,10 +296,13 @@ const aggregatePulseMetrics = (params) => __awaiter(void 0, void 0, void 0, func
         {
             $group: {
                 _id: '$jobId',
-                applicationsLast24h: (0, jobPulseDomain_1.buildJobPulseBucketWindowSumExpression)('jobAppliedCount', applicationSince),
-                viewsLast60m: (0, jobPulseDomain_1.buildJobPulseBucketWindowSumExpression)('jobViewedCount', viewSince),
+                applicationsLast2h: (0, jobPulseDomain_1.buildJobPulseBucketWindowSumExpression)('jobAppliedCount', applicationRecentSince),
+                applicationsLast24h: { $sum: '$jobAppliedCount' },
+                applicationsToday: (0, jobPulseDomain_1.buildJobPulseBucketWindowSumExpression)('jobAppliedCount', todaySince),
+                viewsLast1h: (0, jobPulseDomain_1.buildJobPulseBucketWindowSumExpression)('jobViewedCount', viewSince),
                 matchesLast10m: (0, jobPulseDomain_1.buildJobPulseBucketWindowSumExpression)('jobMatchedCount', matchSince),
-                savesLast24h: (0, jobPulseDomain_1.buildJobPulseBucketWindowSumExpression)('jobSavedCount', saveSince),
+                savesToday: (0, jobPulseDomain_1.buildJobPulseBucketWindowSumExpression)('jobSavedCount', todaySince),
+                savesLast24h: { $sum: '$jobSavedCount' },
                 latestAt: { $max: '$latestEventAt' },
             },
         },
@@ -194,153 +311,283 @@ const aggregatePulseMetrics = (params) => __awaiter(void 0, void 0, void 0, func
     return indexPulseMetricsByJobId(rows);
 });
 const buildEmptyPulseMetric = () => ({
+    applicationsLast2h: 0,
     applicationsLast24h: 0,
-    viewsLast60m: 0,
+    applicationsToday: 0,
+    viewsLast1h: 0,
     matchesLast10m: 0,
+    savesToday: 0,
     savesLast24h: 0,
     latestAt: null,
 });
-const readFreshPulseMetrics = (params) => __awaiter(void 0, void 0, void 0, function* () {
-    if (params.jobIds.length === 0)
-        return new Map();
-    const freshnessDate = new Date(params.nowMs - JOB_PULSE_METRIC_FRESHNESS_MS);
-    const rows = yield params.db.collection(JOB_PULSE_METRIC_SNAPSHOTS_COLLECTION)
+const readPulseMetricRefreshedAtMs = (row) => {
+    const refreshedAtRaw = (row === null || row === void 0 ? void 0 : row.refreshedAtDate) || (row === null || row === void 0 ? void 0 : row.refreshedAt);
+    if (!refreshedAtRaw)
+        return 0;
+    const refreshedAtMs = new Date(refreshedAtRaw).getTime();
+    return Number.isFinite(refreshedAtMs) ? refreshedAtMs : 0;
+};
+const readPulseMetricLatestAtIso = (value) => {
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+    return (0, inputSanitizers_1.readString)(String(value || ''), 80) || null;
+};
+const normalizeLegacyPulseMetricViewsWindowField = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    const rows = yield db.collection(JOB_PULSE_METRIC_SNAPSHOTS_COLLECTION)
         .find({
-        jobId: { $in: params.jobIds },
-        refreshedAtDate: { $gte: freshnessDate },
+        viewsLast1h: { $exists: false },
+        viewsLast60m: { $exists: true },
     }, {
         projection: {
             _id: 0,
             jobId: 1,
-            applicationsLast24h: 1,
             viewsLast60m: 1,
-            matchesLast10m: 1,
-            savesLast24h: 1,
-            latestAt: 1,
         },
     })
+        .limit(500)
         .toArray();
-    return indexPulseMetricsByJobId(rows.map((row) => ({
-        _id: (0, inputSanitizers_1.readString)(row === null || row === void 0 ? void 0 : row.jobId, 120),
-        applicationsLast24h: row === null || row === void 0 ? void 0 : row.applicationsLast24h,
-        viewsLast60m: row === null || row === void 0 ? void 0 : row.viewsLast60m,
-        matchesLast10m: row === null || row === void 0 ? void 0 : row.matchesLast10m,
-        savesLast24h: row === null || row === void 0 ? void 0 : row.savesLast24h,
-        latestAt: row === null || row === void 0 ? void 0 : row.latestAt,
-    })));
+    const operations = rows.flatMap((row) => {
+        const jobId = (0, inputSanitizers_1.readString)(row === null || row === void 0 ? void 0 : row.jobId, 120);
+        if (!jobId || !Number.isFinite(Number(row === null || row === void 0 ? void 0 : row.viewsLast60m))) {
+            return [];
+        }
+        return {
+            updateOne: {
+                filter: {
+                    jobId,
+                    viewsLast1h: { $exists: false },
+                },
+                update: {
+                    $set: {
+                        viewsLast1h: Math.max(0, Math.floor(Number(row.viewsLast60m))),
+                    },
+                    $unset: {
+                        viewsLast60m: '',
+                    },
+                },
+            },
+        };
+    });
+    if (operations.length === 0)
+        return;
+    yield db.collection(JOB_PULSE_METRIC_SNAPSHOTS_COLLECTION).bulkWrite(operations, { ordered: false });
 });
+exports.normalizeLegacyPulseMetricViewsWindowField = normalizeLegacyPulseMetricViewsWindowField;
+const readStoredPulseMetrics = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    if (params.jobIds.length === 0)
+        return new Map();
+    const rows = yield params.db.collection(JOB_PULSE_METRIC_SNAPSHOTS_COLLECTION)
+        .aggregate([
+        {
+            $match: {
+                jobId: { $in: params.jobIds },
+            },
+        },
+        {
+            $project: {
+                _id: 0,
+                jobId: 1,
+                applicationsLast2h: 1,
+                applicationsLast24h: 1,
+                applicationsToday: 1,
+                viewsLast1h: { $ifNull: ['$viewsLast1h', { $ifNull: ['$viewsLast60m', 0] }] },
+                matchesLast10m: 1,
+                savesToday: 1,
+                savesLast24h: 1,
+                latestAt: 1,
+                refreshedAt: 1,
+                refreshedAtDate: 1,
+            },
+        },
+    ])
+        .toArray();
+    const storedMetricsByJobId = new Map();
+    rows.forEach((row) => {
+        const jobId = (0, inputSanitizers_1.readString)(row === null || row === void 0 ? void 0 : row.jobId, 120);
+        if (!jobId)
+            return;
+        storedMetricsByJobId.set(jobId, Object.assign(Object.assign({}, buildIndexedPulseMetric({
+            applicationsLast2h: row === null || row === void 0 ? void 0 : row.applicationsLast2h,
+            applicationsLast24h: row === null || row === void 0 ? void 0 : row.applicationsLast24h,
+            applicationsToday: row === null || row === void 0 ? void 0 : row.applicationsToday,
+            viewsLast1h: row === null || row === void 0 ? void 0 : row.viewsLast1h,
+            matchesLast10m: row === null || row === void 0 ? void 0 : row.matchesLast10m,
+            savesToday: row === null || row === void 0 ? void 0 : row.savesToday,
+            savesLast24h: row === null || row === void 0 ? void 0 : row.savesLast24h,
+            latestAt: row === null || row === void 0 ? void 0 : row.latestAt,
+        })), { refreshedAtMs: readPulseMetricRefreshedAtMs(row) }));
+    });
+    return storedMetricsByJobId;
+});
+const hasPulseMetricChanged = (currentMetric, nextMetric) => !currentMetric
+    || currentMetric.applicationsLast2h !== nextMetric.applicationsLast2h
+    || currentMetric.applicationsLast24h !== nextMetric.applicationsLast24h
+    || currentMetric.applicationsToday !== nextMetric.applicationsToday
+    || currentMetric.viewsLast1h !== nextMetric.viewsLast1h
+    || currentMetric.matchesLast10m !== nextMetric.matchesLast10m
+    || currentMetric.savesToday !== nextMetric.savesToday
+    || currentMetric.savesLast24h !== nextMetric.savesLast24h
+    || currentMetric.latestAt !== nextMetric.latestAt;
 const persistPulseMetrics = (params) => __awaiter(void 0, void 0, void 0, function* () {
     if (params.jobIds.length === 0)
         return;
     const refreshedAtDate = new Date(params.refreshedAtIso);
-    yield params.db.collection(JOB_PULSE_METRIC_SNAPSHOTS_COLLECTION).bulkWrite(params.jobIds.map((jobId) => {
+    const operations = params.jobIds.flatMap((jobId) => {
+        var _a;
         const metric = params.metricsByJobId.get(jobId) || buildEmptyPulseMetric();
+        if (!hasPulseMetricChanged((_a = params.storedMetricsByJobId) === null || _a === void 0 ? void 0 : _a.get(jobId), metric)) {
+            return [];
+        }
         return {
             updateOne: {
                 filter: { jobId },
                 update: {
                     $set: {
                         jobId,
+                        applicationsLast2h: metric.applicationsLast2h,
                         applicationsLast24h: metric.applicationsLast24h,
-                        viewsLast60m: metric.viewsLast60m,
+                        applicationsToday: metric.applicationsToday,
+                        viewsLast1h: metric.viewsLast1h,
                         matchesLast10m: metric.matchesLast10m,
+                        savesToday: metric.savesToday,
                         savesLast24h: metric.savesLast24h,
                         latestAt: metric.latestAt,
                         refreshedAt: params.refreshedAtIso,
                         refreshedAtDate,
                     },
+                    $unset: {
+                        viewsLast60m: '',
+                    },
                 },
                 upsert: true,
             },
         };
-    }), { ordered: false });
+    });
+    if (operations.length === 0)
+        return;
+    yield params.db.collection(JOB_PULSE_METRIC_SNAPSHOTS_COLLECTION).bulkWrite(operations, { ordered: false });
 });
-const createPulseMetricRefreshPromise = (params) => {
-    const promisesByJobId = new Map();
-    if (params.jobIds.length === 0)
-        return promisesByJobId;
-    pruneInflightPulseMetricRefreshes(params.nowMs);
-    const refreshedAtIso = new Date(params.nowMs).toISOString();
-    const refreshBatchPromise = (() => __awaiter(void 0, void 0, void 0, function* () {
-        const metricsByJobId = yield aggregatePulseMetrics(params);
+const buildPulseMetricRefreshBatches = (jobIds) => {
+    if (jobIds.length === 0)
+        return [];
+    const batches = [];
+    for (let index = 0; index < jobIds.length; index += MAX_PULSE_METRIC_REFRESH_BATCH_SIZE) {
+        batches.push(jobIds.slice(index, index + MAX_PULSE_METRIC_REFRESH_BATCH_SIZE));
+    }
+    return batches;
+};
+const buildStoredPulseMetricSubset = (storedMetricsByJobId, jobIds) => {
+    const subset = new Map();
+    jobIds.forEach((jobId) => {
+        const metric = storedMetricsByJobId.get(jobId);
+        if (metric)
+            subset.set(jobId, metric);
+    });
+    return subset;
+};
+const refreshPulseMetricBatches = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    for (const batchJobIds of buildPulseMetricRefreshBatches(params.jobIds)) {
+        const batchNowMs = Date.now();
+        const metricsByJobId = yield aggregatePulseMetrics({
+            db: params.db,
+            jobIds: batchJobIds,
+            nowMs: batchNowMs,
+        });
         yield persistPulseMetrics({
             db: params.db,
-            jobIds: params.jobIds,
+            jobIds: batchJobIds,
             metricsByJobId,
-            refreshedAtIso,
+            refreshedAtIso: new Date(batchNowMs).toISOString(),
+            storedMetricsByJobId: buildStoredPulseMetricSubset(params.storedMetricsByJobId, batchJobIds),
         });
-        return metricsByJobId;
-    }))();
-    params.jobIds.forEach((jobId) => {
-        const metricPromise = refreshBatchPromise
-            .then((metricsByJobId) => metricsByJobId.get(jobId) || buildEmptyPulseMetric())
-            .finally(() => {
+    }
+});
+const markPulseMetricsFresh = (jobIds, nowMs) => {
+    const freshUntilMs = nowMs + JOB_PULSE_METRIC_FRESHNESS_MS;
+    jobIds.forEach((jobId) => {
+        upsertPulseMetricFreshness(jobId, freshUntilMs);
+    });
+};
+const isPulseMetricFresh = (jobId, metric, nowMs) => {
+    const localFreshUntilMs = pulseMetricFreshUntilByJobId.get(jobId) || 0;
+    if (localFreshUntilMs > nowMs)
+        return true;
+    return Boolean(metric && metric.refreshedAtMs >= (nowMs - JOB_PULSE_METRIC_FRESHNESS_MS));
+};
+const schedulePulseMetricRefresh = (params) => {
+    if (params.jobIds.length === 0)
+        return;
+    maybePruneInflightPulseMetricRefreshes(params.nowMs);
+    maybePrunePulseMetricFreshness(params.nowMs);
+    const refreshJobIds = params.jobIds.filter((jobId) => {
+        if (isPulseMetricFresh(jobId, params.storedMetricsByJobId.get(jobId), params.nowMs)) {
+            return false;
+        }
+        return !inflightPulseMetricRefreshes.has(jobId);
+    });
+    if (refreshJobIds.length === 0)
+        return;
+    const refreshBatchPromise = (0, jobPulseMetricRefreshQueueService_1.scheduleJobPulseMetricRefreshTask)({
+        jobIds: refreshJobIds,
+        stateByJobId: new Map(buildStoredPulseMetricSubset(params.storedMetricsByJobId, refreshJobIds)),
+        runTask: (jobIds, stateByJobId) => __awaiter(void 0, void 0, void 0, function* () {
+            yield refreshPulseMetricBatches({
+                db: params.db,
+                jobIds,
+                storedMetricsByJobId: stateByJobId,
+            });
+            markPulseMetricsFresh(jobIds, Date.now());
+        }),
+    });
+    if (!refreshBatchPromise)
+        return;
+    refreshJobIds.forEach((jobId) => {
+        inflightPulseMetricRefreshes.set(jobId, {
+            promise: refreshBatchPromise,
+            createdAt: params.nowMs,
+        });
+    });
+    void refreshBatchPromise
+        .catch(() => undefined)
+        .finally(() => {
+        refreshJobIds.forEach((jobId) => {
             const current = inflightPulseMetricRefreshes.get(jobId);
-            if ((current === null || current === void 0 ? void 0 : current.promise) === metricPromise) {
+            if ((current === null || current === void 0 ? void 0 : current.promise) === refreshBatchPromise) {
                 inflightPulseMetricRefreshes.delete(jobId);
             }
         });
-        inflightPulseMetricRefreshes.set(jobId, {
-            promise: metricPromise,
-            createdAt: params.nowMs,
-        });
-        promisesByJobId.set(jobId, metricPromise);
     });
-    pruneInflightPulseMetricRefreshes(params.nowMs);
-    return promisesByJobId;
-};
-const resolveInflightPulseMetricPromises = (params) => {
-    const promisesByJobId = new Map();
-    const missingJobIds = [];
-    pruneInflightPulseMetricRefreshes(params.nowMs);
-    params.jobIds.forEach((jobId) => {
-        const existing = inflightPulseMetricRefreshes.get(jobId);
-        if (existing) {
-            promisesByJobId.set(jobId, existing.promise);
-            return;
-        }
-        missingJobIds.push(jobId);
-    });
-    const newPromisesByJobId = createPulseMetricRefreshPromise({
-        db: params.db,
-        jobIds: missingJobIds,
-        nowMs: params.nowMs,
-    });
-    newPromisesByJobId.forEach((metricPromise, jobId) => {
-        promisesByJobId.set(jobId, metricPromise);
-    });
-    return promisesByJobId;
+    trimInflightPulseMetricRefreshesToLimit();
 };
 const resolvePulseMetrics = (params) => __awaiter(void 0, void 0, void 0, function* () {
     if (params.jobIds.length === 0)
         return new Map();
-    const freshMetricsByJobId = yield readFreshPulseMetrics(params);
-    if (freshMetricsByJobId.size === params.jobIds.length) {
-        return freshMetricsByJobId;
-    }
-    const staleJobIds = params.jobIds.filter((jobId) => !freshMetricsByJobId.has(jobId));
-    const inflightPromisesByJobId = resolveInflightPulseMetricPromises({
+    const storedMetricsByJobId = yield readStoredPulseMetrics({
+        db: params.db,
+        jobIds: params.jobIds,
+    });
+    const merged = new Map();
+    const staleJobIds = [];
+    params.jobIds.forEach((jobId) => {
+        const storedMetric = storedMetricsByJobId.get(jobId);
+        merged.set(jobId, storedMetric || buildEmptyPulseMetric());
+        if (!isPulseMetricFresh(jobId, storedMetric, params.nowMs)) {
+            staleJobIds.push(jobId);
+        }
+    });
+    schedulePulseMetricRefresh({
         db: params.db,
         jobIds: staleJobIds,
         nowMs: params.nowMs,
-    });
-    const recalculatedMetricsByJobId = new Map();
-    yield Promise.all(staleJobIds.map((jobId) => __awaiter(void 0, void 0, void 0, function* () {
-        const metricPromise = inflightPromisesByJobId.get(jobId);
-        const metric = metricPromise ? yield metricPromise : buildEmptyPulseMetric();
-        recalculatedMetricsByJobId.set(jobId, metric);
-    })));
-    const merged = new Map();
-    params.jobIds.forEach((jobId) => {
-        merged.set(jobId, freshMetricsByJobId.get(jobId) || recalculatedMetricsByJobId.get(jobId) || buildEmptyPulseMetric());
+        storedMetricsByJobId,
     });
     return merged;
 });
-const resolvePulseIdentityFields = (jobId, job) => {
+const resolvePulseIdentityFields = (job) => {
     const source = (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.source, 120) || null;
     const sourceType = (0, jobPulseUtils_1.resolveJobPulseSourceType)(source);
     return {
-        jobId,
         slug: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.slug, 220),
         title: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.title, 200),
         companyName: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.companyName, 180),
@@ -369,25 +616,45 @@ const resolvePulseCountFields = (job, metrics) => {
         auraViewCount,
         applicationCount: totalApplicationCount,
         viewCount: auraViewCount,
+        applicationsLast2h: (metrics === null || metrics === void 0 ? void 0 : metrics.applicationsLast2h) || 0,
         applicationsLast24h: (metrics === null || metrics === void 0 ? void 0 : metrics.applicationsLast24h) || 0,
-        viewsLast60m: (metrics === null || metrics === void 0 ? void 0 : metrics.viewsLast60m) || 0,
+        applicationsToday: (metrics === null || metrics === void 0 ? void 0 : metrics.applicationsToday) || 0,
+        viewsLast1h: (metrics === null || metrics === void 0 ? void 0 : metrics.viewsLast1h) || 0,
         matchesLast10m: (metrics === null || metrics === void 0 ? void 0 : metrics.matchesLast10m) || 0,
+        savesToday: (metrics === null || metrics === void 0 ? void 0 : metrics.savesToday) || 0,
         savesLast24h: (metrics === null || metrics === void 0 ? void 0 : metrics.savesLast24h) || 0,
     };
 };
 const buildPulseSnapshot = (params) => {
     var _a;
-    const identity = resolvePulseIdentityFields(params.jobId, params.job);
+    const identity = resolvePulseIdentityFields(params.job);
     const timing = resolvePulseTimingFields(params.job);
     const counts = resolvePulseCountFields(params.job, params.metrics);
-    return Object.assign(Object.assign(Object.assign(Object.assign({}, identity), timing), counts), { hotScore: (0, jobPulseDomain_1.computeJobPulseHotScore)({
-            applicationsLast24h: counts.applicationsLast24h,
-            viewsLast60m: counts.viewsLast60m,
-            matchesLast10m: counts.matchesLast10m,
-            savesLast24h: counts.savesLast24h,
-            discoveredAt: timing.discoveredAt,
-            nowMs: params.nowMs,
-        }), lastActivityAt: (0, jobPulseUtils_1.resolveLatestJobPulseIso)((_a = params.metrics) === null || _a === void 0 ? void 0 : _a.latestAt) });
+    const heatScore = (0, jobPulseDomain_1.computeJobHeatScore)({
+        applicationsLast2h: counts.applicationsLast2h,
+        applicationsToday: counts.applicationsToday,
+        totalAuraApplications: counts.auraApplicationCount,
+        viewsLast1h: counts.viewsLast1h,
+        savesToday: counts.savesToday,
+    });
+    return {
+        jobId: params.jobId,
+        identity,
+        timing: Object.assign(Object.assign({}, timing), { lastActivityAt: (0, jobPulseUtils_1.resolveLatestJobPulseIso)((_a = params.metrics) === null || _a === void 0 ? void 0 : _a.latestAt) }),
+        metrics: counts,
+        scores: {
+            heatScore,
+            heatLabel: (0, jobPulseDomain_1.resolveJobHeatLabel)(heatScore),
+            hotScore: (0, jobPulseDomain_1.computeWindowedJobPulseActivityScore)({
+                applicationsLast24h: counts.applicationsLast24h,
+                viewsLast1h: counts.viewsLast1h,
+                matchesLast10m: counts.matchesLast10m,
+                savesLast24h: counts.savesLast24h,
+                discoveredAt: timing.discoveredAt,
+                nowMs: params.nowMs,
+            }),
+        },
+    };
 };
 const buildPulseSnapshotsFromJobs = (params) => params.orderedJobIds.map((jobId) => buildPulseSnapshot({
     jobId,
@@ -395,14 +662,35 @@ const buildPulseSnapshotsFromJobs = (params) => params.orderedJobIds.map((jobId)
     metrics: params.pulseMetricsByJobId.get(jobId),
     nowMs: params.nowMs,
 }));
-const listJobPulseSnapshots = (params) => __awaiter(void 0, void 0, void 0, function* () {
+const sortPulseSnapshotsByHeat = (snapshots, limit) => [...snapshots]
+    .sort((left, right) => {
+    if (right.scores.heatScore !== left.scores.heatScore)
+        return right.scores.heatScore - left.scores.heatScore;
+    if (right.metrics.viewsLast1h !== left.metrics.viewsLast1h)
+        return right.metrics.viewsLast1h - left.metrics.viewsLast1h;
+    if (right.metrics.applicationsLast2h !== left.metrics.applicationsLast2h)
+        return right.metrics.applicationsLast2h - left.metrics.applicationsLast2h;
+    return String(right.timing.lastActivityAt || right.timing.discoveredAt || '').localeCompare(String(left.timing.lastActivityAt || left.timing.discoveredAt || ''));
+})
+    .slice(0, limit);
+const normalizePulseSnapshotListParams = (params) => {
     const requestedJobIds = buildRequestedJobIds(params.requestedJobIds || []);
     const limit = Number.isFinite(Number(params.limit))
         ? Math.max(1, Math.min(MAX_JOB_PULSE_SNAPSHOT_LIMIT, Math.round(Number(params.limit))))
         : MAX_JOB_PULSE_SNAPSHOT_LIMIT;
-    const cacheKey = buildPulseCacheKey(requestedJobIds, limit);
+    const sortBy = params.sortBy === 'heat' ? 'heat' : 'latest';
+    return {
+        requestedJobIds,
+        limit,
+        sortBy,
+        cacheKey: buildPulseCacheKey(requestedJobIds, limit, sortBy),
+    };
+};
+const listJobPulseSnapshots = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    (0, exports.ensureJobPulseSnapshotCleanupTimer)();
+    const { requestedJobIds, limit, sortBy, cacheKey } = normalizePulseSnapshotListParams(params);
     const nowMs = Date.now();
-    prunePulseSnapshotCache(nowMs);
+    maybePrunePulseSnapshotCache(nowMs);
     const cached = resolveCachedPulseSnapshots(cacheKey, nowMs);
     if (cached)
         return cached;
@@ -410,6 +698,7 @@ const listJobPulseSnapshots = (params) => __awaiter(void 0, void 0, void 0, func
         db: params.db,
         requestedJobIds,
         limit,
+        sortBy,
     });
     if (orderedJobIds.length === 0)
         return [];
@@ -424,7 +713,24 @@ const listJobPulseSnapshots = (params) => __awaiter(void 0, void 0, void 0, func
         pulseMetricsByJobId,
         nowMs,
     });
-    cachePulseSnapshots(cacheKey, nowMs, snapshots);
-    return snapshots;
+    const normalizedSnapshots = requestedJobIds.length > 0 || sortBy !== 'heat'
+        ? snapshots
+        : sortPulseSnapshotsByHeat(snapshots, limit);
+    cachePulseSnapshots(cacheKey, nowMs, normalizedSnapshots);
+    return normalizedSnapshots;
 });
 exports.listJobPulseSnapshots = listJobPulseSnapshots;
+const buildJobHeatResponseFields = (snapshot) => ({
+    sourceType: (snapshot === null || snapshot === void 0 ? void 0 : snapshot.identity.sourceType) === 'aura' ? 'aura' : 'aggregated',
+    canDisplayAuraApplicants: Boolean(snapshot === null || snapshot === void 0 ? void 0 : snapshot.identity.canDisplayAuraApplicants),
+    heatScore: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.scores.heatScore)) ? Math.max(0, Math.round(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.scores.heatScore))) : 0,
+    heatLabel: (snapshot === null || snapshot === void 0 ? void 0 : snapshot.scores.heatLabel) || 'low',
+    applicationsLast2h: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.applicationsLast2h)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.applicationsLast2h))) : 0,
+    applicationsToday: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.applicationsToday)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.applicationsToday))) : 0,
+    viewsLast1h: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.viewsLast1h)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.viewsLast1h))) : 0,
+    savesToday: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.savesToday)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.savesToday))) : 0,
+    auraApplicationCount: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.auraApplicationCount)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.auraApplicationCount))) : 0,
+    auraViewCount: Number.isFinite(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.auraViewCount)) ? Math.max(0, Math.floor(Number(snapshot === null || snapshot === void 0 ? void 0 : snapshot.metrics.auraViewCount))) : 0,
+    lastActivityAt: (0, inputSanitizers_1.readString)(snapshot === null || snapshot === void 0 ? void 0 : snapshot.timing.lastActivityAt, 80) || null,
+});
+exports.buildJobHeatResponseFields = buildJobHeatResponseFields;

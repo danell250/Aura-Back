@@ -17,6 +17,37 @@ export interface User {
   email?: string;
   phone?: string;
   country?: string;
+  profileSkills?: string[];
+  skills?: string[];
+  openToWork?: boolean;
+  availability?: string;
+  preferredRoles?: string[];
+  preferredLocations?: string[];
+  preferredWorkModels?: string[];
+  salaryExpectation?: string;
+  portfolioUrl?: string;
+  resumeKey?: string;
+  resumeFileName?: string;
+  resumeMimeType?: string;
+  resumeSize?: number;
+  defaultResumeKey?: string;
+  defaultResumeFileName?: string;
+  defaultResumeMimeType?: string;
+  defaultResumeSize?: number;
+  resumeAvailable?: boolean;
+  profileCompleteness?: number;
+  topSkills?: string[];
+  jobsMatchingNow?: number;
+  profileViews7d?: number;
+  companyViews7d?: number;
+  invitesToApply7d?: number;
+  demandSignals?: Array<{
+    roleFamily: string;
+    label: string;
+    demand: 'HIGH' | 'MEDIUM' | 'LOW';
+    activeJobs: number;
+    freshJobs7d: number;
+  }>;
   acquaintances?: string[]; 
   subscribedCompanyIds?: string[];
   sentAcquaintanceRequests?: string[];
@@ -112,6 +143,7 @@ export interface Notification {
     | 'acquaintance_accepted'
     | 'acquaintance_rejected'
     | 'profile_view'
+    | 'invite_to_apply'
     | 'share'
     | 'like'
     | 'message'

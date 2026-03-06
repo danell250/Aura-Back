@@ -61,9 +61,12 @@ exports.jobPulseController = {
                     generatedAt: new Date().toISOString(),
                     recommendedPollingIntervalSeconds: 30,
                     windows: {
+                        applicationsLast2hHours: 2,
+                        applicationsTodayPeriod: 'utc-day',
                         applicationsLast24hHours: 24,
-                        viewsLast60mMinutes: 60,
+                        viewsLast1hHours: 1,
                         matchesLast10mMinutes: 10,
+                        savesTodayPeriod: 'utc-day',
                         savesLast24hHours: 24,
                     },
                 },

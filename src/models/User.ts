@@ -11,6 +11,26 @@ export interface IUser {
   coverImage?: string;
   coverKey?: string;
   bio?: string;
+  title?: string;
+  phone?: string;
+  country?: string;
+  profileSkills?: string[];
+  skills?: string[];
+  openToWork?: boolean;
+  availability?: string;
+  preferredRoles?: string[];
+  preferredLocations?: string[];
+  preferredWorkModels?: string[];
+  salaryExpectation?: string;
+  portfolioUrl?: string;
+  resumeKey?: string;
+  resumeFileName?: string;
+  resumeMimeType?: string;
+  resumeSize?: number;
+  defaultResumeKey?: string;
+  defaultResumeFileName?: string;
+  defaultResumeMimeType?: string;
+  defaultResumeSize?: number;
   location?: string;
   website?: string;
   profileLinks?: Array<{

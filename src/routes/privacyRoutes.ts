@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { privacyController } from '../controllers/privacyController';
+import { profileAnalyticsController } from '../controllers/profileAnalyticsController';
 import { requireAuth, requireOwnership } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -17,7 +18,7 @@ router.post('/analytics-event', requireAuth, privacyController.trackAnalyticsEve
 router.get('/searchable-users', privacyController.getSearchableUsers);
 
 // POST /api/privacy/profile-view - Record profile view
-router.post('/profile-view', requireAuth, privacyController.recordProfileView);
+router.post('/profile-view', requireAuth, profileAnalyticsController.recordProfileView);
 
 // GET /api/privacy/online-status/:userId - Get user's online status (public)
 router.get('/online-status/:userId', privacyController.getOnlineStatus);

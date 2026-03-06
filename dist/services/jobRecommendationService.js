@@ -1,10 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.buildJobRecommendationScore = exports.buildRecommendationCandidateFilter = exports.buildRecommendationProfile = exports.buildJobRecommendationPrecomputedFields = exports.resolveRecommendationMatchTier = exports.MATCH_TIER_GOOD_MIN_SCORE = exports.MATCH_TIER_BEST_MIN_SCORE = void 0;
+exports.buildJobRecommendationScore = exports.buildRecommendationCandidateCriteria = exports.buildRecommendationProfile = exports.buildJobRecommendationPrecomputedFields = exports.resolveRecommendationMatchTier = exports.MATCH_TIER_GOOD_MIN_SCORE = exports.MATCH_TIER_BEST_MIN_SCORE = void 0;
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const RECOMMENDATION_WEIGHTS = {
     skillPerMatch: 16,
     skillCap: 48,
+    rolePerMatch: 14,
+    roleCap: 28,
     remoteBonus: 18,
     workModelPreferenceBonus: 14,
     experienceDirectBonus: 10,
@@ -17,8 +19,12 @@ const RECOMMENDATION_WEIGHTS = {
     freshnessWeekBonus: 6,
     freshnessMonthBonus: 3,
 };
+const RECOMMENDATION_METADATA_CACHE_MAX_KEYS = 1500;
+const RECOMMENDATION_PROFILE_CACHE_MAX_KEYS = 1000;
 exports.MATCH_TIER_BEST_MIN_SCORE = 70;
 exports.MATCH_TIER_GOOD_MIN_SCORE = 40;
+const recommendationMetadataCache = new Map();
+const recommendationProfileCache = new Map();
 const resolveRecommendationMatchTier = (score) => {
     if (score >= exports.MATCH_TIER_BEST_MIN_SCORE)
         return 'best';
@@ -251,7 +257,61 @@ const resolveRecommendationIsRemoteRole = (job) => {
         ? storedIsRemoteRole
         : (String((job === null || job === void 0 ? void 0 : job.workModel) || '').toLowerCase() === 'remote');
 };
+const buildRecommendationMetadataCacheKey = (job) => {
+    const jobId = typeof (job === null || job === void 0 ? void 0 : job.id) === 'string' ? job.id.trim() : '';
+    if (!jobId)
+        return '';
+    const versionStamp = [
+        typeof (job === null || job === void 0 ? void 0 : job.updatedAt) === 'string' ? job.updatedAt.trim() : '',
+        typeof (job === null || job === void 0 ? void 0 : job.publishedAt) === 'string' ? job.publishedAt.trim() : '',
+        typeof (job === null || job === void 0 ? void 0 : job.createdAt) === 'string' ? job.createdAt.trim() : '',
+    ].find((value) => value.length > 0);
+    if (!versionStamp)
+        return '';
+    return `job-id=${jobId}::version=${versionStamp}`;
+};
+const buildRecommendationProfileCacheKey = (user) => {
+    const userId = typeof (user === null || user === void 0 ? void 0 : user.id) === 'string' ? user.id.trim() : '';
+    if (!userId)
+        return '';
+    const versionStamp = [
+        typeof (user === null || user === void 0 ? void 0 : user.updatedAt) === 'string' ? user.updatedAt.trim() : '',
+        typeof (user === null || user === void 0 ? void 0 : user.createdAt) === 'string' ? user.createdAt.trim() : '',
+    ].find((value) => value.length > 0) || 'profile-static';
+    return `user-id=${userId}::version=${versionStamp}`;
+};
+const storeRecommendationMetadataCacheEntry = (cacheKey, metadata) => {
+    if (!cacheKey)
+        return;
+    recommendationMetadataCache.delete(cacheKey);
+    recommendationMetadataCache.set(cacheKey, metadata);
+    if (recommendationMetadataCache.size > RECOMMENDATION_METADATA_CACHE_MAX_KEYS) {
+        const oldestCacheKey = recommendationMetadataCache.keys().next().value;
+        if (oldestCacheKey) {
+            recommendationMetadataCache.delete(oldestCacheKey);
+        }
+    }
+};
+const storeRecommendationProfileCacheEntry = (cacheKey, profile) => {
+    if (!cacheKey)
+        return;
+    recommendationProfileCache.delete(cacheKey);
+    recommendationProfileCache.set(cacheKey, profile);
+    if (recommendationProfileCache.size > RECOMMENDATION_PROFILE_CACHE_MAX_KEYS) {
+        const oldestCacheKey = recommendationProfileCache.keys().next().value;
+        if (oldestCacheKey) {
+            recommendationProfileCache.delete(oldestCacheKey);
+        }
+    }
+};
 const buildJobRecommendationMetadata = (job) => {
+    const cacheKey = buildRecommendationMetadataCacheKey(job);
+    const cachedMetadata = cacheKey ? recommendationMetadataCache.get(cacheKey) : undefined;
+    if (cachedMetadata) {
+        recommendationMetadataCache.delete(cacheKey);
+        recommendationMetadataCache.set(cacheKey, cachedMetadata);
+        return cachedMetadata;
+    }
     const skillLabelByToken = buildRecommendationSkillMap(job);
     const locationTokens = buildRecommendationLocationTokens(job);
     const semanticTokens = buildRecommendationSemanticTokens(job);
@@ -260,7 +320,7 @@ const buildJobRecommendationMetadata = (job) => {
     const isRemoteRole = resolveRecommendationIsRemoteRole(job);
     const workModel = normalizeWorkModelPreference(job === null || job === void 0 ? void 0 : job.workModel) || (isRemoteRole ? 'remote' : 'onsite');
     const inferredExperienceLevel = inferJobExperienceLevel(job);
-    return {
+    const metadata = {
         skillLabelByToken,
         locationTokens,
         semanticTokens,
@@ -270,6 +330,8 @@ const buildJobRecommendationMetadata = (job) => {
         workModel,
         inferredExperienceLevel,
     };
+    storeRecommendationMetadataCacheEntry(cacheKey, metadata);
+    return metadata;
 };
 const buildJobRecommendationPrecomputedFields = (source) => {
     const recommendationSkillLabelByToken = {};
@@ -301,10 +363,21 @@ const buildJobRecommendationPrecomputedFields = (source) => {
 };
 exports.buildJobRecommendationPrecomputedFields = buildJobRecommendationPrecomputedFields;
 const buildRecommendationProfile = (user) => {
+    const cacheKey = buildRecommendationProfileCacheKey(user);
+    const cachedProfile = cacheKey ? recommendationProfileCache.get(cacheKey) : undefined;
+    if (cachedProfile) {
+        recommendationProfileCache.delete(cacheKey);
+        recommendationProfileCache.set(cacheKey, cachedProfile);
+        return cachedProfile;
+    }
     const skillTokens = new Set([
         ...readRecommendationSkillTokens(user === null || user === void 0 ? void 0 : user.skills, 80),
         ...readRecommendationSkillTokens(user === null || user === void 0 ? void 0 : user.profileSkills, 80),
     ]);
+    const roleTokens = new Set(tokenizeRecommendationText((user === null || user === void 0 ? void 0 : user.title)
+        || (user === null || user === void 0 ? void 0 : user.role)
+        || (user === null || user === void 0 ? void 0 : user.desiredRole)
+        || (user === null || user === void 0 ? void 0 : user.jobTitle), 20).filter((token) => token.length >= 3));
     const locationTokens = new Set([
         ...tokenizeRecommendationText(user === null || user === void 0 ? void 0 : user.location, 20).filter((token) => token.length >= 3),
         ...tokenizeRecommendationText(user === null || user === void 0 ? void 0 : user.country, 8).filter((token) => token.length >= 3),
@@ -312,34 +385,33 @@ const buildRecommendationProfile = (user) => {
     const industryTokens = new Set(tokenizeRecommendationText(user === null || user === void 0 ? void 0 : user.industry, 20).filter((token) => token.length >= 3));
     const preferredWorkModels = readPreferredWorkModels(user);
     const experienceLevel = resolveExperienceLevel(user);
-    return {
+    const profile = {
         skillTokens,
+        roleTokens,
         locationTokens,
         industryTokens,
         preferredWorkModels,
         experienceLevel,
     };
+    storeRecommendationProfileCacheEntry(cacheKey, profile);
+    return profile;
 };
 exports.buildRecommendationProfile = buildRecommendationProfile;
-const buildRecommendationCandidateFilter = (profile) => {
+const buildRecommendationCandidateCriteria = (profile) => {
     const skillTokens = Array.from(profile.skillTokens).slice(0, 20);
+    const semanticTokens = Array.from(new Set([
+        ...Array.from(profile.roleTokens),
+        ...Array.from(profile.industryTokens),
+    ])).slice(0, 16);
     const preferredWorkModels = Array.from(profile.preferredWorkModels);
-    const orFilters = [];
-    if (skillTokens.length > 0) {
-        orFilters.push({ tags: { $in: skillTokens } });
-    }
-    if (preferredWorkModels.length > 0) {
-        orFilters.push({ workModel: { $in: preferredWorkModels } });
-    }
-    if (orFilters.length === 0) {
-        return { status: 'open' };
-    }
     return {
         status: 'open',
-        $or: orFilters,
+        skillTokens,
+        semanticTokens,
+        preferredWorkModels,
     };
 };
-exports.buildRecommendationCandidateFilter = buildRecommendationCandidateFilter;
+exports.buildRecommendationCandidateCriteria = buildRecommendationCandidateCriteria;
 const scoreSkillMatch = (metadata, profile) => {
     const matchedSkills = [];
     for (const [token, label] of metadata.skillLabelByToken.entries()) {
@@ -353,6 +425,17 @@ const scoreSkillMatch = (metadata, profile) => {
         score: Math.min(RECOMMENDATION_WEIGHTS.skillCap, matchedSkills.length * RECOMMENDATION_WEIGHTS.skillPerMatch),
         matchedSkills,
         reason: `${matchedSkills.length} skill match${matchedSkills.length === 1 ? '' : 'es'}`,
+    };
+};
+const scoreRoleAlignment = (metadata, profile) => {
+    if (profile.roleTokens.size === 0)
+        return { score: 0 };
+    const roleMatchCount = countSetIntersection(profile.roleTokens, metadata.semanticTokens);
+    if (roleMatchCount === 0)
+        return { score: 0 };
+    return {
+        score: Math.min(RECOMMENDATION_WEIGHTS.roleCap, roleMatchCount * RECOMMENDATION_WEIGHTS.rolePerMatch),
+        reason: 'Role fit aligned',
     };
 };
 const scoreRemoteRole = (metadata, profile) => {
@@ -442,52 +525,83 @@ const scoreFreshness = (publishedTs) => {
         return RECOMMENDATION_WEIGHTS.freshnessMonthBonus;
     return 0;
 };
-const runRecommendationSignals = (signals) => {
+const runRecommendationSignals = (signalRuns) => {
     const reasons = [];
-    let totalScore = 0;
     let matchedSkills = [];
-    for (const nextSignal of signals) {
-        const signal = nextSignal();
-        if (signal.score > 0) {
-            totalScore += signal.score;
-            if (signal.reason)
-                reasons.push(signal.reason);
-        }
-        if (signal.matchedSkills && signal.matchedSkills.length > 0) {
-            matchedSkills = signal.matchedSkills;
+    const breakdown = {
+        skills: 0,
+        role: 0,
+        remote: 0,
+        workModel: 0,
+        location: 0,
+        experience: 0,
+        industry: 0,
+        salarySignal: 0,
+        freshness: 0,
+    };
+    for (const signalRun of signalRuns) {
+        const result = signalRun.signal();
+        breakdown[signalRun.key] = result.score;
+        if (result.reason)
+            reasons.push(result.reason);
+        if (result.matchedSkills && result.matchedSkills.length > 0) {
+            matchedSkills = result.matchedSkills;
         }
     }
     return {
-        score: totalScore,
+        score: Object.values(breakdown).reduce((total, value) => total + value, 0),
         reasons,
         matchedSkills,
+        breakdown,
     };
 };
 const buildJobRecommendationScore = (job, profile) => {
     const metadata = buildJobRecommendationMetadata(job);
     const publishedTs = metadata.publishedTs;
     const scoredSignals = runRecommendationSignals([
-        () => {
-            const signal = scoreSkillMatch(metadata, profile);
-            return {
-                score: signal.score,
-                reason: signal.reason,
-                matchedSkills: signal.matchedSkills,
-            };
+        {
+            key: 'skills',
+            signal: () => scoreSkillMatch(metadata, profile),
         },
-        () => scoreRemoteRole(metadata, profile),
-        () => scoreWorkModelPreference(metadata, profile),
-        () => scoreLocationAlignment(metadata, profile),
-        () => scoreExperienceAlignment(metadata, profile),
-        () => scoreIndustryAlignment(metadata, profile),
-        () => ({ score: scoreSalarySignal(metadata) }),
-        () => ({ score: scoreFreshness(publishedTs) }),
+        {
+            key: 'role',
+            signal: () => scoreRoleAlignment(metadata, profile),
+        },
+        {
+            key: 'remote',
+            signal: () => scoreRemoteRole(metadata, profile),
+        },
+        {
+            key: 'workModel',
+            signal: () => scoreWorkModelPreference(metadata, profile),
+        },
+        {
+            key: 'location',
+            signal: () => scoreLocationAlignment(metadata, profile),
+        },
+        {
+            key: 'experience',
+            signal: () => scoreExperienceAlignment(metadata, profile),
+        },
+        {
+            key: 'industry',
+            signal: () => scoreIndustryAlignment(metadata, profile),
+        },
+        {
+            key: 'salarySignal',
+            signal: () => ({ score: scoreSalarySignal(metadata) }),
+        },
+        {
+            key: 'freshness',
+            signal: () => ({ score: scoreFreshness(publishedTs) }),
+        },
     ]);
     return {
         score: scoredSignals.score,
         reasons: scoredSignals.reasons,
         matchedSkills: scoredSignals.matchedSkills,
         publishedTs,
+        breakdown: scoredSignals.breakdown,
     };
 };
 exports.buildJobRecommendationScore = buildJobRecommendationScore;

@@ -132,6 +132,29 @@ const jobsPulseRateLimiter = (0, express_rate_limit_1.default)({
         });
     },
 });
+const jobsPreviewRateLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+        (0, securityLogger_1.logSecurityEvent)({
+            req,
+            type: 'rate_limit_triggered',
+            route: '/jobs/for-you',
+            metadata: {
+                key: 'jobs_for_you_read',
+                max: 120,
+                windowMs: 60 * 1000,
+            },
+        });
+        return res.status(429).json({
+            success: false,
+            error: 'Too many requests',
+            message: 'Too many preview recommendation requests. Please retry shortly.',
+        });
+    },
+});
 // Public company jobs feed (v1 discovery surface)
 router.post('/internal/jobs/aggregated', internalJobsIngestRateLimiter, internalApiAuth_1.internalApiAuth, internalJobsController_1.internalJobsController.ingestAggregatedJobs);
 router.get('/companies/:companyId/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listCompanyJobs);
@@ -139,6 +162,8 @@ router.get('/partner/jobs', partnerAuth_1.partnerAuth, jobSyndicationController_
 router.get('/companies/:companyId/job-analytics', authMiddleware_1.requireAuth, jobsController_1.jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', authMiddleware_1.requireAuth, jobApplicationAccessController_1.jobApplicationAccessController.getCompanyApplicationAttentionCount);
 router.get('/jobs', authMiddleware_1.optionalAuth, jobsController_1.jobsController.listPublicJobs);
+router.get('/jobs/hot', jobsPulseRateLimiter, authMiddleware_1.optionalAuth, jobsController_1.jobsController.listHotJobs);
+router.get('/jobs/for-you', jobsPreviewRateLimiter, authMiddleware_1.optionalAuth, jobRecommendationsController_1.jobRecommendationsController.listPreviewJobs);
 router.get('/jobs/pulse', jobsPulseRateLimiter, authMiddleware_1.optionalAuth, jobPulseController_1.jobPulseController.getJobsPulse);
 router.options('/jobs/open-feed', (_req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');

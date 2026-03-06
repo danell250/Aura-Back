@@ -1,10 +1,12 @@
 import { createHash } from 'crypto';
 import {
   buildJobRecommendationScore,
-  buildRecommendationCandidateFilter,
+  buildRecommendationCandidateCriteria,
   buildRecommendationProfile,
   resolveRecommendationMatchTier,
 } from './jobRecommendationService';
+import { buildRecommendationCandidateMongoFilter } from './jobRecommendationQueryBuilder';
+import { fetchPrioritizedRecommendationCandidateJobs } from './jobRecommendationResultService';
 import { recordJobPulseEvents, recordJobPulseEventsAsync } from './jobPulseService';
 import {
   dispatchGroupedReverseMatchNotifications,
@@ -936,9 +938,11 @@ export const listTopJobMatchesForUser = async (params: {
   user: any;
   limit?: number;
   candidateLimit?: number;
+  recordPulse?: boolean;
 }): Promise<any[]> => {
   const profile = buildRecommendationProfile(params.user);
-  const candidateFilter = buildRecommendationCandidateFilter(profile);
+  const candidateCriteria = buildRecommendationCandidateCriteria(profile);
+  const candidateFilter = buildRecommendationCandidateMongoFilter(candidateCriteria);
   const candidateLimit = Number.isFinite(Number(params.candidateLimit))
     ? Math.max(30, Math.round(Number(params.candidateLimit)))
     : DEFAULT_MATCH_CANDIDATE_LIMIT;
@@ -946,37 +950,15 @@ export const listTopJobMatchesForUser = async (params: {
     ? Math.max(1, Math.round(Number(params.limit)))
     : DEFAULT_PUBLIC_MATCH_LIMIT;
 
-  const preferredConditions = Array.isArray((candidateFilter as any)?.$or)
-    ? ((candidateFilter as any).$or as Array<Record<string, unknown>>)
-    : [];
-
-  let candidateJobs: any[] = [];
-  if (preferredConditions.length === 0) {
-    candidateJobs = await params.db.collection(JOBS_COLLECTION)
-      .find({ status: 'open' })
-      .sort({ publishedAt: -1, createdAt: -1 })
-      .limit(candidateLimit)
-      .toArray();
-  } else {
-    const coarseLimit = Math.min(600, Math.max(candidateLimit * 2, 160));
-    candidateJobs = await params.db.collection(JOBS_COLLECTION)
-      .aggregate([
-        { $match: { status: 'open' } },
-        { $sort: { publishedAt: -1, createdAt: -1 } },
-        { $limit: coarseLimit },
-        {
-          $addFields: {
-            __recommendationPriority: {
-              $cond: [{ $or: preferredConditions }, 1, 0],
-            },
-          },
-        },
-        { $sort: { __recommendationPriority: -1, publishedAt: -1, createdAt: -1 } },
-        { $limit: candidateLimit },
-        { $project: { __recommendationPriority: 0 } },
-      ])
-      .toArray();
-  }
+  const candidateJobs = await fetchPrioritizedRecommendationCandidateJobs({
+    db: params.db,
+    recommendationCandidateFilter: candidateFilter,
+    candidateLimit,
+    hasPrioritySignals:
+      candidateCriteria.skillTokens.length > 0
+      || candidateCriteria.semanticTokens.length > 0
+      || candidateCriteria.preferredWorkModels.length > 0,
+  });
 
   const scored = candidateJobs
     .map((job) => {
@@ -998,7 +980,7 @@ export const listTopJobMatchesForUser = async (params: {
   });
 
   const userId = readString((params.user as any)?.id, 120);
-  if (userId && results.length > 0) {
+  if ((params.recordPulse ?? true) && userId && results.length > 0) {
     const now = new Date();
     const bucketStartMs = Math.floor(now.getTime() / (10 * 60 * 1000)) * 10 * 60 * 1000;
     const bucketIso = new Date(bucketStartMs).toISOString();

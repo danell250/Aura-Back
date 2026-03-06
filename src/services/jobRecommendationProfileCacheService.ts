@@ -50,6 +50,7 @@ export const resolveCachedRecommendationProfile = async (
     {
       projection: {
         id: 1,
+        title: 1,
         skills: 1,
         profileSkills: 1,
         location: 1,

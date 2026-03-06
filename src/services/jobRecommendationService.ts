@@ -3,6 +3,8 @@ import { readString } from '../utils/inputSanitizers';
 const RECOMMENDATION_WEIGHTS = {
   skillPerMatch: 16,
   skillCap: 48,
+  rolePerMatch: 14,
+  roleCap: 28,
   remoteBonus: 18,
   workModelPreferenceBonus: 14,
   experienceDirectBonus: 10,
@@ -15,10 +17,14 @@ const RECOMMENDATION_WEIGHTS = {
   freshnessWeekBonus: 6,
   freshnessMonthBonus: 3,
 } as const;
+const RECOMMENDATION_METADATA_CACHE_MAX_KEYS = 1500;
+const RECOMMENDATION_PROFILE_CACHE_MAX_KEYS = 1000;
 
 export const MATCH_TIER_BEST_MIN_SCORE = 70;
 export const MATCH_TIER_GOOD_MIN_SCORE = 40;
 export type RecommendationMatchTier = 'best' | 'good' | 'other';
+const recommendationMetadataCache = new Map<string, JobRecommendationMetadata>();
+const recommendationProfileCache = new Map<string, RecommendationProfile>();
 
 export const resolveRecommendationMatchTier = (score: number): RecommendationMatchTier => {
   if (score >= MATCH_TIER_BEST_MIN_SCORE) return 'best';
@@ -221,10 +227,30 @@ const countSetIntersection = <T>(source: Set<T>, target: Set<T>): number => {
 
 export type RecommendationProfile = {
   skillTokens: Set<string>;
+  roleTokens: Set<string>;
   locationTokens: Set<string>;
   industryTokens: Set<string>;
   preferredWorkModels: Set<RecommendationWorkModel>;
   experienceLevel: RecommendationExperienceLevel | null;
+};
+
+export type RecommendationCandidateCriteria = {
+  status: 'open';
+  skillTokens: string[];
+  semanticTokens: string[];
+  preferredWorkModels: RecommendationWorkModel[];
+};
+
+export type RecommendationScoreBreakdown = {
+  skills: number;
+  role: number;
+  remote: number;
+  workModel: number;
+  location: number;
+  experience: number;
+  industry: number;
+  salarySignal: number;
+  freshness: number;
 };
 
 export type RecommendationScoreResult = {
@@ -232,12 +258,18 @@ export type RecommendationScoreResult = {
   reasons: string[];
   matchedSkills: string[];
   publishedTs: number;
+  breakdown: RecommendationScoreBreakdown;
 };
 
 type RecommendationSignalResult = {
   score: number;
   reason?: string;
   matchedSkills?: string[];
+};
+
+type RecommendationSignalRun = {
+  key: keyof RecommendationScoreBreakdown;
+  signal: () => RecommendationSignalResult;
 };
 
 type JobRecommendationMetadata = {
@@ -309,7 +341,73 @@ const resolveRecommendationIsRemoteRole = (job: any): boolean => {
     : (String(job?.workModel || '').toLowerCase() === 'remote');
 };
 
+const buildRecommendationMetadataCacheKey = (job: any): string => {
+  const jobId = typeof job?.id === 'string' ? job.id.trim() : '';
+  if (!jobId) return '';
+  const versionStamp = [
+    typeof job?.updatedAt === 'string' ? job.updatedAt.trim() : '',
+    typeof job?.publishedAt === 'string' ? job.publishedAt.trim() : '',
+    typeof job?.createdAt === 'string' ? job.createdAt.trim() : '',
+  ].find((value) => value.length > 0);
+  if (!versionStamp) return '';
+  return `job-id=${jobId}::version=${versionStamp}`;
+};
+
+const buildRecommendationProfileCacheKey = (user: any): string => {
+  const userId = typeof user?.id === 'string' ? user.id.trim() : '';
+  if (!userId) return '';
+
+  const versionStamp = [
+    typeof user?.updatedAt === 'string' ? user.updatedAt.trim() : '',
+    typeof user?.createdAt === 'string' ? user.createdAt.trim() : '',
+  ].find((value) => value.length > 0) || 'profile-static';
+
+  return `user-id=${userId}::version=${versionStamp}`;
+};
+
+const storeRecommendationMetadataCacheEntry = (
+  cacheKey: string,
+  metadata: JobRecommendationMetadata,
+) => {
+  if (!cacheKey) return;
+
+  recommendationMetadataCache.delete(cacheKey);
+  recommendationMetadataCache.set(cacheKey, metadata);
+
+  if (recommendationMetadataCache.size > RECOMMENDATION_METADATA_CACHE_MAX_KEYS) {
+    const oldestCacheKey = recommendationMetadataCache.keys().next().value as string | undefined;
+    if (oldestCacheKey) {
+      recommendationMetadataCache.delete(oldestCacheKey);
+    }
+  }
+};
+
+const storeRecommendationProfileCacheEntry = (
+  cacheKey: string,
+  profile: RecommendationProfile,
+) => {
+  if (!cacheKey) return;
+
+  recommendationProfileCache.delete(cacheKey);
+  recommendationProfileCache.set(cacheKey, profile);
+
+  if (recommendationProfileCache.size > RECOMMENDATION_PROFILE_CACHE_MAX_KEYS) {
+    const oldestCacheKey = recommendationProfileCache.keys().next().value as string | undefined;
+    if (oldestCacheKey) {
+      recommendationProfileCache.delete(oldestCacheKey);
+    }
+  }
+};
+
 const buildJobRecommendationMetadata = (job: any): JobRecommendationMetadata => {
+  const cacheKey = buildRecommendationMetadataCacheKey(job);
+  const cachedMetadata = cacheKey ? recommendationMetadataCache.get(cacheKey) : undefined;
+  if (cachedMetadata) {
+    recommendationMetadataCache.delete(cacheKey);
+    recommendationMetadataCache.set(cacheKey, cachedMetadata);
+    return cachedMetadata;
+  }
+
   const skillLabelByToken = buildRecommendationSkillMap(job);
   const locationTokens = buildRecommendationLocationTokens(job);
   const semanticTokens = buildRecommendationSemanticTokens(job);
@@ -319,7 +417,7 @@ const buildJobRecommendationMetadata = (job: any): JobRecommendationMetadata => 
   const workModel = normalizeWorkModelPreference(job?.workModel) || (isRemoteRole ? 'remote' : 'onsite');
   const inferredExperienceLevel = inferJobExperienceLevel(job);
 
-  return {
+  const metadata = {
     skillLabelByToken,
     locationTokens,
     semanticTokens,
@@ -329,6 +427,8 @@ const buildJobRecommendationMetadata = (job: any): JobRecommendationMetadata => 
     workModel,
     inferredExperienceLevel,
   };
+  storeRecommendationMetadataCacheEntry(cacheKey, metadata);
+  return metadata;
 };
 
 type RecommendationPrecomputeSource = {
@@ -382,10 +482,27 @@ export const buildJobRecommendationPrecomputedFields = (
 
 
 export const buildRecommendationProfile = (user: any): RecommendationProfile => {
+  const cacheKey = buildRecommendationProfileCacheKey(user);
+  const cachedProfile = cacheKey ? recommendationProfileCache.get(cacheKey) : undefined;
+  if (cachedProfile) {
+    recommendationProfileCache.delete(cacheKey);
+    recommendationProfileCache.set(cacheKey, cachedProfile);
+    return cachedProfile;
+  }
+
   const skillTokens = new Set<string>([
     ...readRecommendationSkillTokens((user as any)?.skills, 80),
     ...readRecommendationSkillTokens((user as any)?.profileSkills, 80),
   ]);
+  const roleTokens = new Set<string>(
+    tokenizeRecommendationText(
+      (user as any)?.title
+        || (user as any)?.role
+        || (user as any)?.desiredRole
+        || (user as any)?.jobTitle,
+      20,
+    ).filter((token) => token.length >= 3),
+  );
 
   const locationTokens = new Set<string>([
     ...tokenizeRecommendationText((user as any)?.location, 20).filter((token) => token.length >= 3),
@@ -398,36 +515,35 @@ export const buildRecommendationProfile = (user: any): RecommendationProfile => 
   const preferredWorkModels = readPreferredWorkModels(user);
   const experienceLevel = resolveExperienceLevel(user);
 
-  return {
+  const profile = {
     skillTokens,
+    roleTokens,
     locationTokens,
     industryTokens,
     preferredWorkModels,
     experienceLevel,
   };
+  storeRecommendationProfileCacheEntry(cacheKey, profile);
+  return profile;
 };
 
-export const buildRecommendationCandidateFilter = (
+export const buildRecommendationCandidateCriteria = (
   profile: RecommendationProfile,
-): Record<string, unknown> => {
+): RecommendationCandidateCriteria => {
   const skillTokens = Array.from(profile.skillTokens).slice(0, 20);
+  const semanticTokens = Array.from(
+    new Set([
+      ...Array.from(profile.roleTokens),
+      ...Array.from(profile.industryTokens),
+    ]),
+  ).slice(0, 16);
   const preferredWorkModels = Array.from(profile.preferredWorkModels);
-  const orFilters: Array<Record<string, unknown>> = [];
-
-  if (skillTokens.length > 0) {
-    orFilters.push({ tags: { $in: skillTokens } });
-  }
-  if (preferredWorkModels.length > 0) {
-    orFilters.push({ workModel: { $in: preferredWorkModels } });
-  }
-
-  if (orFilters.length === 0) {
-    return { status: 'open' };
-  }
 
   return {
     status: 'open',
-    $or: orFilters,
+    skillTokens,
+    semanticTokens,
+    preferredWorkModels,
   };
 };
 
@@ -450,6 +566,24 @@ const scoreSkillMatch = (
     ),
     matchedSkills,
     reason: `${matchedSkills.length} skill match${matchedSkills.length === 1 ? '' : 'es'}`,
+  };
+};
+
+const scoreRoleAlignment = (
+  metadata: JobRecommendationMetadata,
+  profile: RecommendationProfile,
+): { score: number; reason?: string } => {
+  if (profile.roleTokens.size === 0) return { score: 0 };
+
+  const roleMatchCount = countSetIntersection(profile.roleTokens, metadata.semanticTokens);
+  if (roleMatchCount === 0) return { score: 0 };
+
+  return {
+    score: Math.min(
+      RECOMMENDATION_WEIGHTS.roleCap,
+      roleMatchCount * RECOMMENDATION_WEIGHTS.rolePerMatch,
+    ),
+    reason: 'Role fit aligned',
   };
 };
 
@@ -560,27 +694,41 @@ const scoreFreshness = (publishedTs: number): number => {
 };
 
 const runRecommendationSignals = (
-  signals: Array<() => RecommendationSignalResult>,
-): { score: number; reasons: string[]; matchedSkills: string[] } => {
+  signalRuns: RecommendationSignalRun[],
+): {
+  score: number;
+  reasons: string[];
+  matchedSkills: string[];
+  breakdown: RecommendationScoreBreakdown;
+} => {
   const reasons: string[] = [];
-  let totalScore = 0;
   let matchedSkills: string[] = [];
+  const breakdown: RecommendationScoreBreakdown = {
+    skills: 0,
+    role: 0,
+    remote: 0,
+    workModel: 0,
+    location: 0,
+    experience: 0,
+    industry: 0,
+    salarySignal: 0,
+    freshness: 0,
+  };
 
-  for (const nextSignal of signals) {
-    const signal = nextSignal();
-    if (signal.score > 0) {
-      totalScore += signal.score;
-      if (signal.reason) reasons.push(signal.reason);
-    }
-    if (signal.matchedSkills && signal.matchedSkills.length > 0) {
-      matchedSkills = signal.matchedSkills;
+  for (const signalRun of signalRuns) {
+    const result = signalRun.signal();
+    breakdown[signalRun.key] = result.score;
+    if (result.reason) reasons.push(result.reason);
+    if (result.matchedSkills && result.matchedSkills.length > 0) {
+      matchedSkills = result.matchedSkills;
     }
   }
 
   return {
-    score: totalScore,
+    score: Object.values(breakdown).reduce((total, value) => total + value, 0),
     reasons,
     matchedSkills,
+    breakdown,
   };
 };
 
@@ -591,21 +739,42 @@ export const buildJobRecommendationScore = (
   const metadata = buildJobRecommendationMetadata(job);
   const publishedTs = metadata.publishedTs;
   const scoredSignals = runRecommendationSignals([
-    () => {
-      const signal = scoreSkillMatch(metadata, profile);
-      return {
-        score: signal.score,
-        reason: signal.reason,
-        matchedSkills: signal.matchedSkills,
-      };
+    {
+      key: 'skills',
+      signal: () => scoreSkillMatch(metadata, profile),
     },
-    () => scoreRemoteRole(metadata, profile),
-    () => scoreWorkModelPreference(metadata, profile),
-    () => scoreLocationAlignment(metadata, profile),
-    () => scoreExperienceAlignment(metadata, profile),
-    () => scoreIndustryAlignment(metadata, profile),
-    () => ({ score: scoreSalarySignal(metadata) }),
-    () => ({ score: scoreFreshness(publishedTs) }),
+    {
+      key: 'role',
+      signal: () => scoreRoleAlignment(metadata, profile),
+    },
+    {
+      key: 'remote',
+      signal: () => scoreRemoteRole(metadata, profile),
+    },
+    {
+      key: 'workModel',
+      signal: () => scoreWorkModelPreference(metadata, profile),
+    },
+    {
+      key: 'location',
+      signal: () => scoreLocationAlignment(metadata, profile),
+    },
+    {
+      key: 'experience',
+      signal: () => scoreExperienceAlignment(metadata, profile),
+    },
+    {
+      key: 'industry',
+      signal: () => scoreIndustryAlignment(metadata, profile),
+    },
+    {
+      key: 'salarySignal',
+      signal: () => ({ score: scoreSalarySignal(metadata) }),
+    },
+    {
+      key: 'freshness',
+      signal: () => ({ score: scoreFreshness(publishedTs) }),
+    },
   ]);
 
   return {
@@ -613,5 +782,6 @@ export const buildJobRecommendationScore = (
     reasons: scoredSignals.reasons,
     matchedSkills: scoredSignals.matchedSkills,
     publishedTs,
+    breakdown: scoredSignals.breakdown,
   };
 };

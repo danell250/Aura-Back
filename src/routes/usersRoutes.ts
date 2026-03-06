@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { usersController } from '../controllers/usersController';
+import { userOpportunityController } from '../controllers/userOpportunityController';
 import { requireAuth, requireAdmin } from '../middleware/authMiddleware';
 import { upload } from '../middleware/uploadMiddleware';
 import rateLimit from 'express-rate-limit';
@@ -141,6 +142,12 @@ router.post('/:id/remove-acquaintance', requireAuth, requirePersonalIdentity, re
 
 // POST /api/users/:id/record-profile-view - Record profile view
 router.post('/:id/record-profile-view', requireAuth, requirePersonalIdentity, usersController.recordProfileView);
+
+// POST /api/users/:id/invite-to-apply - Company identity invites a candidate to apply
+router.post('/:id/invite-to-apply', requireAuth, userOpportunityController.inviteToApply);
+
+// GET /api/users/:id/open-resume/view-url - Company identity or self opens the candidate resume
+router.get('/:id/open-resume/view-url', requireAuth, userOpportunityController.getOpenResumeViewUrl);
 
 // GET /api/users/:id/featured-posts - Get ordered featured posts for a profile
 router.get('/:id/featured-posts', usersController.getFeaturedPosts);

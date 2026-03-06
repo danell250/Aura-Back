@@ -57,6 +57,14 @@ const ensureNotificationIndexes = (db) => {
                     name: 'notifications_owner_type_year_idx',
                     sparse: true,
                 },
+                {
+                    key: { ownerType: 1, ownerId: 1, type: 1, timestamp: -1 },
+                    name: 'notifications_owner_type_timestamp_idx',
+                },
+                {
+                    key: { ownerType: 1, ownerId: 1, type: 1, 'fromUser.id': 1, timestamp: -1 },
+                    name: 'notifications_owner_type_actor_timestamp_idx',
+                },
             ]);
         }
         catch (error) {

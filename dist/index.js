@@ -79,6 +79,7 @@ const jobsRoutes_1 = __importDefault(require("./routes/jobsRoutes"));
 const notificationsController_1 = require("./controllers/notificationsController");
 const jobsController_1 = require("./controllers/jobsController");
 const jobPulseService_1 = require("./services/jobPulseService");
+const jobPulseSnapshotService_1 = require("./services/jobPulseSnapshotService");
 const reverseJobMatchService_1 = require("./services/reverseJobMatchService");
 const authMiddleware_1 = require("./middleware/authMiddleware");
 const csrfMiddleware_1 = require("./middleware/csrfMiddleware");
@@ -673,6 +674,7 @@ function bootstrapServerRuntime() {
                         .catch((indexError) => {
                         console.error('⚠️ Job pulse index warmup failed:', indexError);
                     });
+                    (0, jobPulseSnapshotService_1.ensureJobPulseSnapshotCleanupTimer)();
                     void (0, reverseJobMatchService_1.warmReverseMatchIndexes)((0, db_1.getDB)())
                         .then(() => {
                         console.log('🎯 Reverse match indexes ready');

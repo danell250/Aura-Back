@@ -12,6 +12,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.listTopJobMatchesForUser = exports.processReverseJobMatchesForIngestedPayload = exports.warmReverseMatchIndexes = exports.ensureReverseMatchIndexes = void 0;
 const crypto_1 = require("crypto");
 const jobRecommendationService_1 = require("./jobRecommendationService");
+const jobRecommendationQueryBuilder_1 = require("./jobRecommendationQueryBuilder");
+const jobRecommendationResultService_1 = require("./jobRecommendationResultService");
 const jobPulseService_1 = require("./jobPulseService");
 const reverseJobMatchNotificationService_1 = require("./reverseJobMatchNotificationService");
 const reverseJobMatchWorkerService_1 = require("./reverseJobMatchWorkerService");
@@ -737,46 +739,24 @@ const processReverseJobMatchesForIngestedPayload = (params) => __awaiter(void 0,
 });
 exports.processReverseJobMatchesForIngestedPayload = processReverseJobMatchesForIngestedPayload;
 const listTopJobMatchesForUser = (params) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
+    var _a, _b;
     const profile = (0, jobRecommendationService_1.buildRecommendationProfile)(params.user);
-    const candidateFilter = (0, jobRecommendationService_1.buildRecommendationCandidateFilter)(profile);
+    const candidateCriteria = (0, jobRecommendationService_1.buildRecommendationCandidateCriteria)(profile);
+    const candidateFilter = (0, jobRecommendationQueryBuilder_1.buildRecommendationCandidateMongoFilter)(candidateCriteria);
     const candidateLimit = Number.isFinite(Number(params.candidateLimit))
         ? Math.max(30, Math.round(Number(params.candidateLimit)))
         : DEFAULT_MATCH_CANDIDATE_LIMIT;
     const limit = Number.isFinite(Number(params.limit))
         ? Math.max(1, Math.round(Number(params.limit)))
         : DEFAULT_PUBLIC_MATCH_LIMIT;
-    const preferredConditions = Array.isArray(candidateFilter === null || candidateFilter === void 0 ? void 0 : candidateFilter.$or)
-        ? candidateFilter.$or
-        : [];
-    let candidateJobs = [];
-    if (preferredConditions.length === 0) {
-        candidateJobs = yield params.db.collection(JOBS_COLLECTION)
-            .find({ status: 'open' })
-            .sort({ publishedAt: -1, createdAt: -1 })
-            .limit(candidateLimit)
-            .toArray();
-    }
-    else {
-        const coarseLimit = Math.min(600, Math.max(candidateLimit * 2, 160));
-        candidateJobs = yield params.db.collection(JOBS_COLLECTION)
-            .aggregate([
-            { $match: { status: 'open' } },
-            { $sort: { publishedAt: -1, createdAt: -1 } },
-            { $limit: coarseLimit },
-            {
-                $addFields: {
-                    __recommendationPriority: {
-                        $cond: [{ $or: preferredConditions }, 1, 0],
-                    },
-                },
-            },
-            { $sort: { __recommendationPriority: -1, publishedAt: -1, createdAt: -1 } },
-            { $limit: candidateLimit },
-            { $project: { __recommendationPriority: 0 } },
-        ])
-            .toArray();
-    }
+    const candidateJobs = yield (0, jobRecommendationResultService_1.fetchPrioritizedRecommendationCandidateJobs)({
+        db: params.db,
+        recommendationCandidateFilter: candidateFilter,
+        candidateLimit,
+        hasPrioritySignals: candidateCriteria.skillTokens.length > 0
+            || candidateCriteria.semanticTokens.length > 0
+            || candidateCriteria.preferredWorkModels.length > 0,
+    });
     const scored = candidateJobs
         .map((job) => {
         const score = (0, jobRecommendationService_1.buildJobRecommendationScore)(job, profile);
@@ -789,7 +769,7 @@ const listTopJobMatchesForUser = (params) => __awaiter(void 0, void 0, void 0, f
         return Object.assign(Object.assign({}, entry.job), { recommendationScore: roundedScore, recommendationReasons: entry.reasons.slice(0, 3), matchedSkills: entry.matchedSkills.slice(0, 5), matchTier: (0, jobRecommendationService_1.resolveRecommendationMatchTier)(roundedScore) });
     });
     const userId = (0, inputSanitizers_1.readString)((_a = params.user) === null || _a === void 0 ? void 0 : _a.id, 120);
-    if (userId && results.length > 0) {
+    if (((_b = params.recordPulse) !== null && _b !== void 0 ? _b : true) && userId && results.length > 0) {
         const now = new Date();
         const bucketStartMs = Math.floor(now.getTime() / (10 * 60 * 1000)) * 10 * 60 * 1000;
         const bucketIso = new Date(bucketStartMs).toISOString();

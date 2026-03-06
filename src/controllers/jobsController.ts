@@ -14,6 +14,7 @@ import {
   scheduleJobApplicationPostCreateEffects,
 } from '../services/jobApplicationLifecycleService';
 import { recordJobPulseEventAsync } from '../services/jobPulseService';
+import { buildJobHeatResponseFields, listJobPulseSnapshots } from '../services/jobPulseSnapshotService';
 import { listTopJobMatchesForUser } from '../services/reverseJobMatchService';
 import { resolveCachedRecommendationProfile } from '../services/jobRecommendationProfileCacheService';
 import { awardStatusDrivenBadge } from '../services/userBadgeService';
@@ -434,6 +435,47 @@ export const toApplicationResponse = (application: any) => ({
   statusNote: application?.statusNote || null,
 });
 
+const indexPulseSnapshotsByJobId = (
+  snapshots: Awaited<ReturnType<typeof listJobPulseSnapshots>>,
+): Map<string, (typeof snapshots)[number]> =>
+  new Map(
+    snapshots.map((snapshot) => [readString(snapshot?.jobId, 120), snapshot] as const).filter(([jobId]) => jobId.length > 0),
+  );
+
+const attachHeatFieldsToJobResponses = async (params: {
+  db: any;
+  jobs: Array<Record<string, unknown>>;
+}): Promise<Array<Record<string, unknown>>> => {
+  const jobIds = params.jobs
+    .map((job) => readString(job?.id, 120))
+    .filter((jobId) => jobId.length > 0);
+  if (jobIds.length === 0) return params.jobs;
+
+  const pulseSnapshotsByJobId = indexPulseSnapshotsByJobId(
+    await listJobPulseSnapshots({
+      db: params.db,
+      requestedJobIds: jobIds,
+      limit: jobIds.length,
+    }),
+  );
+
+  return params.jobs.map((job) => ({
+    ...job,
+    ...buildJobHeatResponseFields(pulseSnapshotsByJobId.get(readString(job?.id, 120))),
+  }));
+};
+
+const attachHeatFieldsToJobResponse = async (params: {
+  db: any;
+  job: Record<string, unknown>;
+}): Promise<Record<string, unknown>> => {
+  const [jobWithHeat] = await attachHeatFieldsToJobResponses({
+    db: params.db,
+    jobs: [params.job],
+  });
+  return jobWithHeat || params.job;
+};
+
 const pendingJobViewCount = new Map<string, number>();
 let isJobViewFlushScheduled = false;
 let isJobViewShutdownHookRegistered = false;
@@ -530,7 +572,12 @@ const buildDiscoveredWindowFilter = (
   thresholdIso: string,
 ): Record<string, unknown> => {
   const hasBaseFilter = baseFilter && Object.keys(baseFilter).length > 0;
-  const discoveredClause = { createdAt: { $gte: thresholdIso } };
+  const discoveredClause = {
+    discoveredAt: {
+      $type: 'string',
+      $gte: thresholdIso,
+    },
+  };
   if (!hasBaseFilter) return discoveredClause;
   return { $and: [baseFilter, discoveredClause] };
 };
@@ -750,13 +797,18 @@ export const jobsController = {
           recommendationScore: roundedScore,
           recommendationReasons: recommendation.reasons.slice(0, 3),
           matchedSkills: recommendation.matchedSkills.slice(0, 5),
+          recommendationBreakdown: recommendation.breakdown,
           matchTier: resolveRecommendationMatchTier(roundedScore),
         };
+      });
+      const jobsWithHeat = await attachHeatFieldsToJobResponses({
+        db,
+        jobs: jobsWithRecommendations,
       });
 
       return res.json({
         success: true,
-        data: jobsWithRecommendations,
+        data: jobsWithHeat,
         meta: {
           discoveredLast30Minutes:
             Number.isFinite(discoveredLast30Minutes) && discoveredLast30Minutes > 0
@@ -773,6 +825,69 @@ export const jobsController = {
     } catch (error) {
       console.error('List public jobs error:', error);
       return res.status(500).json({ success: false, error: 'Failed to fetch jobs' });
+    }
+  },
+
+  // GET /api/jobs/hot
+  listHotJobs: async (req: Request, res: Response) => {
+    try {
+      if (!isDBConnected()) {
+        return res.json({
+          success: true,
+          data: [],
+          pagination: { page: 1, limit: 6, total: 0, pages: 0 },
+        });
+      }
+
+      const db = getDB();
+      const limit = parsePositiveInt((req.query as any)?.limit, 6, 1, 12);
+      const snapshots = await listJobPulseSnapshots({
+        db,
+        limit,
+        sortBy: 'heat',
+      });
+      const hotJobIds = snapshots
+        .map((snapshot) => readString(snapshot?.jobId, 120))
+        .filter((jobId) => jobId.length > 0);
+      if (hotJobIds.length === 0) {
+        return res.json({
+          success: true,
+          data: [],
+          pagination: { page: 1, limit, total: 0, pages: 0 },
+        });
+      }
+
+      const jobs = await db.collection(JOBS_COLLECTION)
+        .find({
+          id: { $in: hotJobIds },
+          status: 'open',
+        })
+        .toArray();
+      const jobsById = new Map(
+        jobs.map((job: any) => [readString(job?.id, 120), job] as const).filter(([jobId]) => jobId.length > 0),
+      );
+      const snapshotsByJobId = indexPulseSnapshotsByJobId(snapshots);
+      const data = hotJobIds
+        .map((jobId) => jobsById.get(jobId))
+        .filter(Boolean)
+        .map((job) => ({
+          ...toJobResponse(job),
+          ...buildJobHeatResponseFields(snapshotsByJobId.get(readString(job?.id, 120))),
+        }));
+
+      return res.json({
+        success: true,
+        data,
+        pagination: {
+          page: 1,
+          limit,
+          total: data.length,
+          pages: 1,
+        },
+      });
+    } catch (error) {
+      console.error('List hot jobs error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch hot jobs' });
     }
   },
 
@@ -852,9 +967,9 @@ export const jobsController = {
       });
 
       const normalizedHandle = readString((publicUser as any)?.handle, 120) || `@${rawHandle.toLowerCase()}`;
-      return res.json({
-        success: true,
-        data: matchedJobs.map((job) => ({
+      const matchedJobsWithHeat = await attachHeatFieldsToJobResponses({
+        db,
+        jobs: matchedJobs.map((job) => ({
           ...toJobResponse(job),
           recommendationScore:
             Number.isFinite((job as any)?.recommendationScore) && Number((job as any)?.recommendationScore) > 0
@@ -866,11 +981,20 @@ export const jobsController = {
           matchedSkills: Array.isArray((job as any)?.matchedSkills)
             ? (job as any).matchedSkills.slice(0, 5)
             : [],
+          recommendationBreakdown:
+            (job as any)?.recommendationBreakdown && typeof (job as any).recommendationBreakdown === 'object'
+              ? (job as any).recommendationBreakdown
+              : undefined,
           matchTier:
             (job as any)?.matchTier === 'best' || (job as any)?.matchTier === 'good' || (job as any)?.matchTier === 'other'
               ? (job as any).matchTier
               : 'other',
         })),
+      });
+
+      return res.json({
+        success: true,
+        data: matchedJobsWithHeat,
         meta: {
           user: {
             id: String((publicUser as any)?.id || ''),
@@ -1017,10 +1141,13 @@ export const jobsController = {
             : null;
           return res.json({
             success: true,
-            data: {
+            data: await attachHeatFieldsToJobResponse({
+              db,
+              job: {
               ...toJobResponse(byIdWithView),
               ...(skillGap ? { skillGap } : {}),
-            },
+              },
+            }),
           });
         }
       }
@@ -1045,10 +1172,13 @@ export const jobsController = {
         : null;
       return res.json({
         success: true,
-        data: {
+        data: await attachHeatFieldsToJobResponse({
+          db,
+          job: {
           ...toJobResponse(bySlugWithView),
           ...(skillGap ? { skillGap } : {}),
-        },
+          },
+        }),
       });
     } catch (error) {
       console.error('Get job by slug error:', error);
@@ -1084,10 +1214,13 @@ export const jobsController = {
         : null;
       return res.json({
         success: true,
-        data: {
+        data: await attachHeatFieldsToJobResponse({
+          db,
+          job: {
           ...toJobResponse(jobWithView),
           ...(skillGap ? { skillGap } : {}),
-        },
+          },
+        }),
       });
     } catch (error) {
       console.error('Get job error:', error);

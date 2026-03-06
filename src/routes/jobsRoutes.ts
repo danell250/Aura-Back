@@ -139,6 +139,31 @@ const jobsPulseRateLimiter = rateLimit({
   },
 });
 
+const jobsPreviewRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logSecurityEvent({
+      req,
+      type: 'rate_limit_triggered',
+      route: '/jobs/for-you',
+      metadata: {
+        key: 'jobs_for_you_read',
+        max: 120,
+        windowMs: 60 * 1000,
+      },
+    });
+
+    return res.status(429).json({
+      success: false,
+      error: 'Too many requests',
+      message: 'Too many preview recommendation requests. Please retry shortly.',
+    });
+  },
+});
+
 // Public company jobs feed (v1 discovery surface)
 router.post('/internal/jobs/aggregated', internalJobsIngestRateLimiter, internalApiAuth, internalJobsController.ingestAggregatedJobs);
 router.get('/companies/:companyId/jobs', optionalAuth, jobsController.listCompanyJobs);
@@ -146,6 +171,8 @@ router.get('/partner/jobs', partnerAuth, jobSyndicationController.getJobsForSynd
 router.get('/companies/:companyId/job-analytics', requireAuth, jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', requireAuth, jobApplicationAccessController.getCompanyApplicationAttentionCount);
 router.get('/jobs', optionalAuth, jobsController.listPublicJobs);
+router.get('/jobs/hot', jobsPulseRateLimiter, optionalAuth, jobsController.listHotJobs);
+router.get('/jobs/for-you', jobsPreviewRateLimiter, optionalAuth, jobRecommendationsController.listPreviewJobs);
 router.get('/jobs/pulse', jobsPulseRateLimiter, optionalAuth, jobPulseController.getJobsPulse);
 router.options('/jobs/open-feed', (_req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');

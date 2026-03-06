@@ -1,17 +1,21 @@
 import { Request, Response } from 'express';
 import { getDB, isDBConnected } from '../db';
 import {
-  buildJobRecommendationScore,
-  buildRecommendationCandidateFilter,
+  buildRecommendationCandidateCriteria,
   buildRecommendationProfile,
-  resolveRecommendationMatchTier,
+  type RecommendationScoreBreakdown,
   type RecommendationMatchTier,
 } from '../services/jobRecommendationService';
-import { parsePositiveInt, readString, readStringOrNull } from '../utils/inputSanitizers';
+import { buildRecommendationCandidateMongoFilter } from '../services/jobRecommendationQueryBuilder';
+import {
+  buildRankedRecommendationEntries,
+  fetchPrioritizedRecommendationCandidateJobs,
+} from '../services/jobRecommendationResultService';
+import { buildJobHeatResponseFields, listJobPulseSnapshots } from '../services/jobPulseSnapshotService';
+import { toJobResponse } from './jobsController';
+import { parsePositiveInt, readString } from '../utils/inputSanitizers';
 
-const JOBS_COLLECTION = 'jobs';
 const USERS_COLLECTION = 'users';
-const CAREER_PAGE_SOURCE_SITES = new Set(['greenhouse', 'lever', 'workday', 'smartrecruiters', 'careers']);
 
 type RecommendationPayload = {
   data: any[];
@@ -24,90 +28,46 @@ type RecommendationPayload = {
   };
 };
 
-const resolveSourceSite = (sourceValue: unknown): string => {
-  const source = readString(sourceValue, 120).toLowerCase();
-  if (!source) return '';
-  const [, suffix = source] = source.split(':', 2);
-  return readString(suffix, 120).toLowerCase();
-};
-
-const toRecommendedJobResponse = (job: any) => ({
-  id: String(job?.id || ''),
-  slug: readString(job?.slug, 220),
-  source: readString(job?.source, 120) || null,
-  sourceSite: resolveSourceSite(job?.source) || null,
-  isCareerPageSource: CAREER_PAGE_SOURCE_SITES.has(resolveSourceSite(job?.source)),
-  companyId: String(job?.companyId || ''),
-  companyName: String(job?.companyName || ''),
-  companyHandle: String(job?.companyHandle || ''),
-  companyIsVerified: Boolean(job?.companyIsVerified),
-  companyWebsite: readStringOrNull(job?.companyWebsite, 600),
-  companyEmail: readStringOrNull(job?.companyEmail, 200),
-  title: String(job?.title || ''),
-  summary: String(job?.summary || ''),
-  description: String(job?.description || ''),
-  locationText: String(job?.locationText || ''),
-  workModel: String(job?.workModel || 'onsite'),
-  employmentType: String(job?.employmentType || 'full_time'),
-  salaryMin: typeof job?.salaryMin === 'number' ? job.salaryMin : null,
-  salaryMax: typeof job?.salaryMax === 'number' ? job.salaryMax : null,
-  salaryCurrency: String(job?.salaryCurrency || ''),
-  applicationDeadline: job?.applicationDeadline || null,
-  status: String(job?.status || 'open'),
-  tags: Array.isArray(job?.tags) ? job.tags : [],
-  createdByUserId: String(job?.createdByUserId || ''),
-  createdAt: job?.createdAt || null,
-  updatedAt: job?.updatedAt || null,
-  publishedAt: job?.publishedAt || null,
-  announcementPostId: job?.announcementPostId || null,
-  applicationUrl: readStringOrNull(job?.applicationUrl, 600),
-  applicationEmail: readStringOrNull(job?.applicationEmail, 200),
-  applicationCount: Number.isFinite(job?.applicationCount) ? Number(job.applicationCount) : 0,
-  viewCount: Number.isFinite(job?.viewCount) ? Number(job.viewCount) : 0,
-});
-
-const fetchRecommendationCandidateJobs = async (params: {
-  db: any;
-  recommendationCandidateFilter: Record<string, unknown>;
-  candidateLimit: number;
-}): Promise<any[]> => {
-  const preferredConditions = Array.isArray((params.recommendationCandidateFilter as any)?.$or)
-    ? ((params.recommendationCandidateFilter as any).$or as Array<Record<string, unknown>>)
-    : [];
-
-  if (preferredConditions.length === 0) {
-    return params.db.collection(JOBS_COLLECTION)
-      .find({ status: 'open' })
-      .sort({ publishedAt: -1, createdAt: -1 })
-      .limit(params.candidateLimit)
-      .toArray();
+const normalizePreviewSkills = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((item) => String(item || '').split(','))
+      .map((item) => readString(item, 80))
+      .filter((item) => item.length > 0)
+      .slice(0, 20);
   }
 
-  const coarseLimit = Math.min(600, Math.max(params.candidateLimit * 2, 160));
-  return params.db.collection(JOBS_COLLECTION)
-    .aggregate([
-      { $match: { status: 'open' } },
-      { $sort: { publishedAt: -1, createdAt: -1 } },
-      { $limit: coarseLimit },
-      {
-        $addFields: {
-          __recommendationPriority: {
-            $cond: [{ $or: preferredConditions }, 1, 0],
-          },
-        },
-      },
-      { $sort: { __recommendationPriority: -1, publishedAt: -1, createdAt: -1 } },
-      { $limit: params.candidateLimit },
-      { $project: { __recommendationPriority: 0 } },
-    ])
-    .toArray();
+  return readString(value, 400)
+    .split(',')
+    .map((item) => readString(item, 80))
+    .filter((item) => item.length > 0)
+    .slice(0, 20);
 };
 
-const buildRecommendationPayload = (params: {
+const toRecommendationResponseEntry = (
+  job: any,
+  recommendation: {
+    score: number;
+    reasons: string[];
+    matchedSkills: string[];
+    breakdown: RecommendationScoreBreakdown;
+    matchTier: RecommendationMatchTier;
+  },
+) => ({
+  ...toJobResponse(job),
+  recommendationScore: recommendation.score,
+  recommendationReasons: recommendation.reasons.slice(0, 3),
+  matchedSkills: recommendation.matchedSkills.slice(0, 5),
+  recommendationBreakdown: recommendation.breakdown,
+  matchTier: recommendation.matchTier,
+});
+
+const buildRecommendationPayload = async (params: {
+  db: any;
   candidateJobs: any[];
   recommendationProfile: ReturnType<typeof buildRecommendationProfile>;
   limit: number;
-}): RecommendationPayload => {
+}): Promise<RecommendationPayload> => {
   if (params.candidateJobs.length === 0) {
     return {
       data: [],
@@ -116,47 +76,40 @@ const buildRecommendationPayload = (params: {
     };
   }
 
-  const scoredJobs = params.candidateJobs.map((job) => {
-    const scoreResult = buildJobRecommendationScore(job, params.recommendationProfile);
-    return {
-      job,
-      ...scoreResult,
-    };
+  const { entries, groups } = await buildRankedRecommendationEntries({
+    candidateJobs: params.candidateJobs,
+    recommendationProfile: params.recommendationProfile,
+    limit: params.limit,
   });
-
-  const rankedMatches = scoredJobs
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => (b.score - a.score) || (b.publishedTs - a.publishedTs));
-
-  const selectedEntries = (rankedMatches.length > 0 ? rankedMatches : scoredJobs).slice(0, params.limit);
-  const groupedEntries = selectedEntries.map((entry) => ({
-    ...entry,
-    matchTier: resolveRecommendationMatchTier(entry.score),
-  }));
-  const orderedEntries = [
-    ...groupedEntries.filter((entry) => entry.matchTier === 'best'),
-    ...groupedEntries.filter((entry) => entry.matchTier === 'good'),
-    ...groupedEntries.filter((entry) => entry.matchTier === 'other'),
-  ];
-  const groups: Record<RecommendationMatchTier, number> = {
-    best: groupedEntries.filter((entry) => entry.matchTier === 'best').length,
-    good: groupedEntries.filter((entry) => entry.matchTier === 'good').length,
-    other: groupedEntries.filter((entry) => entry.matchTier === 'other').length,
-  };
+  const pulseSnapshotsByJobId = new Map(
+    (
+      await listJobPulseSnapshots({
+        db: params.db,
+        requestedJobIds: entries.map((entry) => readString(entry?.job?.id, 120)).filter((jobId) => jobId.length > 0),
+        limit: entries.length,
+      })
+    ).map((snapshot) => [readString(snapshot?.jobId, 120), snapshot] as const),
+  );
 
   return {
-    data: orderedEntries.map((entry) => ({
-      ...toRecommendedJobResponse(entry.job),
-      recommendationScore: entry.score,
-      recommendationReasons: entry.reasons.slice(0, 3),
-      matchedSkills: entry.matchedSkills.slice(0, 5),
-      matchTier: entry.matchTier,
-    })),
+    data: entries.map((entry) => {
+      const score = Math.max(0, Math.round(entry.score));
+      return {
+        ...toRecommendationResponseEntry(entry.job, {
+          score,
+          reasons: entry.reasons,
+          matchedSkills: entry.matchedSkills,
+          breakdown: entry.breakdown,
+          matchTier: entry.matchTier,
+        }),
+        ...buildJobHeatResponseFields(pulseSnapshotsByJobId.get(readString(entry?.job?.id, 120))),
+      };
+    }),
     groups,
     pagination: {
       page: 1,
       limit: params.limit,
-      total: orderedEntries.length,
+      total: entries.length,
       pages: 1,
     },
   };
@@ -181,12 +134,13 @@ export const jobRecommendationsController = {
 
       const db = getDB();
       const limit = parsePositiveInt((req.query as any)?.limit, 20, 1, 40);
-      const candidateLimit = parsePositiveInt((req.query as any)?.candidateLimit, 100, 30, 120);
+      const candidateLimit = parsePositiveInt((req.query as any)?.candidateLimit, 80, 30, 90);
       const user = await db.collection(USERS_COLLECTION).findOne(
         { id: currentUserId },
         {
           projection: {
             id: 1,
+            title: 1,
             skills: 1,
             profileSkills: 1,
             location: 1,
@@ -213,14 +167,20 @@ export const jobRecommendationsController = {
       }
 
       const recommendationProfile = buildRecommendationProfile(user);
-      const recommendationCandidateFilter = buildRecommendationCandidateFilter(recommendationProfile);
-      const candidateJobs = await fetchRecommendationCandidateJobs({
+      const recommendationCandidateCriteria = buildRecommendationCandidateCriteria(recommendationProfile);
+      const recommendationCandidateFilter = buildRecommendationCandidateMongoFilter(recommendationCandidateCriteria);
+      const candidateJobs = await fetchPrioritizedRecommendationCandidateJobs({
         db,
         recommendationCandidateFilter,
         candidateLimit,
+        hasPrioritySignals:
+          recommendationCandidateCriteria.skillTokens.length > 0
+          || recommendationCandidateCriteria.semanticTokens.length > 0
+          || recommendationCandidateCriteria.preferredWorkModels.length > 0,
       });
 
-      const payload = buildRecommendationPayload({
+      const payload = await buildRecommendationPayload({
+        db,
         candidateJobs,
         recommendationProfile,
         limit,
@@ -233,6 +193,71 @@ export const jobRecommendationsController = {
     } catch (error) {
       console.error('List recommended jobs error:', error);
       return res.status(500).json({ success: false, error: 'Failed to fetch recommended jobs' });
+    }
+  },
+
+  // GET /api/jobs/for-you
+  listPreviewJobs: async (req: Request, res: Response) => {
+    try {
+      const role = readString((req.query as any)?.role, 120);
+      const location = readString((req.query as any)?.location, 120);
+      const workModel = readString((req.query as any)?.workModel, 40).toLowerCase();
+      const skills = normalizePreviewSkills((req.query as any)?.skills);
+      const limit = parsePositiveInt((req.query as any)?.limit, 20, 1, 30);
+      const candidateLimit = parsePositiveInt((req.query as any)?.candidateLimit, 80, 30, 90);
+
+      if (!role && !location && !workModel && skills.length === 0) {
+        return res.status(400).json({ success: false, error: 'At least one preview signal is required' });
+      }
+
+      if (!isDBConnected()) {
+        return res.status(503).json({
+          success: false,
+          error: 'Preview recommendations are temporarily unavailable',
+        });
+      }
+
+      const db = getDB();
+      const recommendationProfile = buildRecommendationProfile({
+        title: role,
+        skills,
+        location,
+        preferredWorkModels: workModel ? [workModel] : [],
+      });
+      const recommendationCandidateCriteria = buildRecommendationCandidateCriteria(recommendationProfile);
+      const recommendationCandidateFilter = buildRecommendationCandidateMongoFilter(recommendationCandidateCriteria);
+      const candidateJobs = await fetchPrioritizedRecommendationCandidateJobs({
+        db,
+        recommendationCandidateFilter,
+        candidateLimit,
+        hasPrioritySignals:
+          recommendationCandidateCriteria.skillTokens.length > 0
+          || recommendationCandidateCriteria.semanticTokens.length > 0
+          || recommendationCandidateCriteria.preferredWorkModels.length > 0,
+      });
+      const payload = await buildRecommendationPayload({
+        db,
+        candidateJobs,
+        recommendationProfile,
+        limit,
+      });
+
+      return res.json({
+        success: true,
+        ...payload,
+        meta: {
+          preview: {
+            role,
+            location,
+            workModel: workModel || null,
+            skills,
+            requiresSignupForSaveAndApply: true,
+          },
+        },
+      });
+    } catch (error) {
+      console.error('List preview jobs error:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch preview jobs' });
     }
   },
 };

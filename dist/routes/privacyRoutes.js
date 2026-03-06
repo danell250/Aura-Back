@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const privacyController_1 = require("../controllers/privacyController");
+const profileAnalyticsController_1 = require("../controllers/profileAnalyticsController");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = (0, express_1.Router)();
 // GET /api/privacy/settings/:userId - Get user's privacy settings
@@ -13,7 +14,7 @@ router.post('/analytics-event', authMiddleware_1.requireAuth, privacyController_
 // GET /api/privacy/searchable-users - Get users that allow being found in search (public)
 router.get('/searchable-users', privacyController_1.privacyController.getSearchableUsers);
 // POST /api/privacy/profile-view - Record profile view
-router.post('/profile-view', authMiddleware_1.requireAuth, privacyController_1.privacyController.recordProfileView);
+router.post('/profile-view', authMiddleware_1.requireAuth, profileAnalyticsController_1.profileAnalyticsController.recordProfileView);
 // GET /api/privacy/online-status/:userId - Get user's online status (public)
 router.get('/online-status/:userId', privacyController_1.privacyController.getOnlineStatus);
 exports.default = router;

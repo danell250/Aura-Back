@@ -31,6 +31,7 @@ import jobsRoutes from './routes/jobsRoutes';
 import { startNotificationCleanupWorker } from './controllers/notificationsController';
 import { ensureJobsTextIndex, registerJobViewCountShutdownHooks } from './controllers/jobsController';
 import { ensureJobPulseIndexes } from './services/jobPulseService';
+import { ensureJobPulseSnapshotCleanupTimer } from './services/jobPulseSnapshotService';
 import { warmReverseMatchIndexes } from './services/reverseJobMatchService';
 import { attachUser, requireAuth } from './middleware/authMiddleware';
 import { createCsrfProtection } from './middleware/csrfMiddleware';
@@ -709,6 +710,7 @@ async function bootstrapServerRuntime() {
           .catch((indexError) => {
             console.error('⚠️ Job pulse index warmup failed:', indexError);
           });
+        ensureJobPulseSnapshotCleanupTimer();
         void warmReverseMatchIndexes(getDB())
           .then(() => {
             console.log('🎯 Reverse match indexes ready');

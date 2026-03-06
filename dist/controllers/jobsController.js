@@ -24,6 +24,7 @@ const jobRecommendationService_1 = require("../services/jobRecommendationService
 const companyJobAnalyticsService_1 = require("../services/companyJobAnalyticsService");
 const jobApplicationLifecycleService_1 = require("../services/jobApplicationLifecycleService");
 const jobPulseService_1 = require("../services/jobPulseService");
+const jobPulseSnapshotService_1 = require("../services/jobPulseSnapshotService");
 const reverseJobMatchService_1 = require("../services/reverseJobMatchService");
 const jobRecommendationProfileCacheService_1 = require("../services/jobRecommendationProfileCacheService");
 const userBadgeService_1 = require("../services/userBadgeService");
@@ -376,6 +377,27 @@ const toApplicationResponse = (application) => ({
     statusNote: (application === null || application === void 0 ? void 0 : application.statusNote) || null,
 });
 exports.toApplicationResponse = toApplicationResponse;
+const indexPulseSnapshotsByJobId = (snapshots) => new Map(snapshots.map((snapshot) => [(0, inputSanitizers_1.readString)(snapshot === null || snapshot === void 0 ? void 0 : snapshot.jobId, 120), snapshot]).filter(([jobId]) => jobId.length > 0));
+const attachHeatFieldsToJobResponses = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    const jobIds = params.jobs
+        .map((job) => (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.id, 120))
+        .filter((jobId) => jobId.length > 0);
+    if (jobIds.length === 0)
+        return params.jobs;
+    const pulseSnapshotsByJobId = indexPulseSnapshotsByJobId(yield (0, jobPulseSnapshotService_1.listJobPulseSnapshots)({
+        db: params.db,
+        requestedJobIds: jobIds,
+        limit: jobIds.length,
+    }));
+    return params.jobs.map((job) => (Object.assign(Object.assign({}, job), (0, jobPulseSnapshotService_1.buildJobHeatResponseFields)(pulseSnapshotsByJobId.get((0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.id, 120))))));
+});
+const attachHeatFieldsToJobResponse = (params) => __awaiter(void 0, void 0, void 0, function* () {
+    const [jobWithHeat] = yield attachHeatFieldsToJobResponses({
+        db: params.db,
+        jobs: [params.job],
+    });
+    return jobWithHeat || params.job;
+});
 const pendingJobViewCount = new Map();
 let isJobViewFlushScheduled = false;
 let isJobViewShutdownHookRegistered = false;
@@ -464,7 +486,12 @@ const withOptimisticViewCount = (job) => (Object.assign(Object.assign({}, job), 
         : 1 }));
 const buildDiscoveredWindowFilter = (baseFilter, thresholdIso) => {
     const hasBaseFilter = baseFilter && Object.keys(baseFilter).length > 0;
-    const discoveredClause = { createdAt: { $gte: thresholdIso } };
+    const discoveredClause = {
+        discoveredAt: {
+            $type: 'string',
+            $gte: thresholdIso,
+        },
+    };
     if (!hasBaseFilter)
         return discoveredClause;
     return { $and: [baseFilter, discoveredClause] };
@@ -648,11 +675,15 @@ exports.jobsController = {
                     return base;
                 const recommendation = (0, jobRecommendationService_1.buildJobRecommendationScore)(item, recommendationProfile);
                 const roundedScore = Math.max(0, Math.round(recommendation.score));
-                return Object.assign(Object.assign({}, base), { recommendationScore: roundedScore, recommendationReasons: recommendation.reasons.slice(0, 3), matchedSkills: recommendation.matchedSkills.slice(0, 5), matchTier: (0, jobRecommendationService_1.resolveRecommendationMatchTier)(roundedScore) });
+                return Object.assign(Object.assign({}, base), { recommendationScore: roundedScore, recommendationReasons: recommendation.reasons.slice(0, 3), matchedSkills: recommendation.matchedSkills.slice(0, 5), recommendationBreakdown: recommendation.breakdown, matchTier: (0, jobRecommendationService_1.resolveRecommendationMatchTier)(roundedScore) });
+            });
+            const jobsWithHeat = yield attachHeatFieldsToJobResponses({
+                db,
+                jobs: jobsWithRecommendations,
             });
             return res.json({
                 success: true,
-                data: jobsWithRecommendations,
+                data: jobsWithHeat,
                 meta: {
                     discoveredLast30Minutes: Number.isFinite(discoveredLast30Minutes) && discoveredLast30Minutes > 0
                         ? Number(discoveredLast30Minutes)
@@ -669,6 +700,62 @@ exports.jobsController = {
         catch (error) {
             console.error('List public jobs error:', error);
             return res.status(500).json({ success: false, error: 'Failed to fetch jobs' });
+        }
+    }),
+    // GET /api/jobs/hot
+    listHotJobs: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        try {
+            if (!(0, db_1.isDBConnected)()) {
+                return res.json({
+                    success: true,
+                    data: [],
+                    pagination: { page: 1, limit: 6, total: 0, pages: 0 },
+                });
+            }
+            const db = (0, db_1.getDB)();
+            const limit = (0, inputSanitizers_1.parsePositiveInt)((_a = req.query) === null || _a === void 0 ? void 0 : _a.limit, 6, 1, 12);
+            const snapshots = yield (0, jobPulseSnapshotService_1.listJobPulseSnapshots)({
+                db,
+                limit,
+                sortBy: 'heat',
+            });
+            const hotJobIds = snapshots
+                .map((snapshot) => (0, inputSanitizers_1.readString)(snapshot === null || snapshot === void 0 ? void 0 : snapshot.jobId, 120))
+                .filter((jobId) => jobId.length > 0);
+            if (hotJobIds.length === 0) {
+                return res.json({
+                    success: true,
+                    data: [],
+                    pagination: { page: 1, limit, total: 0, pages: 0 },
+                });
+            }
+            const jobs = yield db.collection(JOBS_COLLECTION)
+                .find({
+                id: { $in: hotJobIds },
+                status: 'open',
+            })
+                .toArray();
+            const jobsById = new Map(jobs.map((job) => [(0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.id, 120), job]).filter(([jobId]) => jobId.length > 0));
+            const snapshotsByJobId = indexPulseSnapshotsByJobId(snapshots);
+            const data = hotJobIds
+                .map((jobId) => jobsById.get(jobId))
+                .filter(Boolean)
+                .map((job) => (Object.assign(Object.assign({}, (0, exports.toJobResponse)(job)), (0, jobPulseSnapshotService_1.buildJobHeatResponseFields)(snapshotsByJobId.get((0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.id, 120))))));
+            return res.json({
+                success: true,
+                data,
+                pagination: {
+                    page: 1,
+                    limit,
+                    total: data.length,
+                    pages: 1,
+                },
+            });
+        }
+        catch (error) {
+            console.error('List hot jobs error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to fetch hot jobs' });
         }
     }),
     // GET /api/jobs/matches/:handle
@@ -735,17 +822,23 @@ exports.jobsController = {
                 limit,
             });
             const normalizedHandle = (0, inputSanitizers_1.readString)(publicUser === null || publicUser === void 0 ? void 0 : publicUser.handle, 120) || `@${rawHandle.toLowerCase()}`;
-            return res.json({
-                success: true,
-                data: matchedJobs.map((job) => (Object.assign(Object.assign({}, (0, exports.toJobResponse)(job)), { recommendationScore: Number.isFinite(job === null || job === void 0 ? void 0 : job.recommendationScore) && Number(job === null || job === void 0 ? void 0 : job.recommendationScore) > 0
+            const matchedJobsWithHeat = yield attachHeatFieldsToJobResponses({
+                db,
+                jobs: matchedJobs.map((job) => (Object.assign(Object.assign({}, (0, exports.toJobResponse)(job)), { recommendationScore: Number.isFinite(job === null || job === void 0 ? void 0 : job.recommendationScore) && Number(job === null || job === void 0 ? void 0 : job.recommendationScore) > 0
                         ? Number(job.recommendationScore)
                         : 0, recommendationReasons: Array.isArray(job === null || job === void 0 ? void 0 : job.recommendationReasons)
                         ? job.recommendationReasons.slice(0, 3)
                         : [], matchedSkills: Array.isArray(job === null || job === void 0 ? void 0 : job.matchedSkills)
                         ? job.matchedSkills.slice(0, 5)
-                        : [], matchTier: (job === null || job === void 0 ? void 0 : job.matchTier) === 'best' || (job === null || job === void 0 ? void 0 : job.matchTier) === 'good' || (job === null || job === void 0 ? void 0 : job.matchTier) === 'other'
+                        : [], recommendationBreakdown: (job === null || job === void 0 ? void 0 : job.recommendationBreakdown) && typeof job.recommendationBreakdown === 'object'
+                        ? job.recommendationBreakdown
+                        : undefined, matchTier: (job === null || job === void 0 ? void 0 : job.matchTier) === 'best' || (job === null || job === void 0 ? void 0 : job.matchTier) === 'good' || (job === null || job === void 0 ? void 0 : job.matchTier) === 'other'
                         ? job.matchTier
                         : 'other' }))),
+            });
+            return res.json({
+                success: true,
+                data: matchedJobsWithHeat,
                 meta: {
                     user: {
                         id: String((publicUser === null || publicUser === void 0 ? void 0 : publicUser.id) || ''),
@@ -885,7 +978,10 @@ exports.jobsController = {
                         : null;
                     return res.json({
                         success: true,
-                        data: Object.assign(Object.assign({}, (0, exports.toJobResponse)(byIdWithView)), (skillGap ? { skillGap } : {})),
+                        data: yield attachHeatFieldsToJobResponse({
+                            db,
+                            job: Object.assign(Object.assign({}, (0, exports.toJobResponse)(byIdWithView)), (skillGap ? { skillGap } : {})),
+                        }),
                     });
                 }
             }
@@ -908,7 +1004,10 @@ exports.jobsController = {
                 : null;
             return res.json({
                 success: true,
-                data: Object.assign(Object.assign({}, (0, exports.toJobResponse)(bySlugWithView)), (skillGap ? { skillGap } : {})),
+                data: yield attachHeatFieldsToJobResponse({
+                    db,
+                    job: Object.assign(Object.assign({}, (0, exports.toJobResponse)(bySlugWithView)), (skillGap ? { skillGap } : {})),
+                }),
             });
         }
         catch (error) {
@@ -942,7 +1041,10 @@ exports.jobsController = {
                 : null;
             return res.json({
                 success: true,
-                data: Object.assign(Object.assign({}, (0, exports.toJobResponse)(jobWithView)), (skillGap ? { skillGap } : {})),
+                data: yield attachHeatFieldsToJobResponse({
+                    db,
+                    job: Object.assign(Object.assign({}, (0, exports.toJobResponse)(jobWithView)), (skillGap ? { skillGap } : {})),
+                }),
             });
         }
         catch (error) {

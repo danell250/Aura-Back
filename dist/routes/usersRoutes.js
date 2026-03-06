@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const usersController_1 = require("../controllers/usersController");
+const userOpportunityController_1 = require("../controllers/userOpportunityController");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const uploadMiddleware_1 = require("../middleware/uploadMiddleware");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
@@ -114,6 +115,10 @@ router.post('/:id/report', authMiddleware_1.requireAuth, requirePersonalIdentity
 router.post('/:id/remove-acquaintance', authMiddleware_1.requireAuth, requirePersonalIdentity, requireSelfParam, usersController_1.usersController.removeAcquaintance);
 // POST /api/users/:id/record-profile-view - Record profile view
 router.post('/:id/record-profile-view', authMiddleware_1.requireAuth, requirePersonalIdentity, usersController_1.usersController.recordProfileView);
+// POST /api/users/:id/invite-to-apply - Company identity invites a candidate to apply
+router.post('/:id/invite-to-apply', authMiddleware_1.requireAuth, userOpportunityController_1.userOpportunityController.inviteToApply);
+// GET /api/users/:id/open-resume/view-url - Company identity or self opens the candidate resume
+router.get('/:id/open-resume/view-url', authMiddleware_1.requireAuth, userOpportunityController_1.userOpportunityController.getOpenResumeViewUrl);
 // GET /api/users/:id/featured-posts - Get ordered featured posts for a profile
 router.get('/:id/featured-posts', usersController_1.usersController.getFeaturedPosts);
 // PUT /api/users/:id/featured-posts - Update ordered featured posts for the authenticated personal profile

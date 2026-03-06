@@ -12,83 +12,28 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.jobRecommendationsController = void 0;
 const db_1 = require("../db");
 const jobRecommendationService_1 = require("../services/jobRecommendationService");
+const jobRecommendationQueryBuilder_1 = require("../services/jobRecommendationQueryBuilder");
+const jobRecommendationResultService_1 = require("../services/jobRecommendationResultService");
+const jobPulseSnapshotService_1 = require("../services/jobPulseSnapshotService");
+const jobsController_1 = require("./jobsController");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
-const JOBS_COLLECTION = 'jobs';
 const USERS_COLLECTION = 'users';
-const CAREER_PAGE_SOURCE_SITES = new Set(['greenhouse', 'lever', 'workday', 'smartrecruiters', 'careers']);
-const resolveSourceSite = (sourceValue) => {
-    const source = (0, inputSanitizers_1.readString)(sourceValue, 120).toLowerCase();
-    if (!source)
-        return '';
-    const [, suffix = source] = source.split(':', 2);
-    return (0, inputSanitizers_1.readString)(suffix, 120).toLowerCase();
-};
-const toRecommendedJobResponse = (job) => ({
-    id: String((job === null || job === void 0 ? void 0 : job.id) || ''),
-    slug: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.slug, 220),
-    source: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.source, 120) || null,
-    sourceSite: resolveSourceSite(job === null || job === void 0 ? void 0 : job.source) || null,
-    isCareerPageSource: CAREER_PAGE_SOURCE_SITES.has(resolveSourceSite(job === null || job === void 0 ? void 0 : job.source)),
-    companyId: String((job === null || job === void 0 ? void 0 : job.companyId) || ''),
-    companyName: String((job === null || job === void 0 ? void 0 : job.companyName) || ''),
-    companyHandle: String((job === null || job === void 0 ? void 0 : job.companyHandle) || ''),
-    companyIsVerified: Boolean(job === null || job === void 0 ? void 0 : job.companyIsVerified),
-    companyWebsite: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.companyWebsite, 600),
-    companyEmail: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.companyEmail, 200),
-    title: String((job === null || job === void 0 ? void 0 : job.title) || ''),
-    summary: String((job === null || job === void 0 ? void 0 : job.summary) || ''),
-    description: String((job === null || job === void 0 ? void 0 : job.description) || ''),
-    locationText: String((job === null || job === void 0 ? void 0 : job.locationText) || ''),
-    workModel: String((job === null || job === void 0 ? void 0 : job.workModel) || 'onsite'),
-    employmentType: String((job === null || job === void 0 ? void 0 : job.employmentType) || 'full_time'),
-    salaryMin: typeof (job === null || job === void 0 ? void 0 : job.salaryMin) === 'number' ? job.salaryMin : null,
-    salaryMax: typeof (job === null || job === void 0 ? void 0 : job.salaryMax) === 'number' ? job.salaryMax : null,
-    salaryCurrency: String((job === null || job === void 0 ? void 0 : job.salaryCurrency) || ''),
-    applicationDeadline: (job === null || job === void 0 ? void 0 : job.applicationDeadline) || null,
-    status: String((job === null || job === void 0 ? void 0 : job.status) || 'open'),
-    tags: Array.isArray(job === null || job === void 0 ? void 0 : job.tags) ? job.tags : [],
-    createdByUserId: String((job === null || job === void 0 ? void 0 : job.createdByUserId) || ''),
-    createdAt: (job === null || job === void 0 ? void 0 : job.createdAt) || null,
-    updatedAt: (job === null || job === void 0 ? void 0 : job.updatedAt) || null,
-    publishedAt: (job === null || job === void 0 ? void 0 : job.publishedAt) || null,
-    announcementPostId: (job === null || job === void 0 ? void 0 : job.announcementPostId) || null,
-    applicationUrl: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationUrl, 600),
-    applicationEmail: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationEmail, 200),
-    applicationCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.applicationCount) ? Number(job.applicationCount) : 0,
-    viewCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.viewCount) ? Number(job.viewCount) : 0,
-});
-const fetchRecommendationCandidateJobs = (params) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
-    const preferredConditions = Array.isArray((_a = params.recommendationCandidateFilter) === null || _a === void 0 ? void 0 : _a.$or)
-        ? params.recommendationCandidateFilter.$or
-        : [];
-    if (preferredConditions.length === 0) {
-        return params.db.collection(JOBS_COLLECTION)
-            .find({ status: 'open' })
-            .sort({ publishedAt: -1, createdAt: -1 })
-            .limit(params.candidateLimit)
-            .toArray();
+const normalizePreviewSkills = (value) => {
+    if (Array.isArray(value)) {
+        return value
+            .flatMap((item) => String(item || '').split(','))
+            .map((item) => (0, inputSanitizers_1.readString)(item, 80))
+            .filter((item) => item.length > 0)
+            .slice(0, 20);
     }
-    const coarseLimit = Math.min(600, Math.max(params.candidateLimit * 2, 160));
-    return params.db.collection(JOBS_COLLECTION)
-        .aggregate([
-        { $match: { status: 'open' } },
-        { $sort: { publishedAt: -1, createdAt: -1 } },
-        { $limit: coarseLimit },
-        {
-            $addFields: {
-                __recommendationPriority: {
-                    $cond: [{ $or: preferredConditions }, 1, 0],
-                },
-            },
-        },
-        { $sort: { __recommendationPriority: -1, publishedAt: -1, createdAt: -1 } },
-        { $limit: params.candidateLimit },
-        { $project: { __recommendationPriority: 0 } },
-    ])
-        .toArray();
-});
-const buildRecommendationPayload = (params) => {
+    return (0, inputSanitizers_1.readString)(value, 400)
+        .split(',')
+        .map((item) => (0, inputSanitizers_1.readString)(item, 80))
+        .filter((item) => item.length > 0)
+        .slice(0, 20);
+};
+const toRecommendationResponseEntry = (job, recommendation) => (Object.assign(Object.assign({}, (0, jobsController_1.toJobResponse)(job)), { recommendationScore: recommendation.score, recommendationReasons: recommendation.reasons.slice(0, 3), matchedSkills: recommendation.matchedSkills.slice(0, 5), recommendationBreakdown: recommendation.breakdown, matchTier: recommendation.matchTier }));
+const buildRecommendationPayload = (params) => __awaiter(void 0, void 0, void 0, function* () {
     if (params.candidateJobs.length === 0) {
         return {
             data: [],
@@ -96,36 +41,37 @@ const buildRecommendationPayload = (params) => {
             pagination: { page: 1, limit: params.limit, total: 0, pages: 0 },
         };
     }
-    const scoredJobs = params.candidateJobs.map((job) => {
-        const scoreResult = (0, jobRecommendationService_1.buildJobRecommendationScore)(job, params.recommendationProfile);
-        return Object.assign({ job }, scoreResult);
+    const { entries, groups } = yield (0, jobRecommendationResultService_1.buildRankedRecommendationEntries)({
+        candidateJobs: params.candidateJobs,
+        recommendationProfile: params.recommendationProfile,
+        limit: params.limit,
     });
-    const rankedMatches = scoredJobs
-        .filter((entry) => entry.score > 0)
-        .sort((a, b) => (b.score - a.score) || (b.publishedTs - a.publishedTs));
-    const selectedEntries = (rankedMatches.length > 0 ? rankedMatches : scoredJobs).slice(0, params.limit);
-    const groupedEntries = selectedEntries.map((entry) => (Object.assign(Object.assign({}, entry), { matchTier: (0, jobRecommendationService_1.resolveRecommendationMatchTier)(entry.score) })));
-    const orderedEntries = [
-        ...groupedEntries.filter((entry) => entry.matchTier === 'best'),
-        ...groupedEntries.filter((entry) => entry.matchTier === 'good'),
-        ...groupedEntries.filter((entry) => entry.matchTier === 'other'),
-    ];
-    const groups = {
-        best: groupedEntries.filter((entry) => entry.matchTier === 'best').length,
-        good: groupedEntries.filter((entry) => entry.matchTier === 'good').length,
-        other: groupedEntries.filter((entry) => entry.matchTier === 'other').length,
-    };
+    const pulseSnapshotsByJobId = new Map((yield (0, jobPulseSnapshotService_1.listJobPulseSnapshots)({
+        db: params.db,
+        requestedJobIds: entries.map((entry) => { var _a; return (0, inputSanitizers_1.readString)((_a = entry === null || entry === void 0 ? void 0 : entry.job) === null || _a === void 0 ? void 0 : _a.id, 120); }).filter((jobId) => jobId.length > 0),
+        limit: entries.length,
+    })).map((snapshot) => [(0, inputSanitizers_1.readString)(snapshot === null || snapshot === void 0 ? void 0 : snapshot.jobId, 120), snapshot]));
     return {
-        data: orderedEntries.map((entry) => (Object.assign(Object.assign({}, toRecommendedJobResponse(entry.job)), { recommendationScore: entry.score, recommendationReasons: entry.reasons.slice(0, 3), matchedSkills: entry.matchedSkills.slice(0, 5), matchTier: entry.matchTier }))),
+        data: entries.map((entry) => {
+            var _a;
+            const score = Math.max(0, Math.round(entry.score));
+            return Object.assign(Object.assign({}, toRecommendationResponseEntry(entry.job, {
+                score,
+                reasons: entry.reasons,
+                matchedSkills: entry.matchedSkills,
+                breakdown: entry.breakdown,
+                matchTier: entry.matchTier,
+            })), (0, jobPulseSnapshotService_1.buildJobHeatResponseFields)(pulseSnapshotsByJobId.get((0, inputSanitizers_1.readString)((_a = entry === null || entry === void 0 ? void 0 : entry.job) === null || _a === void 0 ? void 0 : _a.id, 120))));
+        }),
         groups,
         pagination: {
             page: 1,
             limit: params.limit,
-            total: orderedEntries.length,
+            total: entries.length,
             pages: 1,
         },
     };
-};
+});
 exports.jobRecommendationsController = {
     // GET /api/jobs/recommended
     listRecommendedJobs: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
@@ -144,10 +90,11 @@ exports.jobRecommendationsController = {
             }
             const db = (0, db_1.getDB)();
             const limit = (0, inputSanitizers_1.parsePositiveInt)((_b = req.query) === null || _b === void 0 ? void 0 : _b.limit, 20, 1, 40);
-            const candidateLimit = (0, inputSanitizers_1.parsePositiveInt)((_c = req.query) === null || _c === void 0 ? void 0 : _c.candidateLimit, 100, 30, 120);
+            const candidateLimit = (0, inputSanitizers_1.parsePositiveInt)((_c = req.query) === null || _c === void 0 ? void 0 : _c.candidateLimit, 80, 30, 90);
             const user = yield db.collection(USERS_COLLECTION).findOne({ id: currentUserId }, {
                 projection: {
                     id: 1,
+                    title: 1,
                     skills: 1,
                     profileSkills: 1,
                     location: 1,
@@ -171,13 +118,18 @@ exports.jobRecommendationsController = {
                 return res.status(404).json({ success: false, error: 'User not found' });
             }
             const recommendationProfile = (0, jobRecommendationService_1.buildRecommendationProfile)(user);
-            const recommendationCandidateFilter = (0, jobRecommendationService_1.buildRecommendationCandidateFilter)(recommendationProfile);
-            const candidateJobs = yield fetchRecommendationCandidateJobs({
+            const recommendationCandidateCriteria = (0, jobRecommendationService_1.buildRecommendationCandidateCriteria)(recommendationProfile);
+            const recommendationCandidateFilter = (0, jobRecommendationQueryBuilder_1.buildRecommendationCandidateMongoFilter)(recommendationCandidateCriteria);
+            const candidateJobs = yield (0, jobRecommendationResultService_1.fetchPrioritizedRecommendationCandidateJobs)({
                 db,
                 recommendationCandidateFilter,
                 candidateLimit,
+                hasPrioritySignals: recommendationCandidateCriteria.skillTokens.length > 0
+                    || recommendationCandidateCriteria.semanticTokens.length > 0
+                    || recommendationCandidateCriteria.preferredWorkModels.length > 0,
             });
-            const payload = buildRecommendationPayload({
+            const payload = yield buildRecommendationPayload({
+                db,
                 candidateJobs,
                 recommendationProfile,
                 limit,
@@ -187,6 +139,63 @@ exports.jobRecommendationsController = {
         catch (error) {
             console.error('List recommended jobs error:', error);
             return res.status(500).json({ success: false, error: 'Failed to fetch recommended jobs' });
+        }
+    }),
+    // GET /api/jobs/for-you
+    listPreviewJobs: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f;
+        try {
+            const role = (0, inputSanitizers_1.readString)((_a = req.query) === null || _a === void 0 ? void 0 : _a.role, 120);
+            const location = (0, inputSanitizers_1.readString)((_b = req.query) === null || _b === void 0 ? void 0 : _b.location, 120);
+            const workModel = (0, inputSanitizers_1.readString)((_c = req.query) === null || _c === void 0 ? void 0 : _c.workModel, 40).toLowerCase();
+            const skills = normalizePreviewSkills((_d = req.query) === null || _d === void 0 ? void 0 : _d.skills);
+            const limit = (0, inputSanitizers_1.parsePositiveInt)((_e = req.query) === null || _e === void 0 ? void 0 : _e.limit, 20, 1, 30);
+            const candidateLimit = (0, inputSanitizers_1.parsePositiveInt)((_f = req.query) === null || _f === void 0 ? void 0 : _f.candidateLimit, 80, 30, 90);
+            if (!role && !location && !workModel && skills.length === 0) {
+                return res.status(400).json({ success: false, error: 'At least one preview signal is required' });
+            }
+            if (!(0, db_1.isDBConnected)()) {
+                return res.status(503).json({
+                    success: false,
+                    error: 'Preview recommendations are temporarily unavailable',
+                });
+            }
+            const db = (0, db_1.getDB)();
+            const recommendationProfile = (0, jobRecommendationService_1.buildRecommendationProfile)({
+                title: role,
+                skills,
+                location,
+                preferredWorkModels: workModel ? [workModel] : [],
+            });
+            const recommendationCandidateCriteria = (0, jobRecommendationService_1.buildRecommendationCandidateCriteria)(recommendationProfile);
+            const recommendationCandidateFilter = (0, jobRecommendationQueryBuilder_1.buildRecommendationCandidateMongoFilter)(recommendationCandidateCriteria);
+            const candidateJobs = yield (0, jobRecommendationResultService_1.fetchPrioritizedRecommendationCandidateJobs)({
+                db,
+                recommendationCandidateFilter,
+                candidateLimit,
+                hasPrioritySignals: recommendationCandidateCriteria.skillTokens.length > 0
+                    || recommendationCandidateCriteria.semanticTokens.length > 0
+                    || recommendationCandidateCriteria.preferredWorkModels.length > 0,
+            });
+            const payload = yield buildRecommendationPayload({
+                db,
+                candidateJobs,
+                recommendationProfile,
+                limit,
+            });
+            return res.json(Object.assign(Object.assign({ success: true }, payload), { meta: {
+                    preview: {
+                        role,
+                        location,
+                        workModel: workModel || null,
+                        skills,
+                        requiresSignupForSaveAndApply: true,
+                    },
+                } }));
+        }
+        catch (error) {
+            console.error('List preview jobs error:', error);
+            return res.status(500).json({ success: false, error: 'Failed to fetch preview jobs' });
         }
     }),
 };

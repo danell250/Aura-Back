@@ -10,6 +10,7 @@ import { emitToIdentity } from '../realtime/socketHub';
 import { getFullCompanyCreditBalance } from '../utils/companyAccess';
 import { createNotificationInDB } from './notificationsController';
 import { listUserBadges } from '../services/userBadgeService';
+import { buildOpenToWorkProfileResponse } from '../services/openToWorkProfileService';
 
 const generateUniqueHandle = async (firstName: string, lastName: string): Promise<string> => {
   const db = getDB();
@@ -130,6 +131,17 @@ const USER_SELF_UPDATE_ALLOWLIST = new Set<string>([
   'country',
   'website',
   'profileLinks',
+  'openToWork',
+  'availability',
+  'preferredRoles',
+  'preferredLocations',
+  'preferredWorkModels',
+  'salaryExpectation',
+  'portfolioUrl',
+  'resumeKey',
+  'resumeFileName',
+  'resumeMimeType',
+  'resumeSize',
   'dob',
   'zodiacSign',
   'avatar',
@@ -147,6 +159,41 @@ const USER_SELF_UPDATE_ALLOWLIST = new Set<string>([
 
 const MAX_PROFILE_LINKS = 8;
 const MAX_FEATURED_POSTS = 3;
+const ALLOWED_OPEN_TO_WORK_MODELS = new Set<string>(['remote', 'hybrid', 'onsite']);
+
+const sanitizeStringList = (value: unknown, maxItems: number, maxLength: number): string[] | null => {
+  if (!Array.isArray(value)) return null;
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const normalized = item.trim().slice(0, maxLength);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(normalized);
+    if (next.length >= maxItems) break;
+  }
+  return next;
+};
+
+const sanitizeWorkModelPreferences = (value: unknown): string[] | null => {
+  const normalized = sanitizeStringList(value, 4, 40);
+  if (!normalized) return null;
+  return normalized
+    .map((item) => item.toLowerCase())
+    .map((item) => (item === 'on-site' || item === 'on_site' ? 'onsite' : item))
+    .filter((item, index, array) => ALLOWED_OPEN_TO_WORK_MODELS.has(item) && array.indexOf(item) === index);
+};
+
+const sanitizePortfolioUrl = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim().slice(0, 300);
+  if (!trimmed) return '';
+  const prefixed = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  return /^https?:\/\/.+/i.test(prefixed) ? prefixed : '';
+};
 
 const normalizeFeaturedPostIds = (input: unknown): string[] | null => {
   if (!Array.isArray(input)) return null;
@@ -248,6 +295,18 @@ const PUBLIC_USER_PROFILE_FIELDS = new Set<string>([
   'activeGlow',
   'userMode',
   'joinedLabel',
+  'openToWork',
+  'availability',
+  'preferredRoles',
+  'preferredLocations',
+  'preferredWorkModels',
+  'salaryExpectation',
+  'portfolioUrl',
+  'resumeAvailable',
+  'profileCompleteness',
+  'topSkills',
+  'jobsMatchingNow',
+  'demandSignals',
   'type'
 ]);
 
@@ -836,11 +895,17 @@ export const usersController = {
         const transformed = transformUser(user);
         const requesterId = (req as any).user?.id;
         const isSelf = typeof requesterId === 'string' && requesterId === id;
+        const openToWorkFields = await buildOpenToWorkProfileResponse({
+          db,
+          user,
+          isSelf,
+        });
         return res.json({
           success: true,
           type: 'user',
           data: {
             ...(isSelf ? transformed : sanitizePublicUserProfile(transformed)),
+            ...openToWorkFields,
             type: 'user'
           }
         });
@@ -923,11 +988,17 @@ export const usersController = {
         const transformed = transformUser(user);
         const requesterId = (req as any).user?.id;
         const isSelf = typeof requesterId === 'string' && requesterId === user.id;
+        const openToWorkFields = await buildOpenToWorkProfileResponse({
+          db,
+          user,
+          isSelf,
+        });
         return res.json({
           success: true,
           type: 'user',
           data: {
             ...(isSelf ? transformed : sanitizePublicUserProfile(transformed)),
+            ...openToWorkFields,
             type: 'user'
           }
         });
@@ -1031,6 +1102,13 @@ export const usersController = {
         bio: typeof userData.bio === 'string' ? userData.bio : '',
         phone: typeof userData.phone === 'string' ? userData.phone : '',
         country: typeof userData.country === 'string' ? userData.country : '',
+        openToWork: false,
+        availability: '',
+        preferredRoles: [],
+        preferredLocations: [],
+        preferredWorkModels: [],
+        salaryExpectation: '',
+        portfolioUrl: '',
         acquaintances: [],
         blockedUsers: [],
         trustScore: 10,
@@ -1151,6 +1229,91 @@ export const usersController = {
       if (typeof mutableUpdates.website === 'string') {
         const website = mutableUpdates.website.trim();
         updateData.website = website ? (/^https?:\/\//i.test(website) ? website : `https://${website}`) : '';
+      }
+
+      if (mutableUpdates.openToWork !== undefined) {
+        updateData.openToWork = mutableUpdates.openToWork === true;
+      }
+
+      if (typeof mutableUpdates.availability === 'string') {
+        updateData.availability = mutableUpdates.availability.trim().slice(0, 120);
+      }
+
+      if (typeof mutableUpdates.salaryExpectation === 'string') {
+        updateData.salaryExpectation = mutableUpdates.salaryExpectation.trim().slice(0, 120);
+      }
+
+      if (mutableUpdates.preferredRoles !== undefined) {
+        const preferredRoles = sanitizeStringList(mutableUpdates.preferredRoles, 6, 120);
+        if (!preferredRoles) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid preferredRoles',
+            message: 'preferredRoles must be an array of strings.',
+          });
+        }
+        updateData.preferredRoles = preferredRoles;
+      }
+
+      if (mutableUpdates.preferredLocations !== undefined) {
+        const preferredLocations = sanitizeStringList(mutableUpdates.preferredLocations, 6, 120);
+        if (!preferredLocations) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid preferredLocations',
+            message: 'preferredLocations must be an array of strings.',
+          });
+        }
+        updateData.preferredLocations = preferredLocations;
+      }
+
+      if (mutableUpdates.preferredWorkModels !== undefined) {
+        const preferredWorkModels = sanitizeWorkModelPreferences(mutableUpdates.preferredWorkModels);
+        if (!preferredWorkModels) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid preferredWorkModels',
+            message: 'preferredWorkModels must be an array containing remote, hybrid, or onsite.',
+          });
+        }
+        updateData.preferredWorkModels = preferredWorkModels;
+      }
+
+      if (mutableUpdates.portfolioUrl !== undefined) {
+        updateData.portfolioUrl = sanitizePortfolioUrl(mutableUpdates.portfolioUrl);
+      }
+
+      const nextResumeKey = typeof mutableUpdates.resumeKey === 'string'
+        ? mutableUpdates.resumeKey.trim().slice(0, 500)
+        : '';
+      if (mutableUpdates.resumeKey !== undefined) {
+        updateData.resumeKey = nextResumeKey;
+        updateData.defaultResumeKey = nextResumeKey;
+      }
+
+      if (typeof mutableUpdates.resumeFileName === 'string') {
+        const resumeFileName = mutableUpdates.resumeFileName.trim().slice(0, 200);
+        updateData.resumeFileName = resumeFileName;
+        updateData.defaultResumeFileName = resumeFileName;
+      }
+
+      if (typeof mutableUpdates.resumeMimeType === 'string') {
+        const resumeMimeType = mutableUpdates.resumeMimeType.trim().slice(0, 120);
+        updateData.resumeMimeType = resumeMimeType;
+        updateData.defaultResumeMimeType = resumeMimeType;
+      }
+
+      if (mutableUpdates.resumeSize !== undefined) {
+        const resumeSize = Number(mutableUpdates.resumeSize);
+        if (!Number.isFinite(resumeSize) || resumeSize < 0 || resumeSize > 10 * 1024 * 1024) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid resumeSize',
+            message: 'resumeSize must be between 0 and 10MB.',
+          });
+        }
+        updateData.resumeSize = resumeSize;
+        updateData.defaultResumeSize = resumeSize;
       }
 
       if (mutableUpdates.profileLinks !== undefined) {
