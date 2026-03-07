@@ -14,14 +14,17 @@ const db_1 = require("../db");
 const trustService_1 = require("../services/trustService");
 const notificationsController_1 = require("../controllers/notificationsController");
 const jobMarketDemandSnapshotService_1 = require("../services/jobMarketDemandSnapshotService");
+const jobAlertDigestService_1 = require("../services/jobAlertDigestService");
 const reverseJobMatchDigestService_1 = require("../services/reverseJobMatchDigestService");
 const jobSeoSitemapService_1 = require("../services/jobSeoSitemapService");
 const runtimeRecurringTaskService_1 = require("../services/runtimeRecurringTaskService");
 const NOTIFICATION_BATCH_SIZE = 25;
 const JOB_MARKET_DEMAND_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const JOBS_SITEMAP_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const JOB_ALERT_DIGEST_RUN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const JOB_MARKET_DEMAND_SNAPSHOT_LOCK_TTL_MS = 90 * 60 * 1000;
 const JOBS_SITEMAP_REFRESH_LOCK_TTL_MS = 30 * 60 * 1000;
+const JOB_ALERT_DIGEST_LOCK_TTL_MS = 5 * 60 * 60 * 1000;
 const runInBatches = (items, batchSize, task) => __awaiter(void 0, void 0, void 0, function* () {
     for (let index = 0; index < items.length; index += batchSize) {
         const batch = items.slice(index, index + batchSize);
@@ -155,11 +158,35 @@ const startJobsSitemapRefreshJob = () => {
         }),
     });
 };
+const startJobAlertDigestJob = () => {
+    (0, runtimeRecurringTaskService_1.startRecurringTaskRunner)({
+        intervalMs: JOB_ALERT_DIGEST_RUN_INTERVAL_MS,
+        run: () => __awaiter(void 0, void 0, void 0, function* () {
+            try {
+                const result = yield (0, runtimeRecurringTaskService_1.runLockedRecurringTask)({
+                    jobKey: 'job-alert-digests',
+                    ttlMs: JOB_ALERT_DIGEST_LOCK_TTL_MS,
+                    task: (db) => __awaiter(void 0, void 0, void 0, function* () {
+                        yield (0, jobAlertDigestService_1.sendScheduledJobAlertDigests)(db);
+                        return true;
+                    }),
+                });
+                if (!result) {
+                    console.log('⏭️ Skipped job alert digest run (lock held by another instance)');
+                }
+            }
+            catch (error) {
+                console.error('❌ Failed scheduled job alert digest run:', error);
+            }
+        }),
+    });
+};
 const startRuntimeRecurringJobs = () => {
     startDatabaseHealthCheckJob();
     startTrustScoreRecalculationJob();
     startTimeCapsuleUnlockNotificationJob();
     startReverseJobMatchDigestJob();
+    startJobAlertDigestJob();
     startJobMarketDemandSnapshotJob();
     startJobsSitemapRefreshJob();
 };

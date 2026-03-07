@@ -14,6 +14,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateCompanyJobStatus = exports.updateCompanyJob = exports.createCompanyJob = void 0;
 const crypto_1 = __importDefault(require("crypto"));
+const jobAlertCategoryService_1 = require("./jobAlertCategoryService");
 const jobRecommendationService_1 = require("./jobRecommendationService");
 const openToWorkDemandService_1 = require("./openToWorkDemandService");
 const jobResponseService_1 = require("./jobResponseService");
@@ -87,7 +88,15 @@ const applyJobPrecomputedFields = (job) => {
         publishedAt: job.publishedAt,
     });
     Object.assign(job, (0, jobRecommendationService_1.buildJobRecommendationPrecomputedFields)(recommendationSource));
-    Object.assign(job, (0, openToWorkDemandService_1.buildDemandRoleFields)(job.title) || {});
+    const demandRoleFields = (0, openToWorkDemandService_1.buildDemandRoleFields)(job.title) || {};
+    Object.assign(job, demandRoleFields);
+    Object.assign(job, (0, jobAlertCategoryService_1.buildJobAlertCategoryFields)({
+        title: job.title,
+        summary: job.summary,
+        description: job.description,
+        tags: job.tags,
+        demandRoleFamily: demandRoleFields === null || demandRoleFields === void 0 ? void 0 : demandRoleFields.demandRoleFamily,
+    }));
     Object.assign(job, (0, openToWorkDemandService_1.buildJobMarketDemandPrecomputedFields)(recommendationSource));
 };
 const persistCreatedJob = (params) => __awaiter(void 0, void 0, void 0, function* () {
@@ -222,11 +231,21 @@ const applyUpdatedJobDerivedFields = (params) => {
     });
     params.updates.updatedAt = new Date().toISOString();
     Object.assign(params.updates, (0, jobRecommendationService_1.buildJobRecommendationPrecomputedFields)(recommendationSource));
+    let nextDemandRoleFamily = (0, inputSanitizers_1.readString)(params.existingJob.demandRoleFamily, 120);
     if (params.updates.title !== undefined
         || !(0, inputSanitizers_1.readString)(params.existingJob.demandRoleFamily, 120)
         || !(0, inputSanitizers_1.readString)(params.existingJob.demandRoleLabel, 120)) {
-        Object.assign(params.updates, (0, openToWorkDemandService_1.buildDemandRoleFields)(recommendationSource.title) || {});
+        const demandRoleFields = (0, openToWorkDemandService_1.buildDemandRoleFields)(recommendationSource.title) || {};
+        nextDemandRoleFamily = (0, inputSanitizers_1.readString)(demandRoleFields === null || demandRoleFields === void 0 ? void 0 : demandRoleFields.demandRoleFamily, 120);
+        Object.assign(params.updates, demandRoleFields);
     }
+    Object.assign(params.updates, (0, jobAlertCategoryService_1.buildJobAlertCategoryFields)({
+        title: recommendationSource.title,
+        summary: recommendationSource.summary,
+        description: recommendationSource.description,
+        tags: recommendationSource.tags,
+        demandRoleFamily: nextDemandRoleFamily,
+    }));
     if (params.updates.salaryMin !== undefined
         || params.updates.salaryMax !== undefined
         || params.updates.publishedAt !== undefined
@@ -429,9 +448,19 @@ const updateCompanyJobStatus = (params) => __awaiter(void 0, void 0, void 0, fun
     if (params.nextStatus === 'open') {
         Object.assign(nextUpdate, (0, jobRecommendationService_1.buildJobRecommendationPrecomputedFields)(recommendationSource));
     }
+    let nextDemandRoleFamily = (0, inputSanitizers_1.readString)(params.existingJob.demandRoleFamily, 120);
     if (!(0, inputSanitizers_1.readString)(params.existingJob.demandRoleFamily, 120) || !(0, inputSanitizers_1.readString)(params.existingJob.demandRoleLabel, 120)) {
-        Object.assign(nextUpdate, (0, openToWorkDemandService_1.buildDemandRoleFields)(recommendationSource.title) || {});
+        const demandRoleFields = (0, openToWorkDemandService_1.buildDemandRoleFields)(recommendationSource.title) || {};
+        nextDemandRoleFamily = (0, inputSanitizers_1.readString)(demandRoleFields === null || demandRoleFields === void 0 ? void 0 : demandRoleFields.demandRoleFamily, 120);
+        Object.assign(nextUpdate, demandRoleFields);
     }
+    Object.assign(nextUpdate, (0, jobAlertCategoryService_1.buildJobAlertCategoryFields)({
+        title: recommendationSource.title,
+        summary: recommendationSource.summary,
+        description: recommendationSource.description,
+        tags: recommendationSource.tags,
+        demandRoleFamily: nextDemandRoleFamily,
+    }));
     if (params.nextStatus === 'open'
         && (nextUpdate.publishedAt !== undefined || !Number.isFinite(Number(params.existingJob.marketDemandFreshnessTs)))) {
         Object.assign(nextUpdate, (0, openToWorkDemandService_1.buildJobMarketDemandPrecomputedFields)(recommendationSource));

@@ -76,6 +76,7 @@ type JobAlertCategoryResolvable = {
   roleFamily?: unknown;
   title?: unknown;
   summary?: unknown;
+  description?: unknown;
   tags?: unknown;
 };
 
@@ -89,6 +90,7 @@ export const resolveJobAlertCategory = (job: JobAlertCategoryResolvable): JobAle
   const haystack = [
     readString(job?.title, 240),
     readString(job?.summary, 800),
+    readString(job?.description, 2000),
     ...(Array.isArray(job?.tags) ? job.tags.map((tag) => readString(tag, 80)) : []),
   ]
     .join(' ')

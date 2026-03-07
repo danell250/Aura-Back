@@ -13,6 +13,7 @@ const jobMarketDemandController_1 = require("../controllers/jobMarketDemandContr
 const jobApplicationController_1 = require("../controllers/jobApplicationController");
 const jobApplicationAccessController_1 = require("../controllers/jobApplicationAccessController");
 const jobDiscoveryController_1 = require("../controllers/jobDiscoveryController");
+const jobAlertsController_1 = require("../controllers/jobAlertsController");
 const jobMatchShareController_1 = require("../controllers/jobMatchShareController");
 const jobNetworkController_1 = require("../controllers/jobNetworkController");
 const savedJobsController_1 = require("../controllers/savedJobsController");
@@ -162,6 +163,29 @@ const jobsPreviewRateLimiter = (0, express_rate_limit_1.default)({
         });
     },
 });
+const jobsAlertsSubscribeRateLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => {
+        (0, securityLogger_1.logSecurityEvent)({
+            req,
+            type: 'rate_limit_triggered',
+            route: '/jobs/alerts/subscribe',
+            metadata: {
+                key: 'jobs_alerts_subscribe',
+                max: 10,
+                windowMs: 60 * 60 * 1000,
+            },
+        });
+        return res.status(429).json({
+            success: false,
+            error: 'Too many requests',
+            message: 'Too many alert signups from this address. Please try again later.',
+        });
+    },
+});
 const jobsMarketDemandRateLimiter = (0, express_rate_limit_1.default)({
     windowMs: 60 * 1000,
     max: 120,
@@ -192,6 +216,9 @@ router.get('/partner/jobs', partnerAuth_1.partnerAuth, jobSyndicationController_
 router.get('/companies/:companyId/job-analytics', authMiddleware_1.requireAuth, jobsController_1.jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', authMiddleware_1.requireAuth, jobApplicationAccessController_1.jobApplicationAccessController.getCompanyApplicationAttentionCount);
 router.get('/jobs', authMiddleware_1.optionalAuth, jobDiscoveryController_1.jobDiscoveryController.listPublicJobs);
+router.post('/jobs/alerts/subscribe', jobsAlertsSubscribeRateLimiter, jobAlertsController_1.jobAlertsController.subscribePublicJobAlerts);
+router.get('/jobs/alerts/unsubscribe', jobAlertsController_1.jobAlertsController.renderPublicJobAlertsUnsubscribeConfirm);
+router.post('/jobs/alerts/unsubscribe', jobAlertsController_1.jobAlertsController.confirmPublicJobAlertsUnsubscribe);
 router.get('/jobs/hot', jobsPulseRateLimiter, authMiddleware_1.optionalAuth, jobsController_1.jobsController.listHotJobs);
 router.get('/jobs/market-demand', jobsMarketDemandRateLimiter, authMiddleware_1.optionalAuth, jobMarketDemandController_1.jobMarketDemandController.getJobMarketDemand);
 router.get('/jobs/sitemap.xml', jobSeoController_1.jobSeoController.getJobsSitemap);

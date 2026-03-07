@@ -159,9 +159,15 @@ export const createUserDigestCandidateIndex = (candidateJobs: any[]): UserDigest
       ? (job as any).recommendationSemanticTokens
       : [];
 
-    const normalizedTags = new Set(tags.map((token: unknown) => normalizeToken(token)).filter(Boolean));
-    const normalizedSemanticTokens = new Set(
-      semanticTokens.map((token: unknown) => normalizeToken(token)).filter(Boolean),
+    const normalizedTags = new Set<string>(
+      tags
+        .map((token: unknown) => normalizeToken(token))
+        .filter((token: string): token is string => token.length > 0),
+    );
+    const normalizedSemanticTokens = new Set<string>(
+      semanticTokens
+        .map((token: unknown) => normalizeToken(token))
+        .filter((token: string): token is string => token.length > 0),
     );
     if (jobKey) {
       index.jobMetadataByKey.set(jobKey, {

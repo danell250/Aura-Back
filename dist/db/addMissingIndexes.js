@@ -134,6 +134,7 @@ const migrateJobApplicationsIndexes = (db) => __awaiter(void 0, void 0, void 0, 
 });
 const migrateJobsIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
     const collection = db.collection('jobs');
+    yield ensureIndex(collection, { status: 1, discoveredAt: -1, createdAt: -1 }, { name: 'idx_jobs_status_discovered_created', background: true });
     yield ensureIndex(collection, { source: 1, originalId: 1 }, {
         name: 'idx_jobs_source_original_id',
         background: true,
@@ -152,6 +153,12 @@ const migrateJobsIndexes = (db) => __awaiter(void 0, void 0, void 0, function* (
             originalUrl: { $type: 'string' }
         }
     });
+});
+const migrateJobAlertSubscriptionIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
+    const collection = db.collection('job_alert_subscriptions');
+    yield ensureIndex(collection, { email: 1 }, { name: 'idx_job_alert_subscriptions_email', unique: true, background: true });
+    yield ensureIndex(collection, { isActive: 1, cadence: 1, lastDigestSentAt: 1 }, { name: 'idx_job_alert_subscriptions_active_cadence', background: true });
+    yield ensureIndex(collection, { unsubscribeToken: 1 }, { name: 'idx_job_alert_subscriptions_unsubscribe_token', unique: true, background: true });
 });
 const migrateUserBadgesIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
     const badgesCollection = db.collection('badges');
@@ -201,6 +208,7 @@ function runIndexMigration(db) {
         yield migrateLearningResourcesCacheIndexes(db);
         yield migrateJobApplicationsIndexes(db);
         yield migrateJobsIndexes(db);
+        yield migrateJobAlertSubscriptionIndexes(db);
         yield migrateUserBadgesIndexes(db);
         yield seedBadgeCatalog(db);
         console.log('[IndexMigration] Done');

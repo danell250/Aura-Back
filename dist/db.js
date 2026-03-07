@@ -158,6 +158,7 @@ function connectDB() {
                     yield db.collection('jobs').createIndex({ id: 1 }, { unique: true });
                     yield db.collection('jobs').createIndex({ companyId: 1, status: 1, createdAt: -1 });
                     yield db.collection('jobs').createIndex({ status: 1, publishedAt: -1 });
+                    yield db.collection('jobs').createIndex({ status: 1, discoveredAt: -1, createdAt: -1 });
                     yield db.collection('jobs').createIndex({ applicationDeadline: 1 });
                     yield db.collection('jobs').createIndex({ tags: 1 });
                     yield db.collection('jobs').createIndex({ source: 1, originalId: 1 }, {
@@ -184,6 +185,9 @@ function connectDB() {
                     yield db.collection('job_applications').createIndex({ jobId: 1, status: 1, createdAt: -1 });
                     yield db.collection('saved_jobs').createIndex({ userId: 1, jobId: 1 }, { unique: true, name: 'saved_jobs_user_job_unique_idx' });
                     yield db.collection('saved_jobs').createIndex({ userId: 1, createdAt: -1 }, { name: 'saved_jobs_user_created_idx' });
+                    yield db.collection('job_alert_subscriptions').createIndex({ email: 1 }, { unique: true, name: 'job_alert_subscriptions_email_unique_idx' });
+                    yield db.collection('job_alert_subscriptions').createIndex({ isActive: 1, cadence: 1, lastDigestSentAt: 1 }, { name: 'job_alert_subscriptions_active_cadence_idx' });
+                    yield db.collection('job_alert_subscriptions').createIndex({ unsubscribeToken: 1 }, { unique: true, name: 'job_alert_subscriptions_unsubscribe_token_idx' });
                     yield db.collection('job_applications').createIndex({ jobId: 1, applicantNameNormalized: 1, createdAt: -1 }, { name: 'job_application_job_name_search_idx' });
                     yield db.collection('job_applications').createIndex({ jobId: 1, applicantEmailNormalized: 1, createdAt: -1 }, { name: 'job_application_job_email_search_idx' });
                     yield db.collection('application_notes').createIndex({ id: 1 }, { unique: true });
