@@ -58,14 +58,52 @@ const TRUSTED_FRONTEND_URLS = new Set([
     ...(process.env.VITE_FRONTEND_URL ? [process.env.VITE_FRONTEND_URL] : []),
     ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
 ].map(normalizeFrontendUrl));
+const buildForwardedFrontendUrl = (req) => {
+    const forwardedProto = readHeaderValue(req.headers['x-forwarded-proto']);
+    const forwardedHost = readHeaderValue(req.headers['x-forwarded-host']);
+    const host = readHeaderValue(req.headers.host);
+    const protocol = forwardedProto || req.protocol || 'https';
+    const hostname = forwardedHost || host;
+    if (!hostname)
+        return '';
+    return normalizeFrontendUrl(`${protocol}://${hostname}`);
+};
+const readHeaderValue = (value) => {
+    if (Array.isArray(value)) {
+        return String(value[0] || '').trim();
+    }
+    if (typeof value !== 'string')
+        return '';
+    return value.split(',')[0].trim();
+};
+const readTrustedOriginFromReferrer = (req) => {
+    const referer = readHeaderValue(req.headers.referer);
+    if (!referer)
+        return '';
+    try {
+        return normalizeFrontendUrl(new URL(referer).origin);
+    }
+    catch (_a) {
+        return '';
+    }
+};
 const resolveTrustedFrontendUrl = (req) => {
+    const requestCandidates = [
+        typeof req.headers.origin === 'string' ? normalizeFrontendUrl(req.headers.origin) : '',
+        readTrustedOriginFromReferrer(req),
+        buildForwardedFrontendUrl(req),
+    ];
+    for (const candidate of requestCandidates) {
+        if (candidate && TRUSTED_FRONTEND_URLS.has(candidate)) {
+            return candidate;
+        }
+    }
     const configured = process.env.VITE_FRONTEND_URL || process.env.FRONTEND_URL;
     if (configured && configured.trim().length > 0) {
-        return normalizeFrontendUrl(configured);
-    }
-    const requestOrigin = typeof req.headers.origin === 'string' ? normalizeFrontendUrl(req.headers.origin) : '';
-    if (requestOrigin && TRUSTED_FRONTEND_URLS.has(requestOrigin)) {
-        return requestOrigin;
+        const normalizedConfigured = normalizeFrontendUrl(configured);
+        if (TRUSTED_FRONTEND_URLS.has(normalizedConfigured)) {
+            return normalizedConfigured;
+        }
     }
     return DEFAULT_FRONTEND_URL;
 };

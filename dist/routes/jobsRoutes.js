@@ -15,6 +15,7 @@ const jobApplicationAccessController_1 = require("../controllers/jobApplicationA
 const jobDiscoveryController_1 = require("../controllers/jobDiscoveryController");
 const jobMatchShareController_1 = require("../controllers/jobMatchShareController");
 const jobNetworkController_1 = require("../controllers/jobNetworkController");
+const savedJobsController_1 = require("../controllers/savedJobsController");
 const jobsController_1 = require("../controllers/jobsController");
 const jobSeoController_1 = require("../controllers/jobSeoController");
 const jobSyndicationController_1 = require("../controllers/jobSyndicationController");
@@ -208,6 +209,8 @@ router.get('/jobs/matches/:handle', authMiddleware_1.optionalAuth, jobMatchShare
 router.get('/jobs/salary-insights', authMiddleware_1.optionalAuth, jobDiscoveryController_1.jobDiscoveryController.getSalaryInsights);
 router.get('/jobs/slug/:jobSlug', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getJobBySlug);
 router.get('/jobs/:jobId/network-count', authMiddleware_1.requireAuth, jobNetworkController_1.jobNetworkController.getJobNetworkCount);
+router.post('/jobs/:jobId/save', jobsWriteRateLimiter, authMiddleware_1.requireAuth, savedJobsController_1.savedJobsController.saveJob);
+router.delete('/jobs/:jobId/save', jobsWriteRateLimiter, authMiddleware_1.requireAuth, savedJobsController_1.savedJobsController.unsaveJob);
 // Public job detail
 router.get('/jobs/:jobId', authMiddleware_1.optionalAuth, jobsController_1.jobsController.getJobById);
 // Company owner/admin job management
@@ -227,4 +230,6 @@ router.post('/applications/:applicationId/withdraw', authMiddleware_1.requireAut
 router.post('/applications/review-portal/resolve', authMiddleware_1.requireAuth, jobApplicationAccessController_1.jobApplicationAccessController.resolveApplicationReviewPortalToken);
 // Personal dashboard scope
 router.get('/me/job-applications', authMiddleware_1.requireAuth, jobApplicationAccessController_1.jobApplicationAccessController.getMyJobApplications);
+router.get('/me/saved-jobs', authMiddleware_1.requireAuth, savedJobsController_1.savedJobsController.listMySavedJobs);
+router.get('/me/saved-jobs/:jobId/status', authMiddleware_1.requireAuth, savedJobsController_1.savedJobsController.getMySavedJobStatus);
 exports.default = router;

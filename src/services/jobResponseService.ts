@@ -1,5 +1,6 @@
 import { buildJobHeatResponseFields, listJobPulseSnapshots } from './jobPulseSnapshotService';
 import { readString, readStringOrNull } from '../utils/inputSanitizers';
+import { normalizeJobText } from './jobTextNormalizationService';
 
 const CAREER_PAGE_SOURCE_SITES = new Set(['greenhouse', 'lever', 'workday', 'smartrecruiters', 'careers']);
 
@@ -50,40 +51,64 @@ const parseSourceSite = (value: unknown): string => {
   return readString(suffix, 120).toLowerCase();
 };
 
-export const toJobResponse = (job: any) => ({
-  id: String(job?.id || ''),
-  slug: buildPersistentJobSlug(job),
-  source: readString(job?.source, 120) || null,
-  sourceSite: parseSourceSite(job?.source) || null,
-  isCareerPageSource: CAREER_PAGE_SOURCE_SITES.has(parseSourceSite(job?.source)),
+const mapJobIdentityFields = (job: any) => {
+  const sourceSite = parseSourceSite(job?.source);
+  return {
+    id: String(job?.id || ''),
+    slug: buildPersistentJobSlug(job),
+    source: readString(job?.source, 120) || null,
+    sourceSite: sourceSite || null,
+    isCareerPageSource: CAREER_PAGE_SOURCE_SITES.has(sourceSite),
+  };
+};
+
+const mapCompanyFields = (job: any) => ({
   companyId: String(job?.companyId || ''),
   companyName: String(job?.companyName || ''),
   companyHandle: String(job?.companyHandle || ''),
   companyIsVerified: Boolean(job?.companyIsVerified),
   companyWebsite: readStringOrNull(job?.companyWebsite, 600),
   companyEmail: readStringOrNull(job?.companyEmail, 200),
+});
+
+const mapContentFields = (job: any) => ({
   title: String(job?.title || ''),
-  summary: String(job?.summary || ''),
-  description: String(job?.description || ''),
+  summary: normalizeJobText(job?.summary, 240),
+  description: normalizeJobText(job?.description, 15000),
   locationText: String(job?.locationText || ''),
   workModel: String(job?.workModel || 'onsite'),
   employmentType: String(job?.employmentType || 'full_time'),
+  tags: Array.isArray(job?.tags) ? job.tags : [],
+});
+
+const mapCompensationFields = (job: any) => ({
   salaryMin: typeof job?.salaryMin === 'number' ? job.salaryMin : null,
   salaryMax: typeof job?.salaryMax === 'number' ? job.salaryMax : null,
   salaryCurrency: String(job?.salaryCurrency || ''),
   applicationDeadline: job?.applicationDeadline || null,
+  applicationUrl: readStringOrNull(job?.applicationUrl, 600),
+  applicationEmail: readStringOrNull(job?.applicationEmail, 200),
+  applicationCount: Number.isFinite(job?.applicationCount) ? Number(job.applicationCount) : 0,
+  viewCount: Number.isFinite(job?.viewCount) ? Number(job.viewCount) : 0,
+});
+
+const mapLifecycleFields = (job: any) => ({
+  applicationDeadline: job?.applicationDeadline || null,
   status: String(job?.status || 'open'),
-  tags: Array.isArray(job?.tags) ? job.tags : [],
   createdByUserId: String(job?.createdByUserId || ''),
   createdAt: job?.createdAt || null,
   discoveredAt: job?.discoveredAt || null,
   updatedAt: job?.updatedAt || null,
   publishedAt: job?.publishedAt || null,
   announcementPostId: job?.announcementPostId || null,
-  applicationUrl: readStringOrNull(job?.applicationUrl, 600),
-  applicationEmail: readStringOrNull(job?.applicationEmail, 200),
-  applicationCount: Number.isFinite(job?.applicationCount) ? Number(job.applicationCount) : 0,
-  viewCount: Number.isFinite(job?.viewCount) ? Number(job.viewCount) : 0,
+});
+
+export const toJobResponse = (job: any) => ({
+  ...mapJobIdentityFields(job),
+  ...mapCompanyFields(job),
+  ...mapContentFields(job),
+  ...mapCompensationFields(job),
+  ...mapLifecycleFields(job),
 });
 
 const indexPulseSnapshotsByJobId = (

@@ -181,6 +181,8 @@ function connectDB() {
                     yield db.collection('job_applications').createIndex({ companyId: 1, status: 1, createdAt: -1 });
                     yield db.collection('job_applications').createIndex({ applicantUserId: 1, createdAt: -1 });
                     yield db.collection('job_applications').createIndex({ jobId: 1, status: 1, createdAt: -1 });
+                    yield db.collection('saved_jobs').createIndex({ userId: 1, jobId: 1 }, { unique: true, name: 'saved_jobs_user_job_unique_idx' });
+                    yield db.collection('saved_jobs').createIndex({ userId: 1, createdAt: -1 }, { name: 'saved_jobs_user_created_idx' });
                     yield db.collection('job_applications').createIndex({ jobId: 1, applicantNameNormalized: 1, createdAt: -1 }, { name: 'job_application_job_name_search_idx' });
                     yield db.collection('job_applications').createIndex({ jobId: 1, applicantEmailNormalized: 1, createdAt: -1 }, { name: 'job_application_job_email_search_idx' });
                     yield db.collection('application_notes').createIndex({ id: 1 }, { unique: true });

@@ -15,6 +15,7 @@ const jobRecommendationService_1 = require("../services/jobRecommendationService
 const jobRecommendationProfileCacheService_1 = require("../services/jobRecommendationProfileCacheService");
 const jobDiscoveryQueryService_1 = require("../services/jobDiscoveryQueryService");
 const jobResponseService_1 = require("../services/jobResponseService");
+const savedJobsService_1 = require("../services/savedJobsService");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const MIN_SALARY_INSIGHTS_SAMPLE_SIZE = 3;
 const parsePublicJobsRequestState = (req) => {
@@ -118,7 +119,11 @@ const enrichPublicJobsRows = (params) => __awaiter(void 0, void 0, void 0, funct
     });
     return (0, jobResponseService_1.attachHeatFieldsToJobResponses)({
         db: params.db,
-        jobs: jobsWithRecommendations,
+        jobs: yield (0, savedJobsService_1.attachSavedStateToJobResponses)({
+            db: params.db,
+            currentUserId: params.currentUserId,
+            jobs: jobsWithRecommendations,
+        }),
     });
 });
 exports.jobDiscoveryController = {
@@ -157,6 +162,7 @@ exports.jobDiscoveryController = {
                 db,
                 items: pageData.items,
                 recommendationProfile: pageData.recommendationProfile,
+                currentUserId: state.currentUserId,
             });
             return res.json({
                 success: true,

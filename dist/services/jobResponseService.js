@@ -12,6 +12,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.attachHeatFieldsToJobResponses = exports.toJobResponse = exports.buildPersistentJobSlug = void 0;
 const jobPulseSnapshotService_1 = require("./jobPulseSnapshotService");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
+const jobTextNormalizationService_1 = require("./jobTextNormalizationService");
 const CAREER_PAGE_SOURCE_SITES = new Set(['greenhouse', 'lever', 'workday', 'smartrecruiters', 'careers']);
 const normalizeSlugValue = (value, maxLength = 220) => {
     const raw = (0, inputSanitizers_1.readString)(String(value || ''), maxLength)
@@ -59,41 +60,54 @@ const parseSourceSite = (value) => {
     const [, suffix = source] = source.split(':', 2);
     return (0, inputSanitizers_1.readString)(suffix, 120).toLowerCase();
 };
-const toJobResponse = (job) => ({
-    id: String((job === null || job === void 0 ? void 0 : job.id) || ''),
-    slug: (0, exports.buildPersistentJobSlug)(job),
-    source: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.source, 120) || null,
-    sourceSite: parseSourceSite(job === null || job === void 0 ? void 0 : job.source) || null,
-    isCareerPageSource: CAREER_PAGE_SOURCE_SITES.has(parseSourceSite(job === null || job === void 0 ? void 0 : job.source)),
+const mapJobIdentityFields = (job) => {
+    const sourceSite = parseSourceSite(job === null || job === void 0 ? void 0 : job.source);
+    return {
+        id: String((job === null || job === void 0 ? void 0 : job.id) || ''),
+        slug: (0, exports.buildPersistentJobSlug)(job),
+        source: (0, inputSanitizers_1.readString)(job === null || job === void 0 ? void 0 : job.source, 120) || null,
+        sourceSite: sourceSite || null,
+        isCareerPageSource: CAREER_PAGE_SOURCE_SITES.has(sourceSite),
+    };
+};
+const mapCompanyFields = (job) => ({
     companyId: String((job === null || job === void 0 ? void 0 : job.companyId) || ''),
     companyName: String((job === null || job === void 0 ? void 0 : job.companyName) || ''),
     companyHandle: String((job === null || job === void 0 ? void 0 : job.companyHandle) || ''),
     companyIsVerified: Boolean(job === null || job === void 0 ? void 0 : job.companyIsVerified),
     companyWebsite: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.companyWebsite, 600),
     companyEmail: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.companyEmail, 200),
+});
+const mapContentFields = (job) => ({
     title: String((job === null || job === void 0 ? void 0 : job.title) || ''),
-    summary: String((job === null || job === void 0 ? void 0 : job.summary) || ''),
-    description: String((job === null || job === void 0 ? void 0 : job.description) || ''),
+    summary: (0, jobTextNormalizationService_1.normalizeJobText)(job === null || job === void 0 ? void 0 : job.summary, 240),
+    description: (0, jobTextNormalizationService_1.normalizeJobText)(job === null || job === void 0 ? void 0 : job.description, 15000),
     locationText: String((job === null || job === void 0 ? void 0 : job.locationText) || ''),
     workModel: String((job === null || job === void 0 ? void 0 : job.workModel) || 'onsite'),
     employmentType: String((job === null || job === void 0 ? void 0 : job.employmentType) || 'full_time'),
+    tags: Array.isArray(job === null || job === void 0 ? void 0 : job.tags) ? job.tags : [],
+});
+const mapCompensationFields = (job) => ({
     salaryMin: typeof (job === null || job === void 0 ? void 0 : job.salaryMin) === 'number' ? job.salaryMin : null,
     salaryMax: typeof (job === null || job === void 0 ? void 0 : job.salaryMax) === 'number' ? job.salaryMax : null,
     salaryCurrency: String((job === null || job === void 0 ? void 0 : job.salaryCurrency) || ''),
     applicationDeadline: (job === null || job === void 0 ? void 0 : job.applicationDeadline) || null,
+    applicationUrl: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationUrl, 600),
+    applicationEmail: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationEmail, 200),
+    applicationCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.applicationCount) ? Number(job.applicationCount) : 0,
+    viewCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.viewCount) ? Number(job.viewCount) : 0,
+});
+const mapLifecycleFields = (job) => ({
+    applicationDeadline: (job === null || job === void 0 ? void 0 : job.applicationDeadline) || null,
     status: String((job === null || job === void 0 ? void 0 : job.status) || 'open'),
-    tags: Array.isArray(job === null || job === void 0 ? void 0 : job.tags) ? job.tags : [],
     createdByUserId: String((job === null || job === void 0 ? void 0 : job.createdByUserId) || ''),
     createdAt: (job === null || job === void 0 ? void 0 : job.createdAt) || null,
     discoveredAt: (job === null || job === void 0 ? void 0 : job.discoveredAt) || null,
     updatedAt: (job === null || job === void 0 ? void 0 : job.updatedAt) || null,
     publishedAt: (job === null || job === void 0 ? void 0 : job.publishedAt) || null,
     announcementPostId: (job === null || job === void 0 ? void 0 : job.announcementPostId) || null,
-    applicationUrl: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationUrl, 600),
-    applicationEmail: (0, inputSanitizers_1.readStringOrNull)(job === null || job === void 0 ? void 0 : job.applicationEmail, 200),
-    applicationCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.applicationCount) ? Number(job.applicationCount) : 0,
-    viewCount: Number.isFinite(job === null || job === void 0 ? void 0 : job.viewCount) ? Number(job.viewCount) : 0,
 });
+const toJobResponse = (job) => (Object.assign(Object.assign(Object.assign(Object.assign(Object.assign({}, mapJobIdentityFields(job)), mapCompanyFields(job)), mapContentFields(job)), mapCompensationFields(job)), mapLifecycleFields(job)));
 exports.toJobResponse = toJobResponse;
 const indexPulseSnapshotsByJobId = (snapshots) => new Map(snapshots.map((snapshot) => [(0, inputSanitizers_1.readString)(snapshot === null || snapshot === void 0 ? void 0 : snapshot.jobId, 120), snapshot]).filter(([jobId]) => jobId.length > 0));
 const attachHeatFieldsToJobResponses = (params) => __awaiter(void 0, void 0, void 0, function* () {

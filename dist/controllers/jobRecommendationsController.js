@@ -16,6 +16,7 @@ const jobRecommendationQueryBuilder_1 = require("../services/jobRecommendationQu
 const jobRecommendationResultService_1 = require("../services/jobRecommendationResultService");
 const jobPulseSnapshotService_1 = require("../services/jobPulseSnapshotService");
 const jobResponseService_1 = require("../services/jobResponseService");
+const savedJobsService_1 = require("../services/savedJobsService");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const USERS_COLLECTION = 'users';
 const normalizePreviewSkills = (value) => {
@@ -51,17 +52,22 @@ const buildRecommendationPayload = (params) => __awaiter(void 0, void 0, void 0,
         requestedJobIds: entries.map((entry) => { var _a; return (0, inputSanitizers_1.readString)((_a = entry === null || entry === void 0 ? void 0 : entry.job) === null || _a === void 0 ? void 0 : _a.id, 120); }).filter((jobId) => jobId.length > 0),
         limit: entries.length,
     })).map((snapshot) => [(0, inputSanitizers_1.readString)(snapshot === null || snapshot === void 0 ? void 0 : snapshot.jobId, 120), snapshot]));
+    const dataWithHeat = entries.map((entry) => {
+        var _a;
+        const score = Math.max(0, Math.round(entry.score));
+        return Object.assign(Object.assign({}, toRecommendationResponseEntry(entry.job, {
+            score,
+            reasons: entry.reasons,
+            matchedSkills: entry.matchedSkills,
+            breakdown: entry.breakdown,
+            matchTier: entry.matchTier,
+        })), (0, jobPulseSnapshotService_1.buildJobHeatResponseFields)({ snapshot: pulseSnapshotsByJobId.get((0, inputSanitizers_1.readString)((_a = entry === null || entry === void 0 ? void 0 : entry.job) === null || _a === void 0 ? void 0 : _a.id, 120)) }));
+    });
     return {
-        data: entries.map((entry) => {
-            var _a;
-            const score = Math.max(0, Math.round(entry.score));
-            return Object.assign(Object.assign({}, toRecommendationResponseEntry(entry.job, {
-                score,
-                reasons: entry.reasons,
-                matchedSkills: entry.matchedSkills,
-                breakdown: entry.breakdown,
-                matchTier: entry.matchTier,
-            })), (0, jobPulseSnapshotService_1.buildJobHeatResponseFields)({ snapshot: pulseSnapshotsByJobId.get((0, inputSanitizers_1.readString)((_a = entry === null || entry === void 0 ? void 0 : entry.job) === null || _a === void 0 ? void 0 : _a.id, 120)) }));
+        data: yield (0, savedJobsService_1.attachSavedStateToJobResponses)({
+            db: params.db,
+            currentUserId: params.currentUserId,
+            jobs: dataWithHeat,
         }),
         groups,
         pagination: {
@@ -133,6 +139,7 @@ exports.jobRecommendationsController = {
                 candidateJobs,
                 recommendationProfile,
                 limit,
+                currentUserId,
             });
             return res.json(Object.assign({ success: true }, payload));
         }
@@ -143,7 +150,7 @@ exports.jobRecommendationsController = {
     }),
     // GET /api/jobs/for-you
     listPreviewJobs: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e, _f, _g;
         try {
             const role = (0, inputSanitizers_1.readString)((_a = req.query) === null || _a === void 0 ? void 0 : _a.role, 120);
             const location = (0, inputSanitizers_1.readString)((_b = req.query) === null || _b === void 0 ? void 0 : _b.location, 120);
@@ -151,6 +158,7 @@ exports.jobRecommendationsController = {
             const skills = normalizePreviewSkills((_d = req.query) === null || _d === void 0 ? void 0 : _d.skills);
             const limit = (0, inputSanitizers_1.parsePositiveInt)((_e = req.query) === null || _e === void 0 ? void 0 : _e.limit, 20, 1, 30);
             const candidateLimit = (0, inputSanitizers_1.parsePositiveInt)((_f = req.query) === null || _f === void 0 ? void 0 : _f.candidateLimit, 80, 30, 90);
+            const currentUserId = (0, inputSanitizers_1.readString)((_g = req.user) === null || _g === void 0 ? void 0 : _g.id, 120);
             if (!role && !location && !workModel && skills.length === 0) {
                 return res.status(400).json({ success: false, error: 'At least one preview signal is required' });
             }
@@ -182,6 +190,7 @@ exports.jobRecommendationsController = {
                 candidateJobs,
                 recommendationProfile,
                 limit,
+                currentUserId,
             });
             return res.json(Object.assign(Object.assign({ success: true }, payload), { meta: {
                     preview: {
