@@ -3,6 +3,7 @@ import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import { getDB } from '../db';
 import { transformUser } from '../utils/userUtils';
+import { buildPublicAuthCallbackUrl } from '../utils/publicWebUrl';
 
 export const configurePassportStrategies = () => {
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
@@ -13,7 +14,7 @@ export const configurePassportStrategies = () => {
           clientSecret: process.env.GOOGLE_CLIENT_SECRET,
           callbackURL:
             process.env.GOOGLE_CALLBACK_URL ||
-            `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/google/callback`,
+            buildPublicAuthCallbackUrl('google'),
         },
         async (_accessToken, _refreshToken, profile, done) => {
           try {
@@ -93,7 +94,7 @@ export const configurePassportStrategies = () => {
           clientID: process.env.GITHUB_CLIENT_ID,
           clientSecret: process.env.GITHUB_CLIENT_SECRET,
           callbackURL:
-            process.env.GITHUB_CALLBACK_URL || 'https://aura-back-s1bw.onrender.com/api/auth/github/callback',
+            process.env.GITHUB_CALLBACK_URL || buildPublicAuthCallbackUrl('github'),
           scope: ['user:email'],
         },
         async (_accessToken: any, _refreshToken: any, profile: any, done: (err: any, user?: any) => void) => {

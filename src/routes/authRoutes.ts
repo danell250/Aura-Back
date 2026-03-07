@@ -25,6 +25,7 @@ import { createNotificationInDB } from '../controllers/notificationsController';
 import { logSecurityEvent } from '../utils/securityLogger';
 import { transformUser } from '../utils/userUtils';
 import { clearLogoutCookies, invalidateUserAuthSessions, resolveLogoutUserId } from '../utils/sessionInvalidation';
+import { buildPublicAuthCallbackUrl } from '../utils/publicWebUrl';
 import { User } from '../types';
 
 const router = Router();
@@ -567,7 +568,7 @@ res.cookie('linkedin_auth_state', state, {
 });
 
 // 3. Construct the authorization URL
-const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aurasocial.world/api/auth/linkedin/callback';
+const redirectUri = process.env.LINKEDIN_CALLBACK_URL || buildPublicAuthCallbackUrl('linkedin');
 const clientId = process.env.LINKEDIN_CLIENT_ID;
 const scope = 'openid profile email';
 
@@ -607,7 +608,7 @@ if (!state || !storedState || state !== storedState) {
 res.clearCookie('linkedin_auth_state');
 
 try {
-  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aurasocial.world/api/auth/linkedin/callback';
+  const redirectUri = process.env.LINKEDIN_CALLBACK_URL || buildPublicAuthCallbackUrl('linkedin');
   
   // 2. Exchange code for access token
   const tokenResponse = await axios.post('https://www.linkedin.com/oauth/v2/accessToken', null, {
@@ -756,7 +757,7 @@ if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET) {
 
   const redirectUri =
     process.env.DISCORD_CALLBACK_URL ||
-    `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/discord/callback`;
+    buildPublicAuthCallbackUrl('discord');
 
   const authUrl =
     `https://discord.com/oauth2/authorize` +
@@ -803,7 +804,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
   try {
     const redirectUri =
       process.env.DISCORD_CALLBACK_URL ||
-      `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/discord/callback`;
+      buildPublicAuthCallbackUrl('discord');
 
     // Exchange code for token
     const body = new URLSearchParams({
