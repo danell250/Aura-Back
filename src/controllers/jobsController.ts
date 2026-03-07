@@ -9,6 +9,7 @@ import { attachHeatFieldsToJobResponses, toJobResponse } from '../services/jobRe
 import { normalizeJobSlugValue } from '../services/jobSlugService';
 import { incrementJobViewCountAsync } from '../services/jobViewBufferService';
 import { createCompanyJob, updateCompanyJob, updateCompanyJobStatus } from '../services/jobWriteService';
+import { attachSavedStateToJobResponses } from '../services/savedJobsService';
 import {
   resolveOwnerAdminCompanyAccess,
 } from '../services/jobApplicationLifecycleService';
@@ -82,15 +83,17 @@ const resolveJobSkillGap = async (params: {
   }
 };
 
-const attachHeatFieldsToJobResponse = async (params: {
+const attachHeatFieldsToSingleJobResponse = async (params: {
   db: any;
   job: Record<string, unknown>;
 }): Promise<Record<string, unknown>> => {
-  const [jobWithHeat] = await attachHeatFieldsToJobResponses({
+  const jobsWithHeat = await attachHeatFieldsToJobResponses({
     db: params.db,
     jobs: [params.job],
   });
-  return jobWithHeat || params.job;
+  return Array.isArray(jobsWithHeat) && jobsWithHeat.length > 0
+    ? jobsWithHeat[0]
+    : params.job;
 };
 
 const buildJobDetailResponse = async (params: {
@@ -108,9 +111,20 @@ const buildJobDetailResponse = async (params: {
       })
     : null;
 
-  return attachHeatFieldsToJobResponse({
+  const [jobWithSavedState] = await attachSavedStateToJobResponses({
     db: params.db,
-    job: {
+    currentUserId: params.currentUserId,
+    jobs: [
+      {
+        ...toJobResponse(params.job),
+        ...(skillGap ? { skillGap } : {}),
+      },
+    ],
+  });
+
+  return attachHeatFieldsToSingleJobResponse({
+    db: params.db,
+    job: jobWithSavedState || {
       ...toJobResponse(params.job),
       ...(skillGap ? { skillGap } : {}),
     },

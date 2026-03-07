@@ -10,6 +10,7 @@ import { jobApplicationAccessController } from '../controllers/jobApplicationAcc
 import { jobDiscoveryController } from '../controllers/jobDiscoveryController';
 import { jobMatchShareController } from '../controllers/jobMatchShareController';
 import { jobNetworkController } from '../controllers/jobNetworkController';
+import { savedJobsController } from '../controllers/savedJobsController';
 import { jobsController } from '../controllers/jobsController';
 import { jobSeoController } from '../controllers/jobSeoController';
 import { jobSyndicationController } from '../controllers/jobSyndicationController';
@@ -219,6 +220,8 @@ router.get('/jobs/matches/:handle', optionalAuth, jobMatchShareController.getPub
 router.get('/jobs/salary-insights', optionalAuth, jobDiscoveryController.getSalaryInsights);
 router.get('/jobs/slug/:jobSlug', optionalAuth, jobsController.getJobBySlug);
 router.get('/jobs/:jobId/network-count', requireAuth, jobNetworkController.getJobNetworkCount);
+router.post('/jobs/:jobId/save', jobsWriteRateLimiter, requireAuth, savedJobsController.saveJob);
+router.delete('/jobs/:jobId/save', jobsWriteRateLimiter, requireAuth, savedJobsController.unsaveJob);
 
 // Public job detail
 router.get('/jobs/:jobId', optionalAuth, jobsController.getJobById);
@@ -242,5 +245,7 @@ router.post('/applications/review-portal/resolve', requireAuth, jobApplicationAc
 
 // Personal dashboard scope
 router.get('/me/job-applications', requireAuth, jobApplicationAccessController.getMyJobApplications);
+router.get('/me/saved-jobs', requireAuth, savedJobsController.listMySavedJobs);
+router.get('/me/saved-jobs/:jobId/status', requireAuth, savedJobsController.getMySavedJobStatus);
 
 export default router;

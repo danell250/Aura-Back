@@ -14,6 +14,7 @@ import {
   resolveCachedDiscoveredCount,
 } from '../services/jobDiscoveryQueryService';
 import { attachHeatFieldsToJobResponses, toJobResponse } from '../services/jobResponseService';
+import { attachSavedStateToJobResponses } from '../services/savedJobsService';
 import { readString } from '../utils/inputSanitizers';
 
 const MIN_SALARY_INSIGHTS_SAMPLE_SIZE = 3;
@@ -136,6 +137,7 @@ const enrichPublicJobsRows = async (params: {
   db: any;
   items: any[];
   recommendationProfile: Awaited<ReturnType<typeof resolveCachedRecommendationProfile>>;
+  currentUserId?: string;
 }) => {
   const jobsWithRecommendations = params.items.map((item) => {
     const base = toJobResponse(item);
@@ -155,7 +157,11 @@ const enrichPublicJobsRows = async (params: {
 
   return attachHeatFieldsToJobResponses({
     db: params.db,
-    jobs: jobsWithRecommendations,
+    jobs: await attachSavedStateToJobResponses({
+      db: params.db,
+      currentUserId: params.currentUserId,
+      jobs: jobsWithRecommendations,
+    }),
   });
 };
 
@@ -199,6 +205,7 @@ export const jobDiscoveryController = {
         db,
         items: pageData.items,
         recommendationProfile: pageData.recommendationProfile,
+        currentUserId: state.currentUserId,
       });
 
       return res.json({

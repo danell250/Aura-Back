@@ -196,6 +196,14 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('job_applications').createIndex({ companyId: 1, status: 1, createdAt: -1 });
         await db.collection('job_applications').createIndex({ applicantUserId: 1, createdAt: -1 });
         await db.collection('job_applications').createIndex({ jobId: 1, status: 1, createdAt: -1 });
+        await db.collection('saved_jobs').createIndex(
+          { userId: 1, jobId: 1 },
+          { unique: true, name: 'saved_jobs_user_job_unique_idx' }
+        );
+        await db.collection('saved_jobs').createIndex(
+          { userId: 1, createdAt: -1 },
+          { name: 'saved_jobs_user_created_idx' }
+        );
         await db.collection('job_applications').createIndex(
           { jobId: 1, applicantNameNormalized: 1, createdAt: -1 },
           { name: 'job_application_job_name_search_idx' }

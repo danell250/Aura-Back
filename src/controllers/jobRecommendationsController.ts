@@ -13,6 +13,7 @@ import {
 } from '../services/jobRecommendationResultService';
 import { buildJobHeatResponseFields, listJobPulseSnapshots } from '../services/jobPulseSnapshotService';
 import { toJobResponse } from '../services/jobResponseService';
+import { attachSavedStateToJobResponses } from '../services/savedJobsService';
 import { parsePositiveInt, readString } from '../utils/inputSanitizers';
 
 const USERS_COLLECTION = 'users';
@@ -67,6 +68,7 @@ const buildRecommendationPayload = async (params: {
   candidateJobs: any[];
   recommendationProfile: ReturnType<typeof buildRecommendationProfile>;
   limit: number;
+  currentUserId?: string;
 }): Promise<RecommendationPayload> => {
   if (params.candidateJobs.length === 0) {
     return {
@@ -91,19 +93,25 @@ const buildRecommendationPayload = async (params: {
     ).map((snapshot) => [readString(snapshot?.jobId, 120), snapshot] as const),
   );
 
+  const dataWithHeat = entries.map((entry) => {
+    const score = Math.max(0, Math.round(entry.score));
+    return {
+      ...toRecommendationResponseEntry(entry.job, {
+        score,
+        reasons: entry.reasons,
+        matchedSkills: entry.matchedSkills,
+        breakdown: entry.breakdown,
+        matchTier: entry.matchTier,
+      }),
+      ...buildJobHeatResponseFields({ snapshot: pulseSnapshotsByJobId.get(readString(entry?.job?.id, 120)) }),
+    };
+  });
+
   return {
-    data: entries.map((entry) => {
-      const score = Math.max(0, Math.round(entry.score));
-      return {
-        ...toRecommendationResponseEntry(entry.job, {
-          score,
-          reasons: entry.reasons,
-          matchedSkills: entry.matchedSkills,
-          breakdown: entry.breakdown,
-          matchTier: entry.matchTier,
-        }),
-        ...buildJobHeatResponseFields({ snapshot: pulseSnapshotsByJobId.get(readString(entry?.job?.id, 120)) }),
-      };
+    data: await attachSavedStateToJobResponses({
+      db: params.db,
+      currentUserId: params.currentUserId,
+      jobs: dataWithHeat,
     }),
     groups,
     pagination: {
@@ -184,6 +192,7 @@ export const jobRecommendationsController = {
         candidateJobs,
         recommendationProfile,
         limit,
+        currentUserId,
       });
 
       return res.json({
@@ -205,6 +214,7 @@ export const jobRecommendationsController = {
       const skills = normalizePreviewSkills((req.query as any)?.skills);
       const limit = parsePositiveInt((req.query as any)?.limit, 20, 1, 30);
       const candidateLimit = parsePositiveInt((req.query as any)?.candidateLimit, 80, 30, 90);
+      const currentUserId = readString((req.user as any)?.id, 120);
 
       if (!role && !location && !workModel && skills.length === 0) {
         return res.status(400).json({ success: false, error: 'At least one preview signal is required' });
@@ -240,6 +250,7 @@ export const jobRecommendationsController = {
         candidateJobs,
         recommendationProfile,
         limit,
+        currentUserId,
       });
 
       return res.json({
