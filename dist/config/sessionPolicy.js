@@ -19,6 +19,17 @@ const normalizeSameSite = (value) => {
     }
     return null;
 };
+const normalizeConfiguredDomain = (value, frontendHostname) => {
+    const trimmed = value.trim().toLowerCase().replace(/^\.+/, '');
+    if (!trimmed)
+        return undefined;
+    if (!frontendHostname)
+        return trimmed;
+    if (frontendHostname === trimmed || frontendHostname.endsWith(`.${trimmed}`)) {
+        return trimmed;
+    }
+    return undefined;
+};
 const resolveSessionCookiePolicy = ({ isProductionRuntime, configuredSameSite, configuredDomain, frontendUrl, backendUrl, }) => {
     const frontendUrlObject = parseUrl(frontendUrl);
     const backendUrlObject = parseUrl(backendUrl);
@@ -30,8 +41,9 @@ const resolveSessionCookiePolicy = ({ isProductionRuntime, configuredSameSite, c
     const hasPublicHttpsOrigin = [frontendUrlObject, backendUrlObject].some((urlObject) => !!urlObject
         && urlObject.protocol === 'https:'
         && !isLocalHostname(urlObject.hostname));
+    const resolvedDomain = normalizeConfiguredDomain(configuredDomain, frontendHostname);
     const explicitSameSite = normalizeSameSite(configuredSameSite);
-    let sameSite = explicitSameSite || ((isProductionRuntime || supportsSecureCrossSiteCookie) && requiresCrossSiteCookie ? 'none' : 'lax');
+    let sameSite = explicitSameSite || 'lax';
     let downgradedFromNone = false;
     if (sameSite === 'none' && !isProductionRuntime && !supportsSecureCrossSiteCookie) {
         sameSite = 'lax';
@@ -41,7 +53,7 @@ const resolveSessionCookiePolicy = ({ isProductionRuntime, configuredSameSite, c
     return {
         secure,
         sameSite,
-        domain: configuredDomain || undefined,
+        domain: resolvedDomain,
         requiresCrossSiteCookie,
         supportsSecureCrossSiteCookie,
         downgradedFromNone,

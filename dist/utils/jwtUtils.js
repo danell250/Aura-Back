@@ -16,6 +16,7 @@ exports.authenticateJWT = exports.clearTokenCookies = exports.setTokenCookies = 
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = require("../db");
 const crypto_1 = __importDefault(require("crypto"));
+const sessionPolicy_1 = require("../config/sessionPolicy");
 const getRequiredJwtSecret = (envName) => {
     const configured = process.env[envName];
     if (configured && configured.trim().length > 0) {
@@ -88,24 +89,35 @@ const verifyRefreshToken = (token) => {
 };
 exports.verifyRefreshToken = verifyRefreshToken;
 // Shared Cookie Options
-const getCookieOptions = (isProduction) => {
+const getCookieOptions = () => {
+    const isProduction = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || !!process.env.RENDER;
+    const policy = (0, sessionPolicy_1.resolveSessionCookiePolicy)({
+        isProductionRuntime: isProduction,
+        configuredSameSite: (process.env.COOKIE_SAMESITE || process.env.SESSION_COOKIE_SAMESITE || '').trim().toLowerCase(),
+        configuredDomain: (process.env.COOKIE_DOMAIN || process.env.SESSION_COOKIE_DOMAIN || '').trim(),
+        frontendUrl: (process.env.PUBLIC_WEB_URL ||
+            process.env.VITE_FRONTEND_URL ||
+            process.env.FRONTEND_URL ||
+            process.env.CLIENT_URL ||
+            '').trim(),
+        backendUrl: (process.env.BACKEND_URL ||
+            process.env.PUBLIC_BACKEND_URL ||
+            '').trim(),
+    });
     const options = {
         httpOnly: true,
-        secure: isProduction,
-        sameSite: isProduction ? 'none' : 'lax',
+        secure: policy.secure,
+        sameSite: policy.sameSite,
         path: '/'
     };
-    // Only set domain if explicitly configured
-    if (process.env.COOKIE_DOMAIN) {
-        options.domain = process.env.COOKIE_DOMAIN;
+    if (policy.domain) {
+        options.domain = policy.domain;
     }
     return options;
 };
 // Set Token Cookies
 const setTokenCookies = (res, accessToken, refreshToken) => {
-    // Treat as production if NODE_ENV is production OR if running on Render
-    const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
-    const options = getCookieOptions(isProduction);
+    const options = getCookieOptions();
     // Access Token Cookie
     res.cookie('accessToken', accessToken, Object.assign(Object.assign({}, options), { maxAge: 15 * 60 * 1000 // 15 minutes
      }));
@@ -116,8 +128,7 @@ const setTokenCookies = (res, accessToken, refreshToken) => {
 exports.setTokenCookies = setTokenCookies;
 // Clear Token Cookies
 const clearTokenCookies = (res) => {
-    const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
-    const options = getCookieOptions(isProduction);
+    const options = getCookieOptions();
     res.clearCookie('accessToken', options);
     res.clearCookie('refreshToken', options);
 };
