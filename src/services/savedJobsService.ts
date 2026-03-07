@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getPagination } from './jobDiscoveryQueryService';
+import { attachViewerApplicationStateToJobResponses } from './jobApplicationViewerStateService';
 import { recordJobPulseEvent } from './jobPulseService';
 import { attachHeatFieldsToJobResponses, toJobResponse } from './jobResponseService';
 import {
@@ -427,9 +428,14 @@ export const listSavedJobsForUser = async (params: {
     db: params.db,
     jobs: jobsWithSavedState,
   });
+  const dataWithViewerState = await attachViewerApplicationStateToJobResponses({
+    db: params.db,
+    currentUserId,
+    jobs: data,
+  });
 
   return {
-    data,
+    data: dataWithViewerState,
     pagination: {
       page: pagination.page,
       limit: pagination.limit,

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { buildJobAlertCategoryFields } from './jobAlertCategoryService';
 import { buildJobRecommendationPrecomputedFields } from './jobRecommendationService';
 import { buildDemandRoleFields, buildJobMarketDemandPrecomputedFields } from './openToWorkDemandService';
 import { buildPersistentJobSlug } from './jobResponseService';
@@ -86,7 +87,15 @@ const applyJobPrecomputedFields = (job: any): void => {
     publishedAt: job.publishedAt,
   });
   Object.assign(job, buildJobRecommendationPrecomputedFields(recommendationSource));
-  Object.assign(job, buildDemandRoleFields(job.title) || {});
+  const demandRoleFields = buildDemandRoleFields(job.title) || {};
+  Object.assign(job, demandRoleFields);
+  Object.assign(job, buildJobAlertCategoryFields({
+    title: job.title,
+    summary: job.summary,
+    description: job.description,
+    tags: job.tags,
+    demandRoleFamily: (demandRoleFields as any)?.demandRoleFamily,
+  }));
   Object.assign(job, buildJobMarketDemandPrecomputedFields(recommendationSource));
 };
 
@@ -247,13 +256,23 @@ const applyUpdatedJobDerivedFields = (params: {
 
   params.updates.updatedAt = new Date().toISOString();
   Object.assign(params.updates, buildJobRecommendationPrecomputedFields(recommendationSource));
+  let nextDemandRoleFamily = readString(params.existingJob.demandRoleFamily, 120);
   if (
     params.updates.title !== undefined
     || !readString(params.existingJob.demandRoleFamily, 120)
     || !readString(params.existingJob.demandRoleLabel, 120)
   ) {
-    Object.assign(params.updates, buildDemandRoleFields(recommendationSource.title) || {});
+    const demandRoleFields = buildDemandRoleFields(recommendationSource.title) || {};
+    nextDemandRoleFamily = readString((demandRoleFields as any)?.demandRoleFamily, 120);
+    Object.assign(params.updates, demandRoleFields);
   }
+  Object.assign(params.updates, buildJobAlertCategoryFields({
+    title: recommendationSource.title,
+    summary: recommendationSource.summary,
+    description: recommendationSource.description,
+    tags: recommendationSource.tags,
+    demandRoleFamily: nextDemandRoleFamily,
+  }));
   if (
     params.updates.salaryMin !== undefined
     || params.updates.salaryMax !== undefined
@@ -500,9 +519,19 @@ export const updateCompanyJobStatus = async (params: {
   if (params.nextStatus === 'open') {
     Object.assign(nextUpdate, buildJobRecommendationPrecomputedFields(recommendationSource));
   }
+  let nextDemandRoleFamily = readString(params.existingJob.demandRoleFamily, 120);
   if (!readString(params.existingJob.demandRoleFamily, 120) || !readString(params.existingJob.demandRoleLabel, 120)) {
-    Object.assign(nextUpdate, buildDemandRoleFields(recommendationSource.title) || {});
+    const demandRoleFields = buildDemandRoleFields(recommendationSource.title) || {};
+    nextDemandRoleFamily = readString((demandRoleFields as any)?.demandRoleFamily, 120);
+    Object.assign(nextUpdate, demandRoleFields);
   }
+  Object.assign(nextUpdate, buildJobAlertCategoryFields({
+    title: recommendationSource.title,
+    summary: recommendationSource.summary,
+    description: recommendationSource.description,
+    tags: recommendationSource.tags,
+    demandRoleFamily: nextDemandRoleFamily,
+  }));
   if (
     params.nextStatus === 'open'
     && (nextUpdate.publishedAt !== undefined || !Number.isFinite(Number(params.existingJob.marketDemandFreshnessTs)))

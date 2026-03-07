@@ -15,6 +15,7 @@ const jobRecommendationService_1 = require("../services/jobRecommendationService
 const jobRecommendationQueryBuilder_1 = require("../services/jobRecommendationQueryBuilder");
 const jobRecommendationResultService_1 = require("../services/jobRecommendationResultService");
 const jobPulseSnapshotService_1 = require("../services/jobPulseSnapshotService");
+const jobApplicationViewerStateService_1 = require("../services/jobApplicationViewerStateService");
 const jobResponseService_1 = require("../services/jobResponseService");
 const savedJobsService_1 = require("../services/savedJobsService");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
@@ -64,10 +65,14 @@ const buildRecommendationPayload = (params) => __awaiter(void 0, void 0, void 0,
         })), (0, jobPulseSnapshotService_1.buildJobHeatResponseFields)({ snapshot: pulseSnapshotsByJobId.get((0, inputSanitizers_1.readString)((_a = entry === null || entry === void 0 ? void 0 : entry.job) === null || _a === void 0 ? void 0 : _a.id, 120)) }));
     });
     return {
-        data: yield (0, savedJobsService_1.attachSavedStateToJobResponses)({
+        data: yield (0, jobApplicationViewerStateService_1.attachViewerApplicationStateToJobResponses)({
             db: params.db,
             currentUserId: params.currentUserId,
-            jobs: dataWithHeat,
+            jobs: yield (0, savedJobsService_1.attachSavedStateToJobResponses)({
+                db: params.db,
+                currentUserId: params.currentUserId,
+                jobs: dataWithHeat,
+            }),
         }),
         groups,
         pagination: {

@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.listSavedJobsForUser = exports.unsaveJobForUser = exports.saveJobForUser = exports.attachSavedStateToJobResponses = exports.listSavedJobStatesByUser = exports.getSavedJobStateForUser = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const jobDiscoveryQueryService_1 = require("./jobDiscoveryQueryService");
+const jobApplicationViewerStateService_1 = require("./jobApplicationViewerStateService");
 const jobPulseService_1 = require("./jobPulseService");
 const jobResponseService_1 = require("./jobResponseService");
 const savedJobStateCacheService_1 = require("./savedJobStateCacheService");
@@ -311,8 +312,13 @@ const listSavedJobsForUser = (params) => __awaiter(void 0, void 0, void 0, funct
         db: params.db,
         jobs: jobsWithSavedState,
     });
+    const dataWithViewerState = yield (0, jobApplicationViewerStateService_1.attachViewerApplicationStateToJobResponses)({
+        db: params.db,
+        currentUserId,
+        jobs: data,
+    });
     return {
-        data,
+        data: dataWithViewerState,
         pagination: {
             page: pagination.page,
             limit: pagination.limit,

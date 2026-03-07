@@ -15,6 +15,7 @@ const jobRecommendationService_1 = require("../services/jobRecommendationService
 const jobRecommendationProfileCacheService_1 = require("../services/jobRecommendationProfileCacheService");
 const jobDiscoveryQueryService_1 = require("../services/jobDiscoveryQueryService");
 const jobResponseService_1 = require("../services/jobResponseService");
+const jobApplicationViewerStateService_1 = require("../services/jobApplicationViewerStateService");
 const savedJobsService_1 = require("../services/savedJobsService");
 const inputSanitizers_1 = require("../utils/inputSanitizers");
 const MIN_SALARY_INSIGHTS_SAMPLE_SIZE = 3;
@@ -119,10 +120,14 @@ const enrichPublicJobsRows = (params) => __awaiter(void 0, void 0, void 0, funct
     });
     return (0, jobResponseService_1.attachHeatFieldsToJobResponses)({
         db: params.db,
-        jobs: yield (0, savedJobsService_1.attachSavedStateToJobResponses)({
+        jobs: yield (0, jobApplicationViewerStateService_1.attachViewerApplicationStateToJobResponses)({
             db: params.db,
             currentUserId: params.currentUserId,
-            jobs: jobsWithRecommendations,
+            jobs: yield (0, savedJobsService_1.attachSavedStateToJobResponses)({
+                db: params.db,
+                currentUserId: params.currentUserId,
+                jobs: jobsWithRecommendations,
+            }),
         }),
     });
 });

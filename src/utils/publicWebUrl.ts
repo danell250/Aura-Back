@@ -8,7 +8,10 @@ const normalizeUrl = (value: string): string => value.trim().replace(/\/$/, '');
 export const getPublicWebUrl = (): string => {
   const configured =
     process.env.PUBLIC_WEB_URL ||
+    process.env.AURA_PUBLIC_WEB_URL ||
     process.env.PUBLIC_AUTH_BASE_URL ||
+    process.env.FRONTEND_URL ||
+    process.env.VITE_FRONTEND_URL ||
     '';
 
   if (configured && configured.trim().length > 0) {

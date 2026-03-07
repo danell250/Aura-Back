@@ -2,6 +2,7 @@ import { checkDBHealth, getDB, isDBConnected } from '../db';
 import { recalculateAllTrustScores } from '../services/trustService';
 import { createNotificationInDB } from '../controllers/notificationsController';
 import { syncJobMarketDemandSnapshots } from '../services/jobMarketDemandSnapshotService';
+import { sendScheduledJobAlertDigests } from '../services/jobAlertDigestService';
 import { sendDailyReverseJobMatchDigests } from '../services/reverseJobMatchDigestService';
 import { refreshJobsSitemapCache } from '../services/jobSeoSitemapService';
 import { runLockedRecurringTask, startRecurringTaskRunner } from '../services/runtimeRecurringTaskService';
@@ -9,8 +10,10 @@ import { runLockedRecurringTask, startRecurringTaskRunner } from '../services/ru
 const NOTIFICATION_BATCH_SIZE = 25;
 const JOB_MARKET_DEMAND_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const JOBS_SITEMAP_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const JOB_ALERT_DIGEST_RUN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const JOB_MARKET_DEMAND_SNAPSHOT_LOCK_TTL_MS = 90 * 60 * 1000;
 const JOBS_SITEMAP_REFRESH_LOCK_TTL_MS = 30 * 60 * 1000;
+const JOB_ALERT_DIGEST_LOCK_TTL_MS = 5 * 60 * 60 * 1000;
 
 const runInBatches = async <T>(
   items: T[],
@@ -164,11 +167,35 @@ const startJobsSitemapRefreshJob = () => {
   });
 };
 
+const startJobAlertDigestJob = () => {
+  startRecurringTaskRunner({
+    intervalMs: JOB_ALERT_DIGEST_RUN_INTERVAL_MS,
+    run: async () => {
+      try {
+        const result = await runLockedRecurringTask({
+          jobKey: 'job-alert-digests',
+          ttlMs: JOB_ALERT_DIGEST_LOCK_TTL_MS,
+          task: async (db) => {
+            await sendScheduledJobAlertDigests(db);
+            return true;
+          },
+        });
+        if (!result) {
+          console.log('⏭️ Skipped job alert digest run (lock held by another instance)');
+        }
+      } catch (error) {
+        console.error('❌ Failed scheduled job alert digest run:', error);
+      }
+    },
+  });
+};
+
 export const startRuntimeRecurringJobs = () => {
   startDatabaseHealthCheckJob();
   startTrustScoreRecalculationJob();
   startTimeCapsuleUnlockNotificationJob();
   startReverseJobMatchDigestJob();
+  startJobAlertDigestJob();
   startJobMarketDemandSnapshotJob();
   startJobsSitemapRefreshJob();
 };

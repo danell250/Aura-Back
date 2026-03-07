@@ -9,6 +9,7 @@ import { attachHeatFieldsToJobResponses, toJobResponse } from '../services/jobRe
 import { normalizeJobSlugValue } from '../services/jobSlugService';
 import { incrementJobViewCountAsync } from '../services/jobViewBufferService';
 import { createCompanyJob, updateCompanyJob, updateCompanyJobStatus } from '../services/jobWriteService';
+import { attachViewerApplicationStateToJobResponses } from '../services/jobApplicationViewerStateService';
 import { attachSavedStateToJobResponses } from '../services/savedJobsService';
 import {
   resolveOwnerAdminCompanyAccess,
@@ -111,23 +112,24 @@ const buildJobDetailResponse = async (params: {
       })
     : null;
 
-  const [jobWithSavedState] = await attachSavedStateToJobResponses({
+  const baseJobResponse = {
+    ...toJobResponse(params.job),
+    ...(skillGap ? { skillGap } : {}),
+  };
+
+  const [jobWithViewerState] = await attachViewerApplicationStateToJobResponses({
     db: params.db,
     currentUserId: params.currentUserId,
-    jobs: [
-      {
-        ...toJobResponse(params.job),
-        ...(skillGap ? { skillGap } : {}),
-      },
-    ],
+    jobs: await attachSavedStateToJobResponses({
+      db: params.db,
+      currentUserId: params.currentUserId,
+      jobs: [baseJobResponse],
+    }),
   });
 
   return attachHeatFieldsToSingleJobResponse({
     db: params.db,
-    job: jobWithSavedState || {
-      ...toJobResponse(params.job),
-      ...(skillGap ? { skillGap } : {}),
-    },
+    job: jobWithViewerState || baseJobResponse,
   });
 };
 

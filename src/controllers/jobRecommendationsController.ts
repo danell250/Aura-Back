@@ -12,6 +12,7 @@ import {
   fetchPrioritizedRecommendationCandidateJobs,
 } from '../services/jobRecommendationResultService';
 import { buildJobHeatResponseFields, listJobPulseSnapshots } from '../services/jobPulseSnapshotService';
+import { attachViewerApplicationStateToJobResponses } from '../services/jobApplicationViewerStateService';
 import { toJobResponse } from '../services/jobResponseService';
 import { attachSavedStateToJobResponses } from '../services/savedJobsService';
 import { parsePositiveInt, readString } from '../utils/inputSanitizers';
@@ -108,10 +109,14 @@ const buildRecommendationPayload = async (params: {
   });
 
   return {
-    data: await attachSavedStateToJobResponses({
+    data: await attachViewerApplicationStateToJobResponses({
       db: params.db,
       currentUserId: params.currentUserId,
-      jobs: dataWithHeat,
+      jobs: await attachSavedStateToJobResponses({
+        db: params.db,
+        currentUserId: params.currentUserId,
+        jobs: dataWithHeat,
+      }),
     }),
     groups,
     pagination: {

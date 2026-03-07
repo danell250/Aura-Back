@@ -163,6 +163,7 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('jobs').createIndex({ id: 1 }, { unique: true });
         await db.collection('jobs').createIndex({ companyId: 1, status: 1, createdAt: -1 });
         await db.collection('jobs').createIndex({ status: 1, publishedAt: -1 });
+        await db.collection('jobs').createIndex({ status: 1, discoveredAt: -1, createdAt: -1 });
         await db.collection('jobs').createIndex({ applicationDeadline: 1 });
         await db.collection('jobs').createIndex({ tags: 1 });
         await db.collection('jobs').createIndex(
@@ -193,6 +194,10 @@ export async function connectDB(): Promise<Db | null> {
           { jobId: 1, applicantUserId: 1 },
           { unique: true, name: 'job_application_unique_per_user' }
         );
+        await db.collection('job_applications').createIndex(
+          { applicantUserId: 1, jobId: 1 },
+          { name: 'job_application_applicant_job_lookup_idx' }
+        );
         await db.collection('job_applications').createIndex({ companyId: 1, status: 1, createdAt: -1 });
         await db.collection('job_applications').createIndex({ applicantUserId: 1, createdAt: -1 });
         await db.collection('job_applications').createIndex({ jobId: 1, status: 1, createdAt: -1 });
@@ -203,6 +208,18 @@ export async function connectDB(): Promise<Db | null> {
         await db.collection('saved_jobs').createIndex(
           { userId: 1, createdAt: -1 },
           { name: 'saved_jobs_user_created_idx' }
+        );
+        await db.collection('job_alert_subscriptions').createIndex(
+          { email: 1 },
+          { unique: true, name: 'job_alert_subscriptions_email_unique_idx' }
+        );
+        await db.collection('job_alert_subscriptions').createIndex(
+          { isActive: 1, cadence: 1, lastDigestSentAt: 1 },
+          { name: 'job_alert_subscriptions_active_cadence_idx' }
+        );
+        await db.collection('job_alert_subscriptions').createIndex(
+          { unsubscribeToken: 1 },
+          { unique: true, name: 'job_alert_subscriptions_unsubscribe_token_idx' }
         );
         await db.collection('job_applications').createIndex(
           { jobId: 1, applicantNameNormalized: 1, createdAt: -1 },

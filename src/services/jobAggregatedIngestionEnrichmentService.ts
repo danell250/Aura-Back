@@ -1,4 +1,5 @@
 import { buildJobRecommendationPrecomputedFields } from './jobRecommendationService';
+import { buildJobAlertCategoryFields } from './jobAlertCategoryService';
 import { buildDemandRoleFields, buildJobMarketDemandPrecomputedFields } from './openToWorkDemandService';
 
 export const buildAggregatedJobDerivedFields = (params: {
@@ -12,7 +13,17 @@ export const buildAggregatedJobDerivedFields = (params: {
   salaryMax: number | null;
   createdAt: string;
   publishedAt: string;
-}): Record<string, unknown> => ({
+}): Record<string, unknown> => {
+  const demandRoleFields = buildDemandRoleFields(params.title) || {};
+  const categoryFields = buildJobAlertCategoryFields({
+    title: params.title,
+    summary: params.summary,
+    description: params.description,
+    tags: params.tags,
+    demandRoleFamily: (demandRoleFields as any)?.demandRoleFamily,
+  });
+
+  return {
   ...buildJobRecommendationPrecomputedFields({
     title: params.title,
     summary: params.summary,
@@ -25,11 +36,13 @@ export const buildAggregatedJobDerivedFields = (params: {
     createdAt: params.createdAt,
     publishedAt: params.publishedAt,
   }),
-  ...(buildDemandRoleFields(params.title) || {}),
+  ...demandRoleFields,
+  ...categoryFields,
   ...buildJobMarketDemandPrecomputedFields({
     createdAt: params.createdAt,
     publishedAt: params.publishedAt,
     salaryMin: params.salaryMin,
     salaryMax: params.salaryMax,
   }),
-});
+  };
+};

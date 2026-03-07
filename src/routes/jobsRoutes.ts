@@ -8,6 +8,7 @@ import { jobMarketDemandController } from '../controllers/jobMarketDemandControl
 import { jobApplicationController } from '../controllers/jobApplicationController';
 import { jobApplicationAccessController } from '../controllers/jobApplicationAccessController';
 import { jobDiscoveryController } from '../controllers/jobDiscoveryController';
+import { jobAlertsController } from '../controllers/jobAlertsController';
 import { jobMatchShareController } from '../controllers/jobMatchShareController';
 import { jobNetworkController } from '../controllers/jobNetworkController';
 import { savedJobsController } from '../controllers/savedJobsController';
@@ -171,6 +172,31 @@ const jobsPreviewRateLimiter = rateLimit({
   },
 });
 
+const jobsAlertsSubscribeRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logSecurityEvent({
+      req,
+      type: 'rate_limit_triggered',
+      route: '/jobs/alerts/subscribe',
+      metadata: {
+        key: 'jobs_alerts_subscribe',
+        max: 10,
+        windowMs: 60 * 60 * 1000,
+      },
+    });
+
+    return res.status(429).json({
+      success: false,
+      error: 'Too many requests',
+      message: 'Too many alert signups from this address. Please try again later.',
+    });
+  },
+});
+
 const jobsMarketDemandRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 120,
@@ -203,6 +229,9 @@ router.get('/partner/jobs', partnerAuth, jobSyndicationController.getJobsForSynd
 router.get('/companies/:companyId/job-analytics', requireAuth, jobsController.getJobAnalytics);
 router.get('/companies/:companyId/job-applications/attention-count', requireAuth, jobApplicationAccessController.getCompanyApplicationAttentionCount);
 router.get('/jobs', optionalAuth, jobDiscoveryController.listPublicJobs);
+router.post('/jobs/alerts/subscribe', jobsAlertsSubscribeRateLimiter, jobAlertsController.subscribePublicJobAlerts);
+router.get('/jobs/alerts/unsubscribe', jobAlertsController.renderPublicJobAlertsUnsubscribeConfirm);
+router.post('/jobs/alerts/unsubscribe', jobAlertsController.confirmPublicJobAlertsUnsubscribe);
 router.get('/jobs/hot', jobsPulseRateLimiter, optionalAuth, jobsController.listHotJobs);
 router.get('/jobs/market-demand', jobsMarketDemandRateLimiter, optionalAuth, jobMarketDemandController.getJobMarketDemand);
 router.get('/jobs/sitemap.xml', jobSeoController.getJobsSitemap);

@@ -255,10 +255,20 @@ const migrateJobApplicationsIndexes = async (db: Db) => {
     { applicantUserId: 1, createdAt: -1 },
     { name: 'idx_job_apps_applicant_created', background: true }
   );
+  await ensureIndex(
+    collection,
+    { applicantUserId: 1, jobId: 1 },
+    { name: 'idx_job_apps_applicant_job', background: true }
+  );
 };
 
 const migrateJobsIndexes = async (db: Db) => {
   const collection = db.collection('jobs');
+  await ensureIndex(
+    collection,
+    { status: 1, discoveredAt: -1, createdAt: -1 },
+    { name: 'idx_jobs_status_discovered_created', background: true }
+  );
   await ensureIndex(
     collection,
     { source: 1, originalId: 1 },
@@ -284,6 +294,25 @@ const migrateJobsIndexes = async (db: Db) => {
         originalUrl: { $type: 'string' }
       }
     }
+  );
+};
+
+const migrateJobAlertSubscriptionIndexes = async (db: Db) => {
+  const collection = db.collection('job_alert_subscriptions');
+  await ensureIndex(
+    collection,
+    { email: 1 },
+    { name: 'idx_job_alert_subscriptions_email', unique: true, background: true }
+  );
+  await ensureIndex(
+    collection,
+    { isActive: 1, cadence: 1, lastDigestSentAt: 1 },
+    { name: 'idx_job_alert_subscriptions_active_cadence', background: true }
+  );
+  await ensureIndex(
+    collection,
+    { unsubscribeToken: 1 },
+    { name: 'idx_job_alert_subscriptions_unsubscribe_token', unique: true, background: true }
   );
 };
 
@@ -358,6 +387,7 @@ export async function runIndexMigration(db: Db): Promise<void> {
   await migrateLearningResourcesCacheIndexes(db);
   await migrateJobApplicationsIndexes(db);
   await migrateJobsIndexes(db);
+  await migrateJobAlertSubscriptionIndexes(db);
   await migrateUserBadgesIndexes(db);
   await seedBadgeCatalog(db);
   console.log('[IndexMigration] Done');

@@ -20,6 +20,7 @@ const jobResponseService_1 = require("../services/jobResponseService");
 const jobSlugService_1 = require("../services/jobSlugService");
 const jobViewBufferService_1 = require("../services/jobViewBufferService");
 const jobWriteService_1 = require("../services/jobWriteService");
+const jobApplicationViewerStateService_1 = require("../services/jobApplicationViewerStateService");
 const savedJobsService_1 = require("../services/savedJobsService");
 const jobApplicationLifecycleService_1 = require("../services/jobApplicationLifecycleService");
 const jobPulseSnapshotService_1 = require("../services/jobPulseSnapshotService");
@@ -98,16 +99,19 @@ const buildJobDetailResponse = (params) => __awaiter(void 0, void 0, void 0, fun
             job: params.job,
         })
         : null;
-    const [jobWithSavedState] = yield (0, savedJobsService_1.attachSavedStateToJobResponses)({
+    const baseJobResponse = Object.assign(Object.assign({}, (0, jobResponseService_1.toJobResponse)(params.job)), (skillGap ? { skillGap } : {}));
+    const [jobWithViewerState] = yield (0, jobApplicationViewerStateService_1.attachViewerApplicationStateToJobResponses)({
         db: params.db,
         currentUserId: params.currentUserId,
-        jobs: [
-            Object.assign(Object.assign({}, (0, jobResponseService_1.toJobResponse)(params.job)), (skillGap ? { skillGap } : {})),
-        ],
+        jobs: yield (0, savedJobsService_1.attachSavedStateToJobResponses)({
+            db: params.db,
+            currentUserId: params.currentUserId,
+            jobs: [baseJobResponse],
+        }),
     });
     return attachHeatFieldsToSingleJobResponse({
         db: params.db,
-        job: jobWithSavedState || Object.assign(Object.assign({}, (0, jobResponseService_1.toJobResponse)(params.job)), (skillGap ? { skillGap } : {})),
+        job: jobWithViewerState || baseJobResponse,
     });
 });
 const indexPulseSnapshotsByJobId = (snapshots) => new Map(snapshots

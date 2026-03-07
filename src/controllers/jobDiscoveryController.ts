@@ -14,6 +14,7 @@ import {
   resolveCachedDiscoveredCount,
 } from '../services/jobDiscoveryQueryService';
 import { attachHeatFieldsToJobResponses, toJobResponse } from '../services/jobResponseService';
+import { attachViewerApplicationStateToJobResponses } from '../services/jobApplicationViewerStateService';
 import { attachSavedStateToJobResponses } from '../services/savedJobsService';
 import { readString } from '../utils/inputSanitizers';
 
@@ -157,10 +158,14 @@ const enrichPublicJobsRows = async (params: {
 
   return attachHeatFieldsToJobResponses({
     db: params.db,
-    jobs: await attachSavedStateToJobResponses({
+    jobs: await attachViewerApplicationStateToJobResponses({
       db: params.db,
       currentUserId: params.currentUserId,
-      jobs: jobsWithRecommendations,
+      jobs: await attachSavedStateToJobResponses({
+        db: params.db,
+        currentUserId: params.currentUserId,
+        jobs: jobsWithRecommendations,
+      }),
     }),
   });
 };

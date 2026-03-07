@@ -130,6 +130,7 @@ const migrateJobApplicationsIndexes = (db) => __awaiter(void 0, void 0, void 0, 
     yield ensureIndex(collection, { companyId: 1, status: 1, jobId: 1 }, { name: 'idx_job_apps_company_status_job', background: true });
     yield ensureIndex(collection, { companyId: 1, status: 1, reviewedAtDate: 1, createdAtDate: 1 }, { name: 'idx_job_apps_company_status_review_created', background: true });
     yield ensureIndex(collection, { applicantUserId: 1, createdAt: -1 }, { name: 'idx_job_apps_applicant_created', background: true });
+    yield ensureIndex(collection, { applicantUserId: 1, jobId: 1 }, { name: 'idx_job_apps_applicant_job', background: true });
 });
 const migrateJobsIndexes = (db) => __awaiter(void 0, void 0, void 0, function* () {
     const collection = db.collection('jobs');
