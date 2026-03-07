@@ -28,6 +28,7 @@ const notificationsController_1 = require("../controllers/notificationsControlle
 const securityLogger_1 = require("../utils/securityLogger");
 const userUtils_1 = require("../utils/userUtils");
 const sessionInvalidation_1 = require("../utils/sessionInvalidation");
+const publicWebUrl_1 = require("../utils/publicWebUrl");
 const router = (0, express_1.Router)();
 const SIGNUP_BONUS_CREDITS = 100;
 const normalizeFrontendUrl = (value) => value.trim().replace(/\/$/, '');
@@ -42,7 +43,7 @@ const parseFrontendUrlList = (value) => {
 };
 const DEFAULT_FRONTEND_URL = process.env.NODE_ENV === 'development'
     ? 'http://localhost:5003'
-    : 'https://aura.social';
+    : 'https://www.aurasocial.world';
 const TRUSTED_FRONTEND_URLS = new Set([
     'https://aura.social',
     'https://www.aura.social',
@@ -448,7 +449,7 @@ router.get('/linkedin', (req, res) => {
         maxAge: 5 * 60 * 1000 // 5 minutes
     });
     // 3. Construct the authorization URL
-    const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aurasocial.world/api/auth/linkedin/callback';
+    const redirectUri = process.env.LINKEDIN_CALLBACK_URL || (0, publicWebUrl_1.buildPublicAuthCallbackUrl)('linkedin');
     const clientId = process.env.LINKEDIN_CLIENT_ID;
     const scope = 'openid profile email';
     const authUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(scope)}`;
@@ -480,7 +481,7 @@ router.get('/linkedin/callback', (req, res) => __awaiter(void 0, void 0, void 0,
     // Clear the state cookie once used
     res.clearCookie('linkedin_auth_state');
     try {
-        const redirectUri = process.env.LINKEDIN_CALLBACK_URL || 'https://www.aurasocial.world/api/auth/linkedin/callback';
+        const redirectUri = process.env.LINKEDIN_CALLBACK_URL || (0, publicWebUrl_1.buildPublicAuthCallbackUrl)('linkedin');
         // 2. Exchange code for access token
         const tokenResponse = yield axios_1.default.post('https://www.linkedin.com/oauth/v2/accessToken', null, {
             params: {
@@ -600,7 +601,7 @@ router.get('/discord', (req, res) => {
         maxAge: OAUTH_STATE_COOKIE_MAX_AGE_MS,
     });
     const redirectUri = process.env.DISCORD_CALLBACK_URL ||
-        `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/discord/callback`;
+        (0, publicWebUrl_1.buildPublicAuthCallbackUrl)('discord');
     const authUrl = `https://discord.com/oauth2/authorize` +
         `?client_id=${process.env.DISCORD_CLIENT_ID}` +
         `&response_type=code` +
@@ -637,7 +638,7 @@ router.get('/discord/callback', (req, res) => __awaiter(void 0, void 0, void 0, 
     const db = (0, db_1.getDB)();
     try {
         const redirectUri = process.env.DISCORD_CALLBACK_URL ||
-            `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/discord/callback`;
+            (0, publicWebUrl_1.buildPublicAuthCallbackUrl)('discord');
         // Exchange code for token
         const body = new URLSearchParams({
             client_id: process.env.DISCORD_CLIENT_ID,

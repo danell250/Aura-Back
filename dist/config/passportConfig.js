@@ -18,13 +18,14 @@ const passport_google_oauth20_1 = require("passport-google-oauth20");
 const passport_github2_1 = require("passport-github2");
 const db_1 = require("../db");
 const userUtils_1 = require("../utils/userUtils");
+const publicWebUrl_1 = require("../utils/publicWebUrl");
 const configurePassportStrategies = () => {
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         passport_1.default.use(new passport_google_oauth20_1.Strategy({
             clientID: process.env.GOOGLE_CLIENT_ID,
             clientSecret: process.env.GOOGLE_CLIENT_SECRET,
             callbackURL: process.env.GOOGLE_CALLBACK_URL ||
-                `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/google/callback`,
+                (0, publicWebUrl_1.buildPublicAuthCallbackUrl)('google'),
         }, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
             var _a, _b, _c, _d, _e, _f;
             try {
@@ -95,7 +96,7 @@ const configurePassportStrategies = () => {
         passport_1.default.use(new passport_github2_1.Strategy({
             clientID: process.env.GITHUB_CLIENT_ID,
             clientSecret: process.env.GITHUB_CLIENT_SECRET,
-            callbackURL: process.env.GITHUB_CALLBACK_URL || 'https://aura-back-s1bw.onrender.com/api/auth/github/callback',
+            callbackURL: process.env.GITHUB_CALLBACK_URL || (0, publicWebUrl_1.buildPublicAuthCallbackUrl)('github'),
             scope: ['user:email'],
         }, (_accessToken, _refreshToken, profile, done) => __awaiter(void 0, void 0, void 0, function* () {
             var _a;

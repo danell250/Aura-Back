@@ -43,7 +43,7 @@ const parseFrontendUrlList = (value: string | undefined): string[] => {
 
 const DEFAULT_FRONTEND_URL = process.env.NODE_ENV === 'development'
   ? 'http://localhost:5003'
-  : 'https://aura.social';
+  : 'https://www.aurasocial.world';
 
 const TRUSTED_FRONTEND_URLS = new Set<string>([
   'https://aura.social',
