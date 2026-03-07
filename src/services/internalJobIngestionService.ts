@@ -300,7 +300,6 @@ const buildAggregatedIngestMutation = (params: {
       createdByUserId: params.meta.createdByUserId,
       createdAt: params.meta.createdAt,
       discoveredAt: params.nowIso,
-      updatedAt: params.nowIso,
       announcementPostId: null,
       viewCount: 0,
     },
